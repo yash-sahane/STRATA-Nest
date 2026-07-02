@@ -3,6 +3,22 @@
 All notable **architectural** changes (not git commits) are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0.
 
+## [Unreleased] — post-0.1 (feature work)
+
+### Added
+- **Phase 2 — Workspaces + RBAC (🚧 implemented, live gate pending):** 7 collections
+  (workspaces, members, roles, invite-codes, email-invitations, join-requests, pending-access);
+  reusable **`WorkspaceAccessService`** (membership scoping + policy RBAC) with the built-in
+  role→permission map and `RBAC_ENFORCED` flag; `PermissionsGuard` + `@RequirePermission`;
+  transactional `InvitationAcceptanceService` + `JoinRequestApprovalService` emitting domain
+  events; workspace domain events in `@lt/shared`; `@lt/testing` workspace factories.
+
+### Fixed
+- **D3:** authorization is now enforced server-side (was membership-only / unguarded writes) —
+  flag-gated so it can match Django during dark-launch.
+
+---
+
 ## [0.1.0] — Unreleased · Release 0.1: Foundation Freeze
 
 Foundation for the Django → NestJS migration. **Phase 1 is not "complete" until the live

@@ -1,5 +1,9 @@
 # Phase 2 — Workspaces + RBAC + Invitations / Join Requests
 
+**Status: 🚧 Implemented + unit-verified; live contract/e2e pending a DB+Django environment.**
+Done: 7 collections (workspaces, members, roles, invite-codes, email-invitations, join-requests, pending-access); reusable `WorkspaceAccessService` (membership scoping + policy RBAC, `RBAC_ENFORCED` flag); `PermissionsGuard` + `@RequirePermission`; transactional `InvitationAcceptanceService` + `JoinRequestApprovalService` with domain events; 11 RBAC unit tests; typecheck + DI graph green.
+Pending: live contract suite vs Django+Nest; e2e for scoping/RBAC/workflows; parity tuning.
+
 ## Goal
 Port workspaces and membership, and introduce **server-enforced RBAC** (the authorization layer that every later resource relies on) plus the invitation/join **workflows** that are client-driven today (A§6.1, D3).
 

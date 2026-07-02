@@ -46,15 +46,25 @@
 
 ## Phase 2 — Workspaces, RBAC, Invitations, Join
 
+> **Status: 🚧 Implemented + unit-verified** (RBAC map + `WorkspaceAccessService` scope/permission enforcement, 11 unit tests). Rows flip to ✅ after the live contract suite runs vs Django + Nest. **Behavior change (documented, D3):** with `RBAC_ENFORCED=true`, manager-only writes are denied to lower roles; `RBAC_ENFORCED=false` keeps a membership-only floor matching Django during dark-launch.
+
 | Collection | CRUD | Resource fields | Parity |
 |---|---|---|---|
-| `workspaces` | L/C/R/U/D | `id, createdAt, updatedAt, name, description, logo, color, ownerId, inviteCode, settings, memberIds` | ⏳ |
-| `workspace_members` | L/C/R/U/D | `…, workspaceId, userId, email, name, userName, phone, avatar, role, status, joinedAt` | ⏳ |
-| `workspace_roles` | L/C/R/U/D | `…, workspaceId, name, permissions` | ⏳ |
-| `invite_codes` | L/C/R/U/D | `…, workspaceId, code, role, maxUses, usedCount, expiresAt, createdBy` | ⏳ |
-| `email_invitations` | L/C/R/U/D | `…, workspaceId, email, role, token, status, expiresAt, invitedBy` | ⏳ |
-| `join_requests` | L/C/R/U/D | `…, workspaceId, userId, message, status, handledBy` | ⏳ |
-| `pending_workspace_access` | L/C/R/U/D | `…, workspaceId, userId, requestedRole` | ⏳ |
+| `workspaces` | L/C/R/U/D | `id, createdAt, updatedAt, name, description, logo, color, ownerId, inviteCode, settings, memberIds` | 🚧 |
+| `workspace_members` | L/C/R/U/D | `…, workspaceId, userId, email, name, userName, phone, avatar, role, status, joinedAt` | 🚧 |
+| `workspace_roles` | L/C/R/U/D | `…, workspaceId, name, permissions` | 🚧 |
+| `invite_codes` | L/C/R/U/D | `…, workspaceId, code, role, maxUses, usedCount, expiresAt, createdBy` | 🚧 |
+| `email_invitations` | L/C/R/U/D | `…, workspaceId, email, role, token, status, expiresAt, invitedBy` | 🚧 |
+| `join_requests` | L/C/R/U/D | `…, workspaceId, userId, message, status, handledBy` | 🚧 |
+| `pending_workspace_access` | L/C/R/U/D | `…, workspaceId, userId, requestedRole` | 🚧 |
+
+**New workflow endpoints (additive, [NEW] — encapsulate what the client did via CRUD):**
+
+| Method | Path | Purpose | Status |
+|---|---|---|---|
+| POST | `workspaces/accept-invitation` | accept email-invitation token or invite code → membership (transactional) | ➕ 🚧 |
+| POST | `join_requests/{id}/approve` | approve → create membership + mark request (transactional) | ➕ 🚧 |
+| POST | `join_requests/{id}/reject` | reject → mark request | ➕ 🚧 |
 
 ---
 

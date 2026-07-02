@@ -43,6 +43,9 @@ export const envSchema = z.object({
   // Refresh-token migration (PHASE_1_AUTH_PLAN §7): false = compatibility mode
   // (accept signature-valid Django tokens); true = strict (jti must be in Redis).
   AUTH_STRICT_REFRESH: z.coerce.boolean().default(false),
+  // RBAC (ADR-0005 / PHASE_2): false = membership-only floor (matches Django during
+  // dark-launch); true = enforce per-permission role checks on writes.
+  RBAC_ENFORCED: z.coerce.boolean().default(false),
 
   // Email (Resend; queued — ADR-0007)
   RESEND_API_KEY: z.string().default(''),

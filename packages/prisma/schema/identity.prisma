@@ -1,6 +1,4 @@
-// Identity models — mapped to the existing Django tables (Phase 1).
-// Field defaults are Prisma client-side defaults for inserts (the Django columns
-// have no DB-level defaults); createdAt/updatedAt mirror Django auto_now(_add).
+// Identity models — mapped to the existing Django tables.
 
 model User {
   id              String    @id
@@ -22,32 +20,4 @@ model User {
   isStaff         Boolean   @default(false) @map("is_staff")
 
   @@map("accounts_user")
-}
-
-// Minimal models Phase-1 auth READS/WRITES (me/workspaceIds, users directory,
-// invite). The full WorkspacesModule (relations, RBAC) lands in Phase 2.
-
-model Workspace {
-  id         String   @id
-  createdAt  DateTime @default(now()) @map("created_at")
-  updatedAt  DateTime @updatedAt @map("updated_at")
-  name       String
-  ownerId    String   @map("owner_id")
-  inviteCode String   @map("invite_code")
-
-  @@map("workspaces_workspace")
-}
-
-model WorkspaceMember {
-  id          String   @id
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
-  workspaceId String   @map("workspace_id")
-  userId      String   @map("user_id")
-  role        String   @default("MEMBER")
-  status      String   @default("ACTIVE")
-  joinedAt    DateTime @default(now()) @map("joined_at")
-
-  @@unique([workspaceId, userId])
-  @@map("workspaces_workspacemember")
 }

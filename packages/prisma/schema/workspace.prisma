@@ -1,0 +1,99 @@
+// Workspace domain — mapped to existing Django tables (workspaces app).
+// Cross-refs use scalar FK columns (workspaceId/userId/...) + explicit queries,
+// matching Django's real FK columns without modeling every relation yet.
+
+model Workspace {
+  id          String   @id
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  name        String
+  description String   @default("")
+  logo        String   @default("")
+  color       String   @default("")
+  ownerId     String   @map("owner_id")
+  inviteCode  String   @unique @map("invite_code")
+  settings    Json     @default("{}")
+
+  @@map("workspaces_workspace")
+}
+
+model WorkspaceMember {
+  id          String   @id
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  workspaceId String   @map("workspace_id")
+  userId      String   @map("user_id")
+  role        String   @default("MEMBER")
+  status      String   @default("ACTIVE")
+  joinedAt    DateTime @default(now()) @map("joined_at")
+
+  @@unique([workspaceId, userId])
+  @@map("workspaces_workspacemember")
+}
+
+model WorkspaceRole {
+  id          String   @id
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  workspaceId String   @map("workspace_id")
+  name        String
+  permissions Json     @default("[]")
+
+  @@unique([workspaceId, name])
+  @@map("workspaces_workspacerole")
+}
+
+model InviteCode {
+  id          String    @id
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  workspaceId String    @map("workspace_id")
+  code        String    @unique
+  role        String    @default("MEMBER")
+  maxUses     Int?      @map("max_uses")
+  usedCount   Int       @default(0) @map("used_count")
+  expiresAt   DateTime? @map("expires_at")
+  createdById String    @map("created_by_id")
+
+  @@map("workspaces_invitecode")
+}
+
+model EmailInvitation {
+  id          String   @id
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  workspaceId String   @map("workspace_id")
+  email       String
+  role        String   @default("MEMBER")
+  token       String   @unique
+  status      String   @default("PENDING")
+  expiresAt   DateTime @map("expires_at")
+  invitedById String   @map("invited_by_id")
+
+  @@map("workspaces_emailinvitation")
+}
+
+model JoinRequest {
+  id          String   @id
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  workspaceId String   @map("workspace_id")
+  userId      String   @map("user_id")
+  message     String   @default("")
+  status      String   @default("PENDING")
+  handledById String?  @map("handled_by_id")
+
+  @@unique([workspaceId, userId])
+  @@map("workspaces_joinrequest")
+}
+
+model PendingWorkspaceAccess {
+  id            String   @id
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  workspaceId   String   @map("workspace_id")
+  userId        String   @map("user_id")
+  requestedRole String   @default("MEMBER") @map("requested_role")
+
+  @@map("workspaces_pendingworkspaceaccess")
+}

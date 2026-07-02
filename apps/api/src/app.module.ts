@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { randomUUID } from 'node:crypto';
 import { LoggerModule } from 'nestjs-pino';
@@ -9,8 +10,11 @@ import { PrismaModule } from '@lt/prisma';
 import { HealthModule } from './health/health.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
+import { AuthzModule } from './modules/authz/authz.module';
+import { PermissionsGuard } from './modules/authz/permissions.guard';
 import { MailModule } from './modules/mail/mail.module';
 import { UsersModule } from './modules/users/users.module';
+import { WorkspacesModule } from './modules/workspaces/workspaces.module';
 import { RedisModule } from './redis/redis.module';
 import { AuthThrottlerGuard } from './throttling/auth-throttler.guard';
 import { THROTTLE } from './throttling/throttle.constants';
@@ -57,16 +61,20 @@ import { THROTTLE } from './throttling/throttle.constants';
     ThrottlerModule.forRoot([
       { name: 'default', ttl: THROTTLE.default.ttl, limit: THROTTLE.default.limit },
     ]),
+    EventEmitterModule.forRoot(),
     PrismaModule,
     RedisModule,
     MailModule,
+    AuthzModule,
     HealthModule,
     AuthModule,
     UsersModule,
+    WorkspacesModule,
   ],
   providers: [
-    { provide: APP_GUARD, useClass: AuthThrottlerGuard }, // rate-limit first (even unauthenticated)
-    { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_GUARD, useClass: AuthThrottlerGuard }, // 1. rate-limit (even unauthenticated)
+    { provide: APP_GUARD, useClass: JwtAuthGuard }, // 2. authenticate
+    { provide: APP_GUARD, useClass: PermissionsGuard }, // 3. @RequirePermission (when workspaceId in request)
   ],
 })
 export class AppModule {}

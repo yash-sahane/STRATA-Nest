@@ -28,7 +28,7 @@ _Last updated: 2026-07-01 · Release line: **0.1 (frozen)**_
 ```
 ✅  Phase 0   Foundations (monorepo, common/config/shared/prisma/testing, infra, harness)
 🚧  Phase 1   Auth + Users            implemented + unit-verified; live gate pending
-⏳  Phase 2   Workspaces + RBAC
+🚧  Phase 2   Workspaces + RBAC       implemented + unit-verified; live gate pending
 ⏳  Phase 3   Projects
 ⏳  Phase 4   Requirements (CR + FR)
 ⏳  Phase 5   Epics + Sprints + Retrospectives
@@ -61,6 +61,7 @@ _Last updated: 2026-07-01 · Release line: **0.1 (frozen)**_
 ✅  Rate limiting (login/refresh/register/reset, env-configurable)
 ✅  Secret redaction in logs
 ✅  Authorized-only by default (global JwtAuthGuard + @Public opt-out)
+✅  Workspace RBAC — policy-based, flag-gated (RBAC_ENFORCED); membership scoping (closes D3, Phase 2)
 🟡  Redis throttler storage      needed before multi-instance scale-out
 🟡  Strict refresh mode          flip AUTH_STRICT_REFRESH=true after dual-run window
 🟡  CSRF token                   add if SameSite=None ever required
