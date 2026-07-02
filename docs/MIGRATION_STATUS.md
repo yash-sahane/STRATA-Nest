@@ -33,7 +33,7 @@ _Last updated: 2026-07-01 · Release line: **0.1 (frozen)**_
 🚧  Phase 4   Requirements (CR + FR)  implemented + unit-verified; live gate pending
 🚧  Phase 5   Epics + Sprints + Retrospectives    implemented + unit-verified; live gate pending
 🚧  Phase 6   Tasks (+ Comments, Kanban, Labels)   implemented + unit-verified; live gate pending
-⏳  Phase 7   Realtime gateway + event bus
+🚧  Phase 7   Realtime gateway + event bus          implemented + unit-verified; live gate pending
 ⏳  Phase 8   Attendance, Leave, Time Tracking
 ⏳  Phase 9   Notifications + Activity
 ⏳  Phase 10  Files + Email queue
@@ -62,6 +62,7 @@ _Last updated: 2026-07-01 · Release line: **0.1 (frozen)**_
 ✅  Secret redaction in logs
 ✅  Authorized-only by default (global JwtAuthGuard + @Public opt-out)
 ✅  Workspace RBAC — policy-based, flag-gated (RBAC_ENFORCED); membership scoping (closes D3, Phase 2)
+✅  Authorized realtime rooms — broadcast filtered by workspace membership (closes D2, Phase 7)
 🟡  Redis throttler storage      needed before multi-instance scale-out
 🟡  Strict refresh mode          flip AUTH_STRICT_REFRESH=true after dual-run window
 🟡  CSRF token                   add if SameSite=None ever required

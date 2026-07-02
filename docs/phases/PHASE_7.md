@@ -1,5 +1,9 @@
 # Phase 7 — Realtime Gateway + Event Bus
 
+**Status: 🚧 Implemented + unit-verified; live gate pending a DB+Redis+frontend environment.**
+Done: **raw-WebSocket** gateway at `/ws/collections/` (the frontend uses native `WebSocket`, not Socket.IO — chosen for contract parity, ADR-0003); cookie auth on connect (anonymous → close 4401); permissive subscribe with **broadcast-time workspace filtering** (`RealtimeService.canReceive` — **closes D2**, unit-tested); central **Prisma write hook** (`$use`) emits `<collection>.<create|update|delete>` frames (replaces the Django signal firehose); **Redis pub/sub** cross-instance fan-out (instance-id dedup); `RealtimeSubscriber` bridges business events (member-added, invitation-accepted, join-approved, sprint-completed). Typecheck + DI graph green; 5 realtime unit tests.
+**Deviations/deferrals (documented):** raw WS instead of Socket.IO (contract parity); payload is best-effort (frontend refetches, A§7.1); **commit-gating** for the few transactional writes is a follow-up (the write hook fires per-op, so a rolled-back transaction could emit — low risk); membership set is cached per socket at connect.
+
 ## Goal
 Replace the global Django-signal firehose with an **authorized** Socket.IO gateway fed by domain events, fixing the cross-workspace leak (A§7, D2) while preserving the WS frame contract (ADR-0003, ADR-0006).
 

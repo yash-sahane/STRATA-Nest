@@ -5,6 +5,7 @@ import 'reflect-metadata';
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { WsAdapter } from '@nestjs/platform-ws';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { Logger } from 'nestjs-pino';
@@ -16,6 +17,7 @@ async function bootstrap(): Promise<void> {
   const env = validateEnv(process.env as Record<string, unknown>);
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
   app.useLogger(app.get(Logger)); // structured pino logging + correlation ids
+  app.useWebSocketAdapter(new WsAdapter(app)); // raw WebSocket (/ws/collections/, A§7)
 
   // Frozen contract wiring (ADR-0003): global prefix /api/v1, cookie auth, envelopes.
   app.setGlobalPrefix(env.API_GLOBAL_PREFIX);

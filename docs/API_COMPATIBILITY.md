@@ -189,7 +189,9 @@
 
 | Path | Django (Channels) | Nest target | Parity |
 |---|---|---|---|
-| `ws/collections/` | subscribe/unsubscribe by channel; frame `{event,payload,channels,timestamp}` | identical frame, **authorized rooms** (D2), commit-gated (D10) | ⏳ |
+| `ws/collections/` | subscribe/unsubscribe by channel; frame `{event,payload,channels,timestamp}` | **raw WS** (matches native-WebSocket frontend), identical frame, **workspace-filtered broadcast** (closes D2), Prisma write-hook CRUD events + Redis fan-out | 🚧 |
+
+> **Phase 7 notes:** cookie-auth on connect (anonymous → close 4401); CRUD events come from a central Prisma write hook (replaces the Django signal); `RealtimeSubscriber` bridges business events (member-added, invitation-accepted, join-approved, sprint-completed). Payload is best-effort (frontend refetches, A§7.1). Commit-gating for the few transactional writes is a documented follow-up (write hook fires per-op).
 
 ---
 

@@ -15,6 +15,7 @@ import { PermissionsGuard } from './modules/authz/permissions.guard';
 import { EpicsModule } from './modules/epics/epics.module';
 import { MailModule } from './modules/mail/mail.module';
 import { ProjectsModule } from './modules/projects/projects.module';
+import { RealtimeModule } from './modules/realtime/realtime.module';
 import { RequirementsModule } from './modules/requirements/requirements.module';
 import { SprintsModule } from './modules/sprints/sprints.module';
 import { TasksModule } from './modules/tasks/tasks.module';
@@ -80,6 +81,7 @@ import { THROTTLE } from './throttling/throttle.constants';
     EpicsModule,
     SprintsModule,
     TasksModule,
+    RealtimeModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: AuthThrottlerGuard }, // 1. rate-limit (even unauthenticated)
