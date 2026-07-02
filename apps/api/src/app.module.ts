@@ -13,6 +13,7 @@ import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
 import { AuthzModule } from './modules/authz/authz.module';
 import { PermissionsGuard } from './modules/authz/permissions.guard';
 import { MailModule } from './modules/mail/mail.module';
+import { ProjectsModule } from './modules/projects/projects.module';
 import { UsersModule } from './modules/users/users.module';
 import { WorkspacesModule } from './modules/workspaces/workspaces.module';
 import { RedisModule } from './redis/redis.module';
@@ -70,6 +71,7 @@ import { THROTTLE } from './throttling/throttle.constants';
     AuthModule,
     UsersModule,
     WorkspacesModule,
+    ProjectsModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: AuthThrottlerGuard }, // 1. rate-limit (even unauthenticated)

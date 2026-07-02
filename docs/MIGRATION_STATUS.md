@@ -29,7 +29,7 @@ _Last updated: 2026-07-01 · Release line: **0.1 (frozen)**_
 ✅  Phase 0   Foundations (monorepo, common/config/shared/prisma/testing, infra, harness)
 🚧  Phase 1   Auth + Users            implemented + unit-verified; live gate pending
 🚧  Phase 2   Workspaces + RBAC       implemented + unit-verified; live gate pending
-⏳  Phase 3   Projects
+🚧  Phase 3   Projects                implemented + unit-verified; live gate pending
 ⏳  Phase 4   Requirements (CR + FR)
 ⏳  Phase 5   Epics + Sprints + Retrospectives
 ⏳  Phase 6   Tasks (+ Comments, Kanban, Labels, Dependencies)

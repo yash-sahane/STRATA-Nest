@@ -16,12 +16,21 @@ export const Permission = {
   RoleManage: 'role:manage',
   InviteManage: 'invite:manage',
   JoinManage: 'join:manage',
+  // Phase 3 — projects
+  ProjectRead: 'project:read',
+  ProjectCreate: 'project:create',
+  ProjectUpdate: 'project:update',
+  ProjectDelete: 'project:delete',
 } as const;
 
 export type PermissionKey = (typeof Permission)[keyof typeof Permission];
 
 const ALL: PermissionKey[] = Object.values(Permission);
-const READ_ONLY: PermissionKey[] = [Permission.WorkspaceRead, Permission.MemberRead];
+const READ_ONLY: PermissionKey[] = [
+  Permission.WorkspaceRead,
+  Permission.MemberRead,
+  Permission.ProjectRead,
+];
 
 /** Default permissions for the 7 built-in roles (A§5.1). Tunable; seeded into
  *  the normalized tables at cut-over. */

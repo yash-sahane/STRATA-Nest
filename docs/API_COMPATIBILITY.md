@@ -70,9 +70,11 @@
 
 ## Phase 3 — Projects
 
+> **Status: 🚧 Implemented + unit-verified** (scoped CRUD reusing `WorkspaceAccessService`; creator stamping; date-only `startDate`/`endDate`; mapper field-order unit test). Live contract pending.
+
 | Collection | CRUD | Resource fields | Parity |
 |---|---|---|---|
-| `projects` | L/C/R/U/D | `…, workspaceId, name, shortCode, description, clientName, logo, color, methodology, status, archived, startDate, endDate, ownerId, createdBy, createdByName, memberIds, settings` | ⏳ |
+| `projects` | L/C/R/U/D | `…, workspaceId, name, shortCode, description, clientName, logo, color, methodology, status, archived, startDate, endDate, ownerId, createdBy, createdByName, memberIds, settings` | 🚧 |
 
 ---
 

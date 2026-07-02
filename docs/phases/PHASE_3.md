@@ -1,5 +1,9 @@
 # Phase 3 — Projects
 
+**Status: 🚧 Implemented + unit-verified; live contract/e2e pending a DB+Django environment.**
+Done: `ProjectsModule` (scoped CRUD reusing `WorkspaceAccessService` + RBAC `project:*`), creator stamping (owner/createdBy/createdByName), date-only `startDate`/`endDate`, `member_ids`/`settings` JSON, Prisma `Project` mapped to `projects_project`, mapper field-order unit test; typecheck + DI graph green.
+Pending: live contract suite (filter/sort/pagination parity) vs Django+Nest.
+
 ## Goal
 Port the `Project` resource — the root of the PM hierarchy — with full CRUD parity and workspace scoping.
 

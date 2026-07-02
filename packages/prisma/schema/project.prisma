@@ -1,0 +1,29 @@
+// Project — mapped to the existing Django `projects_project` table (A§6.2).
+// `startDate`/`endDate` are DateFields (date-only on the wire); `member_ids` and
+// `project_settings` are JSON. The DB already has the (workspace,status) index.
+
+model Project {
+  id              String    @id
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  workspaceId     String    @map("workspace_id")
+  name            String
+  shortCode       String    @map("short_code")
+  description     String    @default("")
+  clientName      String    @default("") @map("client_name")
+  logo            String    @default("")
+  color           String    @default("")
+  methodology     String    @default("SCRUM")
+  status          String    @default("PLANNING")
+  archived        Boolean   @default(false)
+  startDate       DateTime? @map("start_date") @db.Date
+  endDate         DateTime? @map("end_date") @db.Date
+  ownerId         String    @map("owner_id")
+  createdById     String    @map("created_by_id")
+  createdByName   String    @default("") @map("created_by_name")
+  memberIds       Json      @default("[]") @map("member_ids")
+  projectSettings Json      @default("{}") @map("project_settings")
+
+  @@index([workspaceId, status])
+  @@map("projects_project")
+}

@@ -13,9 +13,12 @@ describe('permissionsForRole', () => {
     expect(set.has(Permission.MemberInvite)).toBe(true);
   });
 
-  it('MEMBER is read-only', () => {
+  it('MEMBER is read-only (workspace/member/project reads)', () => {
     const set = permissionsForRole('MEMBER');
-    expect([...set].sort()).toEqual([Permission.MemberRead, Permission.WorkspaceRead].sort());
+    expect([...set].sort()).toEqual(
+      [Permission.MemberRead, Permission.WorkspaceRead, Permission.ProjectRead].sort(),
+    );
+    expect(set.has(Permission.ProjectCreate)).toBe(false);
   });
 
   it('a custom role uses its JSON permissions', () => {
