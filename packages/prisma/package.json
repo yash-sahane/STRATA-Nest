@@ -1,0 +1,28 @@
+{
+  "name": "@lt/prisma",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "pull": "prisma db pull --schema=schema",
+    "generate": "prisma generate --schema=schema",
+    "validate": "prisma validate --schema=schema",
+    "format": "prisma format --schema=schema",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint \"src/**/*.ts\" --max-warnings 0",
+    "test": "echo \"(no unit tests in @lt/prisma)\" && exit 0"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.18.0"
+  },
+  "peerDependencies": {
+    "@nestjs/common": "^10.4.0"
+  },
+  "devDependencies": {
+    "@nestjs/common": "^10.4.0",
+    "prisma": "^5.18.0",
+    "typescript": "^5.5.4"
+  }
+}

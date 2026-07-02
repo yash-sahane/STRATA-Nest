@@ -185,7 +185,7 @@ export function ActivityFeed({
                       {activity.metadata && (
                         <div className="text-xs text-muted-foreground">
                           {activity.metadata.commentPreview && (
-                            <span className="italic">"{activity.metadata.commentPreview}"</span>
+                            <span className="italic">&ldquo;{activity.metadata.commentPreview}&rdquo;</span>
                           )}
                           {activity.metadata.assignedTo && (
                             <span>to {activity.metadata.assignedTo}</span>

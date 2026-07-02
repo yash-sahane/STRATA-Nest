@@ -13,7 +13,7 @@ const WS_BASE =
   API_BASE.replace(/^http/, 'ws');
 
 let ws: WebSocket | null = null;
-let subs: Set<Subscriber> = new Set();
+const subs: Set<Subscriber> = new Set();
 let activeChannels: Set<string> = new Set();
 let reconnectAttempts = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;

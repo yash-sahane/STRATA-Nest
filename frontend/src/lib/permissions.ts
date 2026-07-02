@@ -39,6 +39,18 @@ export enum Permission {
   EDIT_EPIC = 'EDIT_EPIC',
   DELETE_EPIC = 'DELETE_EPIC',
 
+  // Requirement permissions (client requirements and functional requirements)
+  VIEW_REQUIREMENTS = 'VIEW_REQUIREMENTS',
+  CREATE_REQUIREMENT = 'CREATE_REQUIREMENT',
+  EDIT_REQUIREMENT = 'EDIT_REQUIREMENT',
+  DELETE_REQUIREMENT = 'DELETE_REQUIREMENT',
+
+  // Functional requirement permissions
+  VIEW_FUNCTIONAL_REQUIREMENTS = 'VIEW_FUNCTIONAL_REQUIREMENTS',
+  CREATE_FUNCTIONAL_REQUIREMENT = 'CREATE_FUNCTIONAL_REQUIREMENT',
+  EDIT_FUNCTIONAL_REQUIREMENT = 'EDIT_FUNCTIONAL_REQUIREMENT',
+  DELETE_FUNCTIONAL_REQUIREMENT = 'DELETE_FUNCTIONAL_REQUIREMENT',
+
   // Sprint permissions
   VIEW_SPRINTS = 'VIEW_SPRINTS',
   CREATE_SPRINT = 'CREATE_SPRINT',
@@ -89,6 +101,16 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     Permission.EDIT_EPIC,
     Permission.DELETE_EPIC,
 
+    Permission.VIEW_REQUIREMENTS,
+    Permission.CREATE_REQUIREMENT,
+    Permission.EDIT_REQUIREMENT,
+    Permission.DELETE_REQUIREMENT,
+
+    Permission.VIEW_FUNCTIONAL_REQUIREMENTS,
+    Permission.CREATE_FUNCTIONAL_REQUIREMENT,
+    Permission.EDIT_FUNCTIONAL_REQUIREMENT,
+    Permission.DELETE_FUNCTIONAL_REQUIREMENT,
+
     Permission.VIEW_SPRINTS,
     Permission.CREATE_SPRINT,
     Permission.EDIT_SPRINT,
@@ -131,6 +153,16 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     Permission.EDIT_EPIC,
     Permission.DELETE_EPIC,
 
+    Permission.VIEW_REQUIREMENTS,
+    Permission.CREATE_REQUIREMENT,
+    Permission.EDIT_REQUIREMENT,
+    Permission.DELETE_REQUIREMENT,
+
+    Permission.VIEW_FUNCTIONAL_REQUIREMENTS,
+    Permission.CREATE_FUNCTIONAL_REQUIREMENT,
+    Permission.EDIT_FUNCTIONAL_REQUIREMENT,
+    Permission.DELETE_FUNCTIONAL_REQUIREMENT,
+
     Permission.VIEW_SPRINTS,
     Permission.CREATE_SPRINT,
     Permission.EDIT_SPRINT,
@@ -160,6 +192,9 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     Permission.ASSIGN_TASK,
 
     Permission.VIEW_EPICS,
+
+    Permission.VIEW_REQUIREMENTS,
+    Permission.VIEW_FUNCTIONAL_REQUIREMENTS,
 
     Permission.VIEW_SPRINTS,
 
@@ -241,6 +276,8 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     Permission.VIEW_PROJECTS,
     Permission.VIEW_TASKS,
     Permission.VIEW_EPICS,
+    Permission.VIEW_REQUIREMENTS,
+    Permission.VIEW_FUNCTIONAL_REQUIREMENTS,
     Permission.VIEW_SPRINTS,
     Permission.VIEW_TEAM,
     Permission.VIEW_WORKSPACE,

@@ -159,10 +159,11 @@ export function TaskBoard({
           return (priorityOrder[a.priority] || 0) - (priorityOrder[b.priority] || 0);
         case 'urgency':
           return getUrgencyScore(a) - getUrgencyScore(b);
-        case 'dueDate':
+        case 'dueDate': {
           const dateA = a.dueDate ? new Date(a.dueDate).getTime() : Infinity;
           const dateB = b.dueDate ? new Date(b.dueDate).getTime() : Infinity;
           return dateA - dateB;
+        }
         case 'title':
           return a.title.localeCompare(b.title);
         case 'hierarchyId':

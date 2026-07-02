@@ -15,9 +15,9 @@ class SprintSerializer(NativeModelSerializer):
     retrospectiveNotes = serializers.CharField(
         source="retrospective_notes", required=False, allow_blank=True
     )
-    createdBy = serializers.CharField(source="created_by_id")
+    createdBy = serializers.CharField(source="created_by_id", read_only=True)
     createdByName = serializers.CharField(
-        source="created_by_name", required=False, allow_blank=True
+        source="created_by_name", required=False, allow_blank=True, read_only=True
     )
 
     class Meta:
@@ -46,7 +46,7 @@ class RetrospectiveSerializer(NativeModelSerializer):
     wentWell = serializers.JSONField(source="went_well", required=False)
     needsImprovement = serializers.JSONField(source="needs_improvement", required=False)
     actionItems = serializers.JSONField(source="action_items", required=False)
-    createdBy = serializers.CharField(source="created_by_id")
+    createdBy = serializers.CharField(source="created_by_id", read_only=True)
 
     class Meta:
         model = Retrospective

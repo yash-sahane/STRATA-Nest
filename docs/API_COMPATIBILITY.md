@@ -1,0 +1,178 @@
+# API Compatibility — Django → NestJS Parity Checklist
+
+> **Purpose:** the authoritative endpoint-by-endpoint parity ledger. An endpoint is **done** only when its NestJS response is **byte-identical** to Django's, proven by the contract suite (`@lt/contract-tests`, ADR-0003). This file is updated as each Migration phase (M§9) lands.
+>
+> **Every endpoint below is enumerated** from the audit ([CURRENT_SYSTEM_AUDIT.md](CURRENT_SYSTEM_AUDIT.md) §14). All are mounted under `/api/v1/` with trailing slashes, cookie JWT auth, camelCase fields, the pagination envelope `{items,total,page,pageSize}`, and the error envelope `{error:{message,code,type}}`.
+
+**Parity status legend:** ⏳ pending · 🚧 in progress · ✅ verified (contract test green vs Django) · ➕ new (no Django equivalent)
+
+---
+
+## Standard shapes (referenced below)
+
+- **List** `GET /<collection>/` → `{ items: <Resource>[], total, page, pageSize }` (filter/sort via camel query params + `ordering`; A§4.3–4.4).
+- **Create** `POST /<collection>/` → `201 <Resource>`
+- **Retrieve** `GET /<collection>/{id}/` → `<Resource>`
+- **Replace** `PUT /<collection>/{id}/` → `<Resource>`
+- **Update** `PATCH /<collection>/{id}/` → `<Resource>`
+- **Delete** `DELETE /<collection>/{id}/` → `204`
+- **Error** (any) → `{ error: { message, code, type } }`
+
+---
+
+## Phase 1 — Auth & Users
+
+> **Status: 🚧 Implemented in NestJS + unit-verified** (pbkdf2 Django-vector, token claims, refresh revocation). Rows flip to ✅ once the contract suite runs green against a live Django **and** the Nest API (requires the shared database + running services). Parity column shows 🚧 accordingly.
+
+| Method | Path | Django response | Nest target | Parity |
+|---|---|---|---|---|
+| POST | `auth/login/` | `200 {user, sessionId}` + `Set-Cookie lt_access, lt_refresh` | identical | 🚧 |
+| POST | `auth/logout/` | `204` + clear both cookies (blacklist refresh) | identical (+ revoke jti) | 🚧 |
+| POST | `auth/refresh/` | `200 {ok:true}` + rotated cookies | identical (**+ revoke old jti**, D1) | 🚧 |
+| POST | `auth/register/` | `201 {user, sessionId}` + cookies | identical | 🚧 |
+| GET | `auth/me/` | `200 {user, session, workspaceIds, hasTempPassword, isAdmin}` | identical (D17 reproduced) | 🚧 |
+| POST | `auth/change-password/` | `200 {ok:true}` / `400 {message}` | identical | 🚧 |
+| PATCH | `auth/profile/` | `200 <User>` | identical | 🚧 |
+| POST | `auth/password-reset/` | `200 {ok:true}` (constant-time) | identical | 🚧 |
+| POST | `auth/password-reset/confirm/` | `200 {ok:true}` / `400 {message}` | identical | 🚧 |
+| POST | `users/invite/` | `200/201 {success, type, userId, message}` | identical | 🚧 |
+| GET | `users/` | list of `<User>` (shared-workspace scope; admin=all) | identical | 🚧 |
+| GET | `users/{id}/` | `<User>` | identical | 🚧 |
+| PATCH | `users/{id}/` | `<User>` (self/admin only) | identical | 🚧 |
+
+**`<User>`**: `id, createdAt, updatedAt, email, userEmail, name, phone, avatar, role, workspaceId, defaultWorkspaceId, workspaceIds, status, hasTempPassword, isAdmin`
+
+---
+
+## Phase 2 — Workspaces, RBAC, Invitations, Join
+
+| Collection | CRUD | Resource fields | Parity |
+|---|---|---|---|
+| `workspaces` | L/C/R/U/D | `id, createdAt, updatedAt, name, description, logo, color, ownerId, inviteCode, settings, memberIds` | ⏳ |
+| `workspace_members` | L/C/R/U/D | `…, workspaceId, userId, email, name, userName, phone, avatar, role, status, joinedAt` | ⏳ |
+| `workspace_roles` | L/C/R/U/D | `…, workspaceId, name, permissions` | ⏳ |
+| `invite_codes` | L/C/R/U/D | `…, workspaceId, code, role, maxUses, usedCount, expiresAt, createdBy` | ⏳ |
+| `email_invitations` | L/C/R/U/D | `…, workspaceId, email, role, token, status, expiresAt, invitedBy` | ⏳ |
+| `join_requests` | L/C/R/U/D | `…, workspaceId, userId, message, status, handledBy` | ⏳ |
+| `pending_workspace_access` | L/C/R/U/D | `…, workspaceId, userId, requestedRole` | ⏳ |
+
+---
+
+## Phase 3 — Projects
+
+| Collection | CRUD | Resource fields | Parity |
+|---|---|---|---|
+| `projects` | L/C/R/U/D | `…, workspaceId, name, shortCode, description, clientName, logo, color, methodology, status, archived, startDate, endDate, ownerId, createdBy, createdByName, memberIds, settings` | ⏳ |
+
+---
+
+## Phase 4 — Requirements
+
+| Collection | CRUD | Resource fields | Parity |
+|---|---|---|---|
+| `client_requirements` | L/C/R/U/D | `…, workspaceId, projectId, title, description, clientName, priority, status, attachments, createdBy, createdByName` | ⏳ |
+| `functional_requirements` | L/C/R/U/D | `…, workspaceId, projectId, hierarchyId, epicId, sprintId, clientRequirementId, title, description, complexity, priority, status, progress, reusable, assignedTo, assignedToNames, tags, linkedProjectIds, createdBy, createdByName` | ⏳ |
+
+---
+
+## Phase 5 — Epics, Sprints, Retrospectives
+
+| Collection | CRUD | Resource fields | Parity |
+|---|---|---|---|
+| `epics` | L/C/R/U/D | `…, workspaceId, projectId, requirementId, hierarchyId, name, description, color, startDate, endDate, status, progress, assignedTeam, createdBy, createdByName` | ⏳ |
+| `sprints` | L/C/R/U/D | `…, workspaceId, projectId, name, goal, startDate, endDate, status, retrospectiveNotes, createdBy, createdByName` | ⏳ |
+| `retrospectives` | L/C/R/U/D | `…, workspaceId, projectId, sprintId, wentWell, needsImprovement, actionItems, createdBy` | ⏳ |
+
+---
+
+## Phase 6 — Tasks & satellites
+
+| Collection | CRUD | Resource fields | Parity |
+|---|---|---|---|
+| `tasks` | L/C/R/U/D | `…, workspaceId, projectId, hierarchyId, sprintId, epicId, functionalRequirementId, parentTaskId, title, description, status, priority, assigneeIds, assignedBy, assignedByName, assignedTo, assignedToNames, watcherIds, createdBy, createdByName, dueDate, estimatedHours, actualHours, labels, attachments, customFields, position, blockedBy, blocks` | ⏳ |
+| `task_comments` | L/C/R/U/D | `…, taskId, userId, content, mentions, attachments` | ⏳ |
+| `kanban_columns` | L/C/R/U/D | `…, projectId, name, status, wipLimit, position, color` | ⏳ |
+| `labels` | L/C/R/U/D | `…, workspaceId, projectId, name, color, description` | ⏳ |
+
+---
+
+## Phase 8 — HR (Attendance, Leave, Time Tracking)
+
+| Collection | CRUD | Resource fields | Parity |
+|---|---|---|---|
+| `attendance` | L/C/R/U/D | `…, workspaceId, userId, date, checkInTime, checkOutTime, workHours, status, lateMinutes, location, notes, isWeekend, isHoliday, createdBy, createdByName` | ⏳ |
+| `holidays` | L/C/R/U/D | `…, workspaceId, name, date, isOptional, description` | ⏳ |
+| `leave_requests` | L/C/R/U/D | `…, workspaceId, userId, createdBy, createdByName, type, startDate, endDate, reason, status, approvedBy, approvedAt, rejectionReason, daysCount` | ⏳ |
+| `leave_balances` | L/C/R/U/D | `…, workspaceId, userId, year, paidLeave, unpaidLeave, halfDay, compOff` | ⏳ |
+| `time_entries` | L/C/R/U/D | `…, workspaceId, userId, userName, userEmail, createdBy, createdByName, taskId, taskTitle, taskHierarchyId, projectId, projectName, description, startTime, endTime, duration, isBillable, billableRate, type, status, approvedBy, approvedAt, rejectionReason, tags` | ⏳ |
+| `active_timers` | L/C/R/U/D | `…, userId, taskId, taskTitle, taskHierarchyId, projectId, description, startTime, isPaused, pausedAt, totalPausedTime, type, pomodoroSettings` (+ new `workspaceId`, D5) | ⏳ |
+
+---
+
+## Phase 9 — Notifications & Activity
+
+| Collection / endpoint | CRUD | Resource fields | Parity |
+|---|---|---|---|
+| `notifications` | L/C/R/U/D | `…, workspaceId, userId, type, title, message, projectId, relatedEntityId, relatedEntityType, isRead` | ⏳ |
+| POST `notifications/mark_all_read/` | — | `{updated: <n>}` | ⏳ |
+| `activity_logs` | L/C/R/U/D | `…, workspaceId, userId, action, entityType, entityId, changes, metadata` (append-only in Nest) | ⏳ |
+| `saved_searches` | L/C/R/U/D | `…, workspaceId, userId, name, query, filters` | ⏳ |
+
+---
+
+## Phase 10 — Files & Email
+
+| Method | Path | Django response | Parity |
+|---|---|---|---|
+| POST | `files/` (multipart) | `201 <File>` | ⏳ |
+| GET | `files/{id}/` | `<File>` | ⏳ |
+| DELETE | `files/{id}/` | `204` (deletes blob) | ⏳ |
+| GET | `files/{id}/preview/` · `view/` | inline stream (`Content-Disposition: inline`) | ⏳ |
+| GET | `files/{id}/download/` | attachment stream | ⏳ |
+| POST | `email/send-invitation/` | `{success, backend, ...}` | ⏳ |
+| POST | `email/send-leave/` | `{success, ...}` | ⏳ |
+| POST | `email/send-notification/` | `{success, ...}` | ⏳ |
+
+**`<File>`**: `id, createdAt, updatedAt, name, mimeType, size, workspaceId, projectId, uploadedBy, bucketId, url`
+
+---
+
+## Phase 11 — Integrations
+
+| Collection | CRUD | Resource fields | Parity |
+|---|---|---|---|
+| `github_integrations` | L/C/R/U/D | `…, projectId, repoOwner, repoName, accessToken(write-only), webhookSecret, autoUpdateStatus, enabledEvents` | ⏳ |
+| `gitlab_integrations` | L/C/R/U/D | `…, projectId, projectPath, accessToken(write-only), webhookSecret, autoUpdateStatus, enabledEvents` | ⏳ |
+| `discord_integrations` | L/C/R/U/D | `…, projectId, webhookUrl, enabledEvents` | ⏳ |
+| `git_commits` | L/C/R/U/D | `…, projectId, provider, commitSha, message, author, authorEmail, timestamp, linkedTaskIds, url` | ⏳ |
+| POST | `integrations/*/webhook/` (**new**, D-fix) | verify + enqueue (`git` queue) | ➕ |
+
+---
+
+## Phase 12 — Generation
+
+| Method | Path | Django response | Parity |
+|---|---|---|---|
+| POST | `bulk-save/` | `201 {success:true, clientRequirements[], epics[], functionalRequirements[], tasks[]}` (each `{id, hierarchyId, …}`) | ⏳ |
+
+---
+
+## WebSocket
+
+| Path | Django (Channels) | Nest target | Parity |
+|---|---|---|---|
+| `ws/collections/` | subscribe/unsubscribe by channel; frame `{event,payload,channels,timestamp}` | identical frame, **authorized rooms** (D2), commit-gated (D10) | ⏳ |
+
+---
+
+## New endpoints (no Django equivalent)
+
+| Method | Path | Purpose | Status |
+|---|---|---|---|
+| GET | `health/` | liveness/readiness (DB+Redis) | ➕ done |
+| GET | `/api/docs` | Swagger UI (replaces drf-spectacular) | ➕ done |
+
+---
+
+### How to update this ledger
+For each endpoint as its phase lands: (1) run the characterization test vs Django, (2) implement in Nest, (3) run the contract test vs Nest, (4) flip the row to ✅ with the contract-test name. The phase is not **Done** (its `PHASE_N.md`) until all its rows are ✅.

@@ -293,8 +293,7 @@ export function Header() {
               {!isLoading && results.length > 0 && (
                 <div className="p-2">
                   <div className="px-3 py-2 text-xs font-semibold text-muted-foreground">
-                    Found {results.length} result{results.length !== 1 ? 's' : ''} for "
-                    {searchQuery}"
+                    Found {results.length} result{results.length !== 1 ? 's' : ''} for &quot;{searchQuery}&quot;
                   </div>
 
                   {Object.entries(groupedResults).map(([type, items]) => (

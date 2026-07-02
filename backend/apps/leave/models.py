@@ -8,6 +8,12 @@ from apps.core.models import TimestampedModel
 LEAVE_TYPE = [
     ("PAID", "Paid"),
     ("UNPAID", "Unpaid"),
+    ("CASUAL", "Casual Leave"),
+    ("SICK", "Sick Leave"),
+    ("ANNUAL", "Annual Leave"),
+    ("MATERNITY", "Maternity Leave"),
+    ("PATERNITY", "Paternity Leave"),
+    ("BEREAVEMENT", "Bereavement Leave"),
     ("HALF_DAY", "Half Day"),
     ("COMP_OFF", "Comp Off"),
 ]

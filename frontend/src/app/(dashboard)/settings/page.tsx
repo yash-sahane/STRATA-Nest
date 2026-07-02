@@ -28,7 +28,7 @@ import { toast } from 'sonner';
 import NotificationPreferences from '@/components/settings/notification-preferences';
 import { useIsManager } from '@/hooks/use-permissions';
 import { Shield } from 'lucide-react';
-import { authClient, resources } from '@/lib/api/client';
+import { authClient } from '@/lib/api/client';
 import { useUpdateWorkspace } from '@/hooks/use-workspace';
 
 export default function SettingsPage() {
@@ -46,6 +46,7 @@ export default function SettingsPage() {
 
   // Profile form state
   const [profileName, setProfileName] = React.useState('');
+  const avatarInputRef = React.useRef<HTMLInputElement>(null);
   React.useEffect(() => {
     if (user) setProfileName(user.name || '');
   }, [user]);
@@ -55,9 +56,20 @@ export default function SettingsPage() {
   const [showPw, setShowPw] = React.useState({ current: false, next: false, confirm: false });
   const [pwUpdating, setPwUpdating] = React.useState(false);
 
-  // Workspace form refs
+  // Workspace form refs and preferences state
   const wsNameRef = React.useRef<HTMLInputElement>(null);
   const wsDescRef = React.useRef<HTMLTextAreaElement>(null);
+  const [allowMemberInvites, setAllowMemberInvites] = React.useState(true);
+  const [isPublicWorkspace, setIsPublicWorkspace] = React.useState(false);
+  const [requireTaskApproval, setRequireTaskApproval] = React.useState(false);
+  React.useEffect(() => {
+    if (currentWorkspace?.settings) {
+      const s = currentWorkspace.settings;
+      if (typeof s.allowMemberInvites === 'boolean') setAllowMemberInvites(s.allowMemberInvites);
+      if (typeof s.isPublic === 'boolean') setIsPublicWorkspace(s.isPublic);
+      if (typeof s.requireTaskApproval === 'boolean') setRequireTaskApproval(s.requireTaskApproval);
+    }
+  }, [currentWorkspace]);
 
   // Avoid hydration mismatch
   React.useEffect(() => {
@@ -92,9 +104,6 @@ export default function SettingsPage() {
     setIsUpdating(true);
     try {
       await authClient.updateName(profileName.trim());
-      await resources.update('users', user.id, {
-        name: profileName.trim(),
-      });
       await refreshUser();
       toast.success('Profile updated successfully');
     } catch (error: any) {
@@ -102,6 +111,28 @@ export default function SettingsPage() {
     } finally {
       setIsUpdating(false);
     }
+  };
+
+  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error('Image must be under 2MB');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const dataUrl = reader.result as string;
+      try {
+        await authClient.updateAvatar(dataUrl);
+        await refreshUser();
+        toast.success('Avatar updated successfully');
+      } catch (error: any) {
+        toast.error('Failed to update avatar', { description: error?.message });
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
   };
 
   const handleWorkspaceUpdate = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -113,7 +144,14 @@ export default function SettingsPage() {
         workspaceId: currentWorkspace.id,
         name: wsNameRef.current?.value.trim() || currentWorkspace.name,
         description: wsDescRef.current?.value ?? currentWorkspace.description ?? '',
+        settings: {
+          ...(currentWorkspace.settings || {}),
+          allowMemberInvites,
+          isPublic: isPublicWorkspace,
+          requireTaskApproval,
+        },
       });
+      toast.success('Workspace settings saved');
     } catch {
       // error toast handled inside mutation
     } finally {
@@ -215,7 +253,19 @@ export default function SettingsPage() {
                     </AvatarFallback>
                   </Avatar>
                   <div className="space-y-2">
-                    <Button type="button" variant="outline" size="sm">
+                    <input
+                      ref={avatarInputRef}
+                      type="file"
+                      accept="image/jpeg,image/gif,image/png"
+                      className="hidden"
+                      onChange={handleAvatarChange}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => avatarInputRef.current?.click()}
+                    >
                       Change Avatar
                     </Button>
                     <p className="text-xs text-muted-foreground">
@@ -334,7 +384,10 @@ export default function SettingsPage() {
                             Let team members invite others
                           </p>
                         </div>
-                        <Switch defaultChecked />
+                        <Switch
+                          checked={allowMemberInvites}
+                          onCheckedChange={setAllowMemberInvites}
+                        />
                       </div>
 
                       <div className="flex items-center justify-between">
@@ -344,7 +397,10 @@ export default function SettingsPage() {
                             Make workspace visible to public
                           </p>
                         </div>
-                        <Switch />
+                        <Switch
+                          checked={isPublicWorkspace}
+                          onCheckedChange={setIsPublicWorkspace}
+                        />
                       </div>
 
                       <div className="flex items-center justify-between">
@@ -354,7 +410,10 @@ export default function SettingsPage() {
                             Tasks need approval before completion
                           </p>
                         </div>
-                        <Switch />
+                        <Switch
+                          checked={requireTaskApproval}
+                          onCheckedChange={setRequireTaskApproval}
+                        />
                       </div>
                     </div>
 

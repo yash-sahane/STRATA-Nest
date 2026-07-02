@@ -1,4 +1,4 @@
-import { LEAVE_REQUEST_TYPES, type LeaveRequestType } from './leave-balance-mapper';
+import { LEAVE_REQUEST_TYPES, getBalanceFieldForLeaveType, type LeaveRequestType } from './leave-balance-mapper';
 
 /**
  * Leave Management Utilities
@@ -80,9 +80,6 @@ export function hasEnoughBalance(
   requestedDays: number,
   dbBalance: { paidLeave: number; unpaidLeave: number; halfDay: number; compOff: number }
 ): boolean {
-  // Import dynamically to avoid circular deps
-  const { getBalanceFieldForLeaveType } = require('./leave-balance-mapper');
-
   // Unpaid leave has no balance limit
   if (leaveType === 'UNPAID') {
     return true;

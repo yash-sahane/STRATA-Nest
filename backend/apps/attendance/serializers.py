@@ -21,10 +21,10 @@ class AttendanceSerializer(NativeModelSerializer):
     isWeekend = serializers.BooleanField(source="is_weekend", required=False)
     isHoliday = serializers.BooleanField(source="is_holiday", required=False)
     createdBy = serializers.CharField(
-        source="created_by_id", required=False, allow_null=True
+        source="created_by_id", required=False, allow_null=True, read_only=True
     )
     createdByName = serializers.CharField(
-        source="created_by_name", required=False, allow_blank=True
+        source="created_by_name", required=False, allow_blank=True, read_only=True
     )
 
     class Meta:

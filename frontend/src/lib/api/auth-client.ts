@@ -77,6 +77,12 @@ async function updateName(name: string): Promise<ApiModels.User> {
   return user as ApiModels.User;
 }
 
+async function updateAvatar(avatar: string): Promise<ApiModels.User> {
+  const user = await restClient.patch('/api/v1/auth/profile/', { avatar });
+  cachedUser = null;
+  return user as ApiModels.User;
+}
+
 async function updatePhone(phone: string, _password?: string): Promise<ApiModels.User> {
   const user = await restClient.patch('/api/v1/auth/profile/', { phone });
   cachedUser = null;
@@ -93,4 +99,5 @@ export const authClient = {
     updatePassword(newPassword, currentPassword),
   updateName,
   updatePhone,
+  updateAvatar,
 };

@@ -31,9 +31,9 @@ class TaskSerializer(NativeModelSerializer):
     assignedTo = serializers.JSONField(source="assigned_to", required=False)
     assignedToNames = serializers.JSONField(source="assigned_to_names", required=False)
     watcherIds = serializers.JSONField(source="watcher_ids", required=False)
-    createdBy = serializers.CharField(source="created_by_id")
+    createdBy = serializers.CharField(source="created_by_id", read_only=True)
     createdByName = serializers.CharField(
-        source="created_by_name", required=False, allow_blank=True
+        source="created_by_name", required=False, allow_blank=True, read_only=True
     )
     dueDate = serializers.DateTimeField(
         source="due_date", required=False, allow_null=True

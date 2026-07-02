@@ -54,9 +54,9 @@ export default function FunctionalRequirementsPage() {
 
   // Permission checks
   const isAdmin = useIsAdmin();
-  const canCreateFR = useHasPermission(Permission.CREATE_EPIC);
-  const canEditFR = useHasPermission(Permission.EDIT_EPIC);
-  const canDeleteFR = useHasPermission(Permission.DELETE_EPIC);
+  const canCreateFR = useHasPermission(Permission.CREATE_FUNCTIONAL_REQUIREMENT);
+  const canEditFR = useHasPermission(Permission.EDIT_FUNCTIONAL_REQUIREMENT);
+  const canDeleteFR = useHasPermission(Permission.DELETE_FUNCTIONAL_REQUIREMENT);
 
   const [selectedProjectId, setSelectedProjectId] = React.useState<string>('');
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);

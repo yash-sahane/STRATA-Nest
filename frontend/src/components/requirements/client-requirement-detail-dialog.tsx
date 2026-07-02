@@ -312,7 +312,7 @@ export function ClientRequirementDetailDialog({
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Client Requirement?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete "{requirement.title}". This action cannot be undone.
+              This will permanently delete &quot;{requirement.title}&quot;. This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="flex-col-reverse sm:flex-row sm:justify-between sm:space-x-0">

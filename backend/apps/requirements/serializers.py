@@ -13,9 +13,9 @@ class ClientRequirementSerializer(NativeModelSerializer):
     clientName = serializers.CharField(
         source="client_name", required=False, allow_blank=True
     )
-    createdBy = serializers.CharField(source="created_by_id")
+    createdBy = serializers.CharField(source="created_by_id", read_only=True)
     createdByName = serializers.CharField(
-        source="created_by_name", required=False, allow_blank=True
+        source="created_by_name", required=False, allow_blank=True, read_only=True
     )
 
     class Meta:
@@ -53,9 +53,9 @@ class FunctionalRequirementSerializer(NativeModelSerializer):
     linkedProjectIds = serializers.CharField(
         source="linked_project_ids", required=False, allow_blank=True
     )
-    createdBy = serializers.CharField(source="created_by_id")
+    createdBy = serializers.CharField(source="created_by_id", read_only=True)
     createdByName = serializers.CharField(
-        source="created_by_name", required=False, allow_blank=True
+        source="created_by_name", required=False, allow_blank=True, read_only=True
     )
 
     class Meta:

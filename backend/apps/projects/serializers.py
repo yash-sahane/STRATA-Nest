@@ -13,10 +13,10 @@ class ProjectSerializer(NativeModelSerializer):
     clientName = serializers.CharField(
         source="client_name", required=False, allow_blank=True
     )
-    ownerId = serializers.CharField(source="owner_id")
-    createdBy = serializers.CharField(source="created_by_id")
+    ownerId = serializers.CharField(source="owner_id", read_only=True)
+    createdBy = serializers.CharField(source="created_by_id", read_only=True)
     createdByName = serializers.CharField(
-        source="created_by_name", required=False, allow_blank=True
+        source="created_by_name", required=False, allow_blank=True, read_only=True
     )
     memberIds = serializers.JSONField(source="member_ids", required=False)
     settings = serializers.JSONField(source="project_settings", required=False)

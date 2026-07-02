@@ -9,10 +9,10 @@ from .models import LeaveBalance, LeaveRequest
 
 class LeaveRequestSerializer(NativeModelSerializer):
     workspaceId = serializers.CharField(source="workspace_id")
-    userId = serializers.CharField(source="user_id")
-    createdBy = serializers.CharField(source="created_by_id")
+    userId = serializers.CharField(source="user_id", read_only=True)
+    createdBy = serializers.CharField(source="created_by_id", read_only=True)
     createdByName = serializers.CharField(
-        source="created_by_name", required=False, allow_blank=True
+        source="created_by_name", required=False, allow_blank=True, read_only=True
     )
     startDate = serializers.DateField(source="start_date")
     endDate = serializers.DateField(source="end_date")

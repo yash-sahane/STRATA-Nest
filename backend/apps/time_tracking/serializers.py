@@ -9,12 +9,12 @@ from .models import ActiveTimer, TimeEntry
 
 class TimeEntrySerializer(NativeModelSerializer):
     workspaceId = serializers.CharField(source="workspace_id")
-    userId = serializers.CharField(source="user_id")
-    userName = serializers.CharField(source="user_name")
-    userEmail = serializers.EmailField(source="user_email")
-    createdBy = serializers.CharField(source="created_by_id")
+    userId = serializers.CharField(source="user_id", read_only=True)
+    userName = serializers.CharField(source="user_name", read_only=True)
+    userEmail = serializers.EmailField(source="user_email", read_only=True)
+    createdBy = serializers.CharField(source="created_by_id", read_only=True)
     createdByName = serializers.CharField(
-        source="created_by_name", required=False, allow_blank=True
+        source="created_by_name", required=False, allow_blank=True, read_only=True
     )
     taskId = serializers.CharField(source="task_id", required=False, allow_blank=True)
     taskTitle = serializers.CharField(

@@ -46,6 +46,10 @@ export interface WorkspaceSettings {
   requireApproval: boolean;
   defaultRole: UserRole;
   brandingEnabled: boolean;
+  allowMemberInvites?: boolean;
+  isPublic?: boolean;
+  requireTaskApproval?: boolean;
+  [key: string]: unknown;
 }
 
 // Project Methodology - Only Scrum supported
@@ -292,7 +296,7 @@ export interface Attendance {
 }
 
 // Leave Types
-export type LeaveType = 'PAID' | 'UNPAID' | 'HALF_DAY' | 'COMP_OFF';
+export type LeaveType = 'PAID' | 'UNPAID' | 'CASUAL' | 'SICK' | 'ANNUAL' | 'MATERNITY' | 'PATERNITY' | 'BEREAVEMENT' | 'HALF_DAY' | 'COMP_OFF';
 export type LeaveStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED';
 
 // Leave Request

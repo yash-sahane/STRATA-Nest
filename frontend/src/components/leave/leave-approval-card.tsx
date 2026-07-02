@@ -185,7 +185,7 @@ export function LeaveApprovalCard({
           <DialogHeader>
             <DialogTitle>Approve Leave Request</DialogTitle>
             <DialogDescription>
-              You are about to approve {leaveRequest.userName}'s leave request for{' '}
+              You are about to approve {leaveRequest.userName}&apos;s leave request for{' '}
               {leaveRequest.days} {leaveRequest.days === 1 ? 'day' : 'days'}. The employee will be
               notified via email.
             </DialogDescription>
@@ -231,7 +231,7 @@ export function LeaveApprovalCard({
           <DialogHeader>
             <DialogTitle>Reject Leave Request</DialogTitle>
             <DialogDescription>
-              You are about to reject {leaveRequest.userName}'s leave request. Please provide a
+              You are about to reject {leaveRequest.userName}&apos;s leave request. Please provide a
               reason for rejection. The employee will be notified via email.
             </DialogDescription>
           </DialogHeader>

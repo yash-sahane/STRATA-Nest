@@ -16,8 +16,8 @@ from .models import (
 
 
 class WorkspaceSerializer(NativeModelSerializer):
-    ownerId = serializers.CharField(source="owner_id")
-    inviteCode = serializers.CharField(source="invite_code", required=False)
+    ownerId = serializers.CharField(source="owner_id", read_only=True)
+    inviteCode = serializers.CharField(source="invite_code", read_only=True)
     memberIds = serializers.SerializerMethodField()
 
     class Meta:

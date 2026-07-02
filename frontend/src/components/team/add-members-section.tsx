@@ -249,7 +249,7 @@ export function AddMembersSection({
         <CardHeader>
           <CardTitle>Access Denied</CardTitle>
           <CardDescription>
-            You don't have permission to add members to this workspace.
+            You don&apos;t have permission to add members to this workspace.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -284,7 +284,7 @@ export function AddMembersSection({
           <CardHeader>
             <CardTitle>Add Individual User</CardTitle>
             <CardDescription>
-              Create a new user account and add them to this workspace. They'll receive an email
+              Create a new user account and add them to this workspace. They&apos;ll receive an email
               with a temporary password.
             </CardDescription>
           </CardHeader>
@@ -346,7 +346,7 @@ export function AddMembersSection({
               <Alert>
                 <AlertCircle className="h-4 w-4" />
                 <AlertDescription>
-                  The user will receive an email with a temporary password. They'll be required to
+                  The user will receive an email with a temporary password. They&apos;ll be required to
                   change it on their first login.
                 </AlertDescription>
               </Alert>

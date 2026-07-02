@@ -321,7 +321,7 @@ export function AttendanceWidget() {
           {todayIsWeekend && !saturdayIsWorking && (
             <div className="text-center p-4 bg-muted rounded-lg">
               <p className="text-sm text-muted-foreground">
-                You haven&apos;t checked in today. Click the button above to check in.
+                Today is a weekend &mdash; enjoy your day off!
               </p>
             </div>
           )}
@@ -329,7 +329,7 @@ export function AttendanceWidget() {
           {hasCheckedOut && (
             <div className="text-center p-4 bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 rounded-lg">
               <p className="text-sm font-medium text-green-800 dark:text-green-200">
-                You've completed your work for today! 🎉
+                You&apos;ve completed your work for today! 🎉
               </p>
             </div>
           )}

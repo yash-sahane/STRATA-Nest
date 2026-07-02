@@ -176,7 +176,7 @@ export default function OnboardingPage() {
                   </li>
                   <li className="flex items-start gap-2">
                     <span className="text-primary mt-0.5">2.</span>
-                    You'll be redirected to the dashboard
+                    You&apos;ll be redirected to the dashboard
                   </li>
                   <li className="flex items-start gap-2">
                     <span className="text-primary mt-0.5">3.</span>

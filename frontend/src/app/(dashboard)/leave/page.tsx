@@ -123,7 +123,7 @@ export default function LeavePage() {
                   <Calendar className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
                   <h3 className="text-lg font-medium mb-2">No leave requests yet</h3>
                   <p className="text-muted-foreground mb-4">
-                    Click the "Request Leave" button above to submit your first leave request
+                    Click the &quot;Request Leave&quot; button above to submit your first leave request
                   </p>
                 </div>
               </CardContent>

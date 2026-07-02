@@ -70,11 +70,10 @@ export default function RequirementsPage() {
   const searchParams = useSearchParams();
   const frIdFromUrl = searchParams.get('frId');
 
-  // Permission checks - using epic permissions as proxy for requirement management
   const isAdmin = useIsAdmin();
-  const canCreateRequirement = useHasPermission(Permission.CREATE_EPIC);
-  const canEditRequirement = useHasPermission(Permission.EDIT_EPIC);
-  const canDeleteRequirement = useHasPermission(Permission.DELETE_EPIC);
+  const canCreateRequirement = useHasPermission(Permission.CREATE_REQUIREMENT);
+  const canEditRequirement = useHasPermission(Permission.EDIT_REQUIREMENT);
+  const canDeleteRequirement = useHasPermission(Permission.DELETE_REQUIREMENT);
 
   const [selectedProjectId, setSelectedProjectId] = React.useState<string>('');
   const [searchQuery, setSearchQuery] = React.useState('');

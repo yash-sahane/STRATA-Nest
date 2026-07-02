@@ -1,0 +1,53 @@
+// Identity models — mapped to the existing Django tables (Phase 1).
+// Field defaults are Prisma client-side defaults for inserts (the Django columns
+// have no DB-level defaults); createdAt/updatedAt mirror Django auto_now(_add).
+
+model User {
+  id              String    @id
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  password        String
+  lastLogin       DateTime? @map("last_login")
+  isSuperuser     Boolean   @default(false) @map("is_superuser")
+  email           String    @unique
+  name            String
+  phone           String    @default("")
+  avatar          String    @default("")
+  role            String    @default("MEMBER")
+  workspaceId     String    @default("") @map("workspace_id")
+  status          String    @default("ACTIVE")
+  hasTempPassword Boolean   @default(false) @map("has_temp_password")
+  isAdminFlag     Boolean   @default(false) @map("is_admin_flag")
+  isActive        Boolean   @default(true) @map("is_active")
+  isStaff         Boolean   @default(false) @map("is_staff")
+
+  @@map("accounts_user")
+}
+
+// Minimal models Phase-1 auth READS/WRITES (me/workspaceIds, users directory,
+// invite). The full WorkspacesModule (relations, RBAC) lands in Phase 2.
+
+model Workspace {
+  id         String   @id
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+  name       String
+  ownerId    String   @map("owner_id")
+  inviteCode String   @map("invite_code")
+
+  @@map("workspaces_workspace")
+}
+
+model WorkspaceMember {
+  id          String   @id
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  workspaceId String   @map("workspace_id")
+  userId      String   @map("user_id")
+  role        String   @default("MEMBER")
+  status      String   @default("ACTIVE")
+  joinedAt    DateTime @default(now()) @map("joined_at")
+
+  @@unique([workspaceId, userId])
+  @@map("workspaces_workspacemember")
+}

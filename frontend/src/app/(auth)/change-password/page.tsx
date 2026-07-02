@@ -194,7 +194,7 @@ function ChangePasswordContent() {
             <Alert className="mb-6 border-orange-500/50 bg-orange-50 dark:bg-orange-950/20">
               <Lock className="h-4 w-4 text-orange-600" />
               <AlertDescription className="text-orange-900 dark:text-orange-100">
-                <strong>Security Required:</strong> You're using a temporary password. Please create
+                <strong>Security Required:</strong> You&apos;re using a temporary password. Please create
                 a new secure password to protect your account.
               </AlertDescription>
             </Alert>

@@ -39,9 +39,12 @@ next-env.d.ts
 
 # Python / Django
 .venv/
+venv/
+backend/venv/
 __pycache__/
 *.py[cod]
 .ruff_cache/
+*.egg-info/
 backend/.venv/
 backend/db.sqlite3
 
@@ -57,3 +60,12 @@ Thumbs.db
 
 .playwright-mcp/
 chat.json
+
+# --- NestJS monorepo (Phase 0+) ---
+dist/
+.turbo/
+*.log
+# Prisma generated client
+packages/prisma/generated/
+# allow committing the env template (overrides the .env.example ignore above)
+!.env.example

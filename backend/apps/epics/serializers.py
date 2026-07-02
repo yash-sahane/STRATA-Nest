@@ -21,9 +21,9 @@ class EpicSerializer(NativeModelSerializer):
     assignedTeam = serializers.CharField(
         source="assigned_team", required=False, allow_blank=True
     )
-    createdBy = serializers.CharField(source="created_by_id")
+    createdBy = serializers.CharField(source="created_by_id", read_only=True)
     createdByName = serializers.CharField(
-        source="created_by_name", required=False, allow_blank=True
+        source="created_by_name", required=False, allow_blank=True, read_only=True
     )
 
     class Meta:
