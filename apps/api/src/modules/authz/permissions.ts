@@ -36,6 +36,12 @@ export const Permission = {
   HrWrite: 'hr:write',
   LeaveApprove: 'leave:approve',
   TimeApprove: 'time:approve',
+  // Phase 9 — notifications + activity. Members manage their own notifications
+  // and saved searches, and read the workspace activity trail (all baseline).
+  NotificationRead: 'notification:read',
+  NotificationWrite: 'notification:write',
+  ActivityRead: 'activity:read',
+  ActivityWrite: 'activity:write',
 } as const;
 
 export type PermissionKey = (typeof Permission)[keyof typeof Permission];
@@ -51,6 +57,10 @@ const READ_ONLY: PermissionKey[] = [
   Permission.TaskRead,
   Permission.HrRead,
   Permission.HrWrite,
+  Permission.NotificationRead,
+  Permission.NotificationWrite,
+  Permission.ActivityRead,
+  Permission.ActivityWrite,
 ];
 
 /** Default permissions for the 7 built-in roles (A§5.1). Tunable; seeded into

@@ -152,12 +152,20 @@
 
 ## Phase 9 — Notifications & Activity
 
+> **Status: 🚧 Implemented + unit-verified.** CRUD parity for all 3 collections + `mark_all_read`. **[NEW] server-guaranteed engines (D9):** a `NotificationSubscriber` and an append-only `AuditSubscriber` consume the Phases 2–8 domain events and write per-user notifications + audit rows — the frontend no longer has to POST them (client POSTs still accepted during transition). `createdAt`/`updatedAt` serialize **last** (NativeModelSerializer pop-and-re-add), matched byte-for-byte.
+
 | Collection / endpoint | CRUD | Resource fields | Parity |
 |---|---|---|---|
-| `notifications` | L/C/R/U/D | `…, workspaceId, userId, type, title, message, projectId, relatedEntityId, relatedEntityType, isRead` | ⏳ |
-| POST `notifications/mark_all_read/` | — | `{updated: <n>}` | ⏳ |
-| `activity_logs` | L/C/R/U/D | `…, workspaceId, userId, action, entityType, entityId, changes, metadata` (append-only in Nest) | ⏳ |
-| `saved_searches` | L/C/R/U/D | `…, workspaceId, userId, name, query, filters` | ⏳ |
+| `notifications` | L/C/R/U/D | `…, workspaceId, userId, type, title, message, projectId, relatedEntityId, relatedEntityType, isRead` | 🚧 |
+| POST `notifications/mark_all_read/` | — | `{updated: <n>}` (caller's unread, membership-scoped) | 🚧 |
+| `activity_logs` | **L/C/R only** | `…, workspaceId, userId, action, entityType, entityId, changes, metadata` | 🚧 |
+| `saved_searches` | L/C/R/U/D | `…, workspaceId, userId, name, query, filters` | 🚧 |
+
+**Parity decisions / deviations:**
+- **`activity_logs` is append-only [NEW, D9]** — Django exposed PATCH/PUT/DELETE; Nest omits those routes and the service throws `403 append-only` on update/remove, so the audit trail is immutable. This is a *tightening* vs Django; documented so a reconciliation run doesn't flag the missing verbs as a regression.
+- **`NotificationDelivery` (`notifications_notificationdelivery`) is a NEW additive table** (the Notification→delivery split, ADR-0011). Phase 9 writes the `in_app` delivery inline; `email`/`push` channels are Phase 10. It is **not** part of the wire contract.
+- Notification `create` takes `userId` from the payload (Django parity — a notification is addressed to someone); `activity_logs`/`saved_searches` stamp `userId` = caller (Django `perform_create`).
+- Server-emitted notifications currently cover the events Phases 2–8 actually emit (workspace member/join, leave/time decisions); more join automatically as later phases emit events. **Dedupe** for the client-POST + server-subscriber transition window is a live-gate follow-up.
 
 ---
 

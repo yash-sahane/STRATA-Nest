@@ -75,3 +75,22 @@ export interface TimeEntryDecisionPayload {
   userId: string;
   timeEntryId: string;
 }
+
+// --- Phase 9: Notification / Activity engines --------------------------------
+// Phase 9 does not introduce NEW domain events — its subscribers (Notification +
+// Audit) consume the business events already emitted by Phases 2–8 above and
+// fan them out to per-user notifications + an append-only audit log (ADR-0011).
+// A notification's `type` is derived from the source event name; NotifiableEvent
+// is the set of events that currently produce a per-user notification (all carry
+// a `userId` recipient). More join the set as later phases emit events.
+export const NotifiableEvent = {
+  [WorkspaceEvents.MemberAdded]: 'workspace_member_added',
+  [WorkspaceEvents.MemberRoleChanged]: 'workspace_role_changed',
+  [WorkspaceEvents.InvitationAccepted]: 'invitation_accepted',
+  [WorkspaceEvents.JoinRequestApproved]: 'join_request_approved',
+  [WorkspaceEvents.JoinRequestRejected]: 'join_request_rejected',
+  [HrEvents.LeaveApproved]: 'leave_approved',
+  [HrEvents.LeaveRejected]: 'leave_rejected',
+  [HrEvents.TimeEntryApproved]: 'time_entry_approved',
+  [HrEvents.TimeEntryRejected]: 'time_entry_rejected',
+} as const;

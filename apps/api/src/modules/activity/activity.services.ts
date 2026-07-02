@@ -1,0 +1,125 @@
+import { ForbiddenException, Injectable } from '@nestjs/common';
+import { generateId, type ListQuerySpec } from '@lt/common';
+import { PrismaService } from '@lt/prisma';
+import type { ActivityLog, Prisma, SavedSearch, User } from '@prisma/client';
+import { Permission, type PermissionKey } from '../authz/permissions';
+import { WorkspaceAccessService } from '../authz/workspace-access.service';
+import { ScopedCrudService } from '../workspaces/scoped-crud.base';
+import type { CreateActivityLogDto, CreateSavedSearchDto, UpdateSavedSearchDto } from './dto';
+import { activityLogResponse, savedSearchResponse } from './mappers';
+
+/** Fields the server/subscriber supplies to append an audit row. */
+export interface AuditInput {
+  workspaceId: string;
+  userId: string;
+  action: string;
+  entityType: string;
+  entityId: string;
+  changes?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * ActivityLog — **append-only** audit trail (D9). Django exposed full CRUD;
+ * Phase 9 keeps list/create/retrieve but rejects UPDATE and DELETE so history
+ * is immutable. Server-written via AuditSubscriber; client POSTs still accepted
+ * during transition.
+ */
+@Injectable()
+export class ActivityLogsService extends ScopedCrudService<
+  ActivityLog,
+  ReturnType<typeof activityLogResponse>
+> {
+  protected readonly model = 'activityLog';
+  protected readonly writePermission: PermissionKey = Permission.ActivityWrite;
+  protected readonly spec: ListQuerySpec = {
+    filterable: {
+      workspaceId: { field: 'workspaceId' },
+      userId: { field: 'userId' },
+      action: { field: 'action' },
+      entityType: { field: 'entityType' },
+      entityId: { field: 'entityId' },
+    },
+    sortable: { createdAt: 'createdAt' },
+    defaultOrderBy: { createdAt: 'desc' },
+  };
+  constructor(prisma: PrismaService, access: WorkspaceAccessService) {
+    super(prisma, access);
+  }
+  protected map(row: ActivityLog) {
+    return activityLogResponse(row);
+  }
+
+  create(user: User, dto: CreateActivityLogDto) {
+    // Django perform_create stamps user = caller.
+    return this.createIn(user, dto.workspaceId, {
+      workspaceId: dto.workspaceId,
+      userId: user.id,
+      action: dto.action,
+      entityType: dto.entityType,
+      entityId: dto.entityId,
+      changes: (dto.changes ?? {}) as Prisma.InputJsonValue,
+      metadata: (dto.metadata ?? {}) as Prisma.InputJsonValue,
+    });
+  }
+
+  /** Append-only: the audit trail must never be mutated. */
+  update(): never {
+    throw new ForbiddenException('Activity log is append-only');
+  }
+  remove(): never {
+    throw new ForbiddenException('Activity log is append-only');
+  }
+
+  /** [NEW, D9] Server-side audit append used by AuditSubscriber. */
+  async record(input: AuditInput): Promise<void> {
+    await this.prisma.activityLog.create({
+      data: {
+        id: generateId(),
+        workspaceId: input.workspaceId,
+        userId: input.userId,
+        action: input.action,
+        entityType: input.entityType,
+        entityId: input.entityId,
+        changes: (input.changes ?? {}) as Prisma.InputJsonValue,
+        metadata: (input.metadata ?? {}) as Prisma.InputJsonValue,
+      },
+    });
+  }
+}
+
+@Injectable()
+export class SavedSearchesService extends ScopedCrudService<
+  SavedSearch,
+  ReturnType<typeof savedSearchResponse>
+> {
+  protected readonly model = 'savedSearch';
+  protected readonly writePermission: PermissionKey = Permission.ActivityWrite;
+  protected readonly spec: ListQuerySpec = {
+    filterable: { workspaceId: { field: 'workspaceId' }, userId: { field: 'userId' } },
+    sortable: { createdAt: 'createdAt', name: 'name' },
+    defaultOrderBy: { createdAt: 'desc' },
+  };
+  constructor(prisma: PrismaService, access: WorkspaceAccessService) {
+    super(prisma, access);
+  }
+  protected map(row: SavedSearch) {
+    return savedSearchResponse(row);
+  }
+  create(user: User, dto: CreateSavedSearchDto) {
+    return this.createIn(user, dto.workspaceId, {
+      workspaceId: dto.workspaceId,
+      userId: user.id,
+      name: dto.name,
+      query: dto.query,
+      filters: (dto.filters ?? {}) as Prisma.InputJsonValue,
+    });
+  }
+  patch(user: User, id: string, dto: UpdateSavedSearchDto) {
+    const data: Record<string, unknown> = {};
+    if (dto.name !== undefined) data.name = dto.name;
+    if (dto.query !== undefined) data.query = dto.query;
+    if (dto.filters !== undefined) data.filters = dto.filters as Prisma.InputJsonValue;
+    return this.update(user, id, data);
+  }
+}

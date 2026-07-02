@@ -1,0 +1,40 @@
+// Notifications — the in-app record the frontend reads (`notifications_notification`,
+// A§6.10). Phase 9 makes creation SERVER-guaranteed via NotificationSubscriber
+// (D9), while still accepting client POSTs during the transition window.
+
+model Notification {
+  id                String   @id
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+  workspaceId       String   @map("workspace_id")
+  userId            String   @map("user_id")
+  type              String
+  title             String
+  message           String
+  projectId         String   @default("") @map("project_id")
+  relatedEntityId   String   @default("") @map("related_entity_id")
+  relatedEntityType String   @default("") @map("related_entity_type")
+  isRead            Boolean  @default(false) @map("is_read")
+
+  @@index([userId, isRead])
+  @@index([workspaceId, createdAt])
+  @@map("notifications_notification")
+}
+
+// [NEW] Notification → delivery split (arch review #, ADR-0011). Additive table:
+// one row per channel a notification is fanned out to. Phase 9 writes the
+// `in_app` delivery inline; the email/push channels are Phase 10 (email queue).
+model NotificationDelivery {
+  id             String    @id
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  notificationId String    @map("notification_id")
+  channel        String    @default("in_app") // in_app | email | push
+  status         String    @default("pending") // pending | delivered | failed
+  deliveredAt    DateTime? @map("delivered_at")
+  error          String    @default("")
+
+  @@index([notificationId])
+  @@index([status, channel])
+  @@map("notifications_notificationdelivery")
+}

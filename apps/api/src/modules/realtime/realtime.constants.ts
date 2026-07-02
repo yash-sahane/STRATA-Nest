@@ -21,4 +21,7 @@ export const MODEL_COLLECTION: Record<string, string> = {
   TaskComment: 'task_comments',
   KanbanColumn: 'kanban_columns',
   Label: 'labels',
+  Notification: 'notifications',
+  ActivityLog: 'activity_logs',
+  SavedSearch: 'saved_searches',
 };

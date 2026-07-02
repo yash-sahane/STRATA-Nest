@@ -1,0 +1,33 @@
+// Activity + saved searches (A§6.11). ActivityLog is the audit trail; Phase 9
+// makes it APPEND-ONLY (no update/delete surface — D9) and server-written via
+// AuditSubscriber. SavedSearch stays user-owned CRUD.
+
+model ActivityLog {
+  id         String   @id
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+  workspaceId String  @map("workspace_id")
+  userId     String   @map("user_id")
+  action     String
+  entityType String   @map("entity_type")
+  entityId   String   @map("entity_id")
+  changes    Json     @default("{}")
+  metadata   Json     @default("{}")
+
+  @@index([workspaceId, createdAt])
+  @@index([entityType, entityId])
+  @@map("activity_activitylog")
+}
+
+model SavedSearch {
+  id          String   @id
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  workspaceId String   @map("workspace_id")
+  userId      String   @map("user_id")
+  name        String
+  query       String
+  filters     Json     @default("{}")
+
+  @@map("activity_savedsearch")
+}

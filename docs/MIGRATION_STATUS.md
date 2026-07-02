@@ -35,7 +35,7 @@ _Last updated: 2026-07-01 · Release line: **0.1 (frozen)**_
 🚧  Phase 6   Tasks (+ Comments, Kanban, Labels)   implemented + unit-verified; live gate pending
 🚧  Phase 7   Realtime gateway + event bus          implemented + unit-verified; live gate pending
 🚧  Phase 8   Attendance, Leave, Time Tracking       implemented + unit-verified; live gate pending
-⏳  Phase 9   Notifications + Activity
+🚧  Phase 9   Notifications + Activity               implemented + unit-verified; live gate pending
 ⏳  Phase 10  Files + Email queue
 ⏳  Phase 11  Integrations (webhooks, Git queue, token encryption)
 ⏳  Phase 12  Generation + AI + Django decommission
@@ -64,6 +64,7 @@ _Last updated: 2026-07-01 · Release line: **0.1 (frozen)**_
 ✅  Workspace RBAC — policy-based, flag-gated (RBAC_ENFORCED); membership scoping (closes D3, Phase 2)
 ✅  Authorized realtime rooms — broadcast filtered by workspace membership (closes D2, Phase 7)
 ✅  Server-side leave/time approval + balance deduction, self-approval blocked (closes D9, Phase 8)
+✅  Server-guaranteed notifications + append-only audit trail from domain events (closes D9, Phase 9)
 🟡  Redis throttler storage      needed before multi-instance scale-out
 🟡  Strict refresh mode          flip AUTH_STRICT_REFRESH=true after dual-run window
 🟡  CSRF token                   add if SameSite=None ever required
