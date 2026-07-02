@@ -27,6 +27,9 @@ export const Permission = {
   // Phase 5 — planning (epics, sprints, retrospectives)
   PlanningRead: 'planning:read',
   PlanningWrite: 'planning:write',
+  // Phase 6 — tasks (task + labels; comments/kanban are unscoped, see task.prisma)
+  TaskRead: 'task:read',
+  TaskWrite: 'task:write',
 } as const;
 
 export type PermissionKey = (typeof Permission)[keyof typeof Permission];
@@ -38,6 +41,7 @@ const READ_ONLY: PermissionKey[] = [
   Permission.ProjectRead,
   Permission.RequirementRead,
   Permission.PlanningRead,
+  Permission.TaskRead,
 ];
 
 /** Default permissions for the 7 built-in roles (A§5.1). Tunable; seeded into

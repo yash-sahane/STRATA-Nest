@@ -111,12 +111,16 @@
 
 ## Phase 6 — Tasks & satellites
 
+> **Status: 🚧 Implemented + unit-verified** (Task 30-field mapper order test; creator stamping; kanban move = PATCH `status`+`position`). **Parity decisions:** `task_comments` and `kanban_columns` have **no workspace column in Django**, so they are **not workspace-scoped** — reproduced faithfully (pre-existing gap; the frontend filters by `taskId`/`projectId`). Soft FKs and JSON arrays (`labels`, `blockedBy`, `blocks`, `assigneeIds`, …) stay as-is on the wire; the `TaskLabel`/`TaskDependency` normalization (M§2) is deferred to a live-DB pass (ADR-0008). Live contract pending.
+
 | Collection | CRUD | Resource fields | Parity |
 |---|---|---|---|
-| `tasks` | L/C/R/U/D | `…, workspaceId, projectId, hierarchyId, sprintId, epicId, functionalRequirementId, parentTaskId, title, description, status, priority, assigneeIds, assignedBy, assignedByName, assignedTo, assignedToNames, watcherIds, createdBy, createdByName, dueDate, estimatedHours, actualHours, labels, attachments, customFields, position, blockedBy, blocks` | ⏳ |
-| `task_comments` | L/C/R/U/D | `…, taskId, userId, content, mentions, attachments` | ⏳ |
-| `kanban_columns` | L/C/R/U/D | `…, projectId, name, status, wipLimit, position, color` | ⏳ |
-| `labels` | L/C/R/U/D | `…, workspaceId, projectId, name, color, description` | ⏳ |
+| `tasks` | L/C/R/U/D | `…, hierarchyId, sprintId, epicId, functionalRequirementId, parentTaskId, title, description, status, priority, assigneeIds, assignedBy, assignedByName, assignedTo, assignedToNames, watcherIds, createdBy, createdByName, dueDate, estimatedHours, actualHours, labels, attachments, customFields, position, blockedBy, blocks` | 🚧 |
+| `task_comments` | L/C/R/U/D | `…, taskId, userId, content, mentions, attachments` (unscoped — Django parity) | 🚧 |
+| `kanban_columns` | L/C/R/U/D | `…, projectId, name, status, wipLimit, position, color` (unscoped — Django parity) | 🚧 |
+| `labels` | L/C/R/U/D | `…, workspaceId, projectId, name, color, description` | 🚧 |
+
+> **Phase 5→6 loop:** a `sprint.completed` subscriber detaches incomplete (status ≠ DONE) tasks from the completed sprint (`sprintId → ""`). Unit-tested.
 
 ---
 

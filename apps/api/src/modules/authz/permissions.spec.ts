@@ -22,11 +22,13 @@ describe('permissionsForRole', () => {
         Permission.ProjectRead,
         Permission.RequirementRead,
         Permission.PlanningRead,
+        Permission.TaskRead,
       ].sort(),
     );
     expect(set.has(Permission.ProjectCreate)).toBe(false);
     expect(set.has(Permission.RequirementWrite)).toBe(false);
     expect(set.has(Permission.PlanningWrite)).toBe(false);
+    expect(set.has(Permission.TaskWrite)).toBe(false);
   });
 
   it('a custom role uses its JSON permissions', () => {

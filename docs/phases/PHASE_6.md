@@ -1,5 +1,10 @@
 # Phase 6 — Tasks (+ Comments, Kanban, Labels, Dependencies)
 
+**Status: 🚧 Implemented + unit-verified; live contract/e2e pending a DB+Django environment.**
+Done: `TasksModule` — `tasks` + `labels` (workspace-scoped, RBAC `task:read/write`, creator stamping), `task_comments` + `kanban_columns` (**unscoped**, reproducing Django's no-workspace behavior). Prisma models mapped to `tasks_*` (indexes preserved). Task 30-field mapper order unit-tested. Kanban move = PATCH `status`+`position` (parity). **Phase 5→6 loop:** `SprintCompletedTaskRoller` (`@OnEvent('sprint.completed')`) detaches incomplete tasks from the sprint — unit-tested. Typecheck + DI graph green.
+**Deferred (documented, ADR-0008):** `Task.labels`→`TaskLabel` join and `blocked_by`/`blocks`→`TaskDependency` edge table (+ cycle checks) — normalization needs a live-DB backfill and preserves the wire arrays; done in a later data-quality pass. Soft FKs stay scalar id strings.
+Pending: live contract suite; e2e for scoping/RBAC/kanban/roll.
+
 ## Goal
 Port the largest domain — tasks and their satellites — with parity, promoting soft FKs and normalizing JSON arrays where querying matters (ADR-0008).
 

@@ -1,0 +1,90 @@
+// Task domain — mapped to existing Django tables (tasks app, A§6.6).
+//
+// Parity notes:
+// - Soft FKs (sprintId/epicId/functionalRequirementId/parentTaskId) stay scalar
+//   id strings; JSON arrays (assigneeIds/assignedTo/watcherIds/labels/blockedBy/
+//   blocks/attachments) stay JSON — Django serializes them as arrays. The
+//   TaskLabel/TaskDependency normalization (M§2) is deferred to a live-DB pass
+//   (ADR-0008); it preserves the wire arrays.
+// - TaskComment and KanbanColumn have NO workspace column in Django, so the base
+//   viewset does NOT scope them (any authenticated user). Reproduced faithfully
+//   (a pre-existing gap, like ActiveTimer/integrations — tighten in a security pass).
+
+model Task {
+  id                      String    @id
+  createdAt               DateTime  @default(now()) @map("created_at")
+  updatedAt               DateTime  @updatedAt @map("updated_at")
+  workspaceId             String    @map("workspace_id")
+  projectId               String    @map("project_id")
+  hierarchyId             String    @map("hierarchy_id")
+  sprintId                String    @default("") @map("sprint_id")
+  epicId                  String    @default("") @map("epic_id")
+  functionalRequirementId String    @default("") @map("functional_requirement_id")
+  parentTaskId            String    @default("") @map("parent_task_id")
+  title                   String
+  description             String    @default("")
+  status                  String    @default("BACKLOG")
+  priority                String    @default("MEDIUM")
+  assigneeIds             Json      @default("[]") @map("assignee_ids")
+  assignedBy              String    @default("") @map("assigned_by")
+  assignedByName          String    @default("") @map("assigned_by_name")
+  assignedTo              Json      @default("[]") @map("assigned_to")
+  assignedToNames         Json      @default("[]") @map("assigned_to_names")
+  watcherIds              Json      @default("[]") @map("watcher_ids")
+  createdById             String    @map("created_by_id")
+  createdByName           String    @default("") @map("created_by_name")
+  dueDate                 DateTime? @map("due_date")
+  estimatedHours          Float?    @map("estimated_hours")
+  actualHours             Float?    @map("actual_hours")
+  labels                  Json      @default("[]")
+  attachments             Json      @default("[]")
+  customFields            Json      @default("{}") @map("custom_fields")
+  position                Float     @default(0)
+  blockedBy               Json      @default("[]") @map("blocked_by")
+  blocks                  Json      @default("[]")
+
+  @@index([projectId, status])
+  @@index([sprintId])
+  @@index([hierarchyId])
+  @@map("tasks_task")
+}
+
+model TaskComment {
+  id          String   @id
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  taskId      String   @map("task_id")
+  userId      String   @map("user_id")
+  content     String
+  mentions    Json     @default("[]")
+  attachments Json     @default("[]")
+
+  @@map("tasks_taskcomment")
+}
+
+model KanbanColumn {
+  id        String   @id
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  projectId String   @map("project_id")
+  name      String
+  status    String
+  wipLimit  Int?     @map("wip_limit")
+  position  Float    @default(0)
+  color     String   @default("")
+
+  @@map("tasks_kanbancolumn")
+}
+
+model Label {
+  id          String   @id
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  workspaceId String   @map("workspace_id")
+  projectId   String?  @map("project_id")
+  name        String
+  color       String
+  description  String  @default("")
+
+  @@map("tasks_label")
+}
