@@ -1,5 +1,10 @@
 # Phase 5 — Epics + Sprints + Retrospectives
 
+**Status: 🚧 Implemented + unit-verified; live contract/e2e pending a DB+Django environment.**
+Done: `EpicsModule` (`epics`), `SprintsModule` (`sprints`, `retrospectives`) — scoped CRUD reusing `ScopedCrudService` + RBAC `planning:read/write`, creator stamping, date-only epic/sprint dates, Prisma models mapped to `epics_epic`/`sprints_*` (indexes preserved), mapper field-order unit tests; `SprintCompletionService` (`POST sprints/{id}/complete`) closes the sprint + seeds a retrospective transactionally and emits `sprint.completed`; typecheck + DI graph green.
+**Deferred (documented):** rolling incomplete **tasks** on sprint completion → Phase 6 (a Tasks subscriber to `sprint.completed`; Task not modeled yet). `Epic.requirementId` relation promotion → later live-DB pass (ADR-0008).
+Pending: live contract suite vs Django+Nest.
+
 ## Goal
 Port planning entities (`Epic`, `Sprint`, `Retrospective`) with parity and add the **sprint-completion** orchestration.
 

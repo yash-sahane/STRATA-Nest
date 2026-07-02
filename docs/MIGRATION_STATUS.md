@@ -31,7 +31,7 @@ _Last updated: 2026-07-01 · Release line: **0.1 (frozen)**_
 🚧  Phase 2   Workspaces + RBAC       implemented + unit-verified; live gate pending
 🚧  Phase 3   Projects                implemented + unit-verified; live gate pending
 🚧  Phase 4   Requirements (CR + FR)  implemented + unit-verified; live gate pending
-⏳  Phase 5   Epics + Sprints + Retrospectives
+🚧  Phase 5   Epics + Sprints         implemented + unit-verified; live gate pending + Retrospectives
 ⏳  Phase 6   Tasks (+ Comments, Kanban, Labels, Dependencies)
 ⏳  Phase 7   Realtime gateway + event bus
 ⏳  Phase 8   Attendance, Leave, Time Tracking

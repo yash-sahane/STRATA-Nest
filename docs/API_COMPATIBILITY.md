@@ -91,11 +91,21 @@
 
 ## Phase 5 — Epics, Sprints, Retrospectives
 
+> **Status: 🚧 Implemented + unit-verified** (scoped CRUD reusing `ScopedCrudService`; creator stamping; date-only epic/sprint dates; mapper field-order tests — incl. retrospective having **no** `createdByName`). `Epic.requirementId` stays a scalar id string (relation promotion deferred, ADR-0008). Live contract pending.
+
 | Collection | CRUD | Resource fields | Parity |
 |---|---|---|---|
-| `epics` | L/C/R/U/D | `…, workspaceId, projectId, requirementId, hierarchyId, name, description, color, startDate, endDate, status, progress, assignedTeam, createdBy, createdByName` | ⏳ |
-| `sprints` | L/C/R/U/D | `…, workspaceId, projectId, name, goal, startDate, endDate, status, retrospectiveNotes, createdBy, createdByName` | ⏳ |
-| `retrospectives` | L/C/R/U/D | `…, workspaceId, projectId, sprintId, wentWell, needsImprovement, actionItems, createdBy` | ⏳ |
+| `epics` | L/C/R/U/D | `…, workspaceId, projectId, requirementId, hierarchyId, name, description, color, startDate, endDate, status, progress, assignedTeam, createdBy, createdByName` | 🚧 |
+| `sprints` | L/C/R/U/D | `…, workspaceId, projectId, name, goal, startDate, endDate, status, retrospectiveNotes, createdBy, createdByName` | 🚧 |
+| `retrospectives` | L/C/R/U/D | `…, workspaceId, projectId, sprintId, wentWell, needsImprovement, actionItems, createdBy` | 🚧 |
+
+**New workflow endpoint (additive, [NEW]):**
+
+| Method | Path | Purpose | Status |
+|---|---|---|---|
+| POST | `sprints/{id}/complete` | close sprint + seed retrospective (transactional) → emit `sprint.completed` | ➕ 🚧 |
+
+> Rolling incomplete **tasks** on completion is wired in **Phase 6** (a Tasks subscriber to `sprint.completed`) — Task isn't modeled yet.
 
 ---
 

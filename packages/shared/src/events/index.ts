@@ -42,3 +42,15 @@ export interface JoinRequestHandledPayload {
   userId: string;
   requestId: string;
 }
+
+// --- Phase 5: Planning domain events -----------------------------------------
+export const PlanningEvents = {
+  SprintStarted: 'sprint.started',
+  SprintCompleted: 'sprint.completed',
+} as const;
+
+export interface SprintLifecyclePayload {
+  workspaceId: string;
+  projectId: string;
+  sprintId: string;
+}
