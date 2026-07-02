@@ -80,10 +80,12 @@
 
 ## Phase 4 — Requirements
 
+> **Status: 🚧 Implemented + unit-verified** (scoped CRUD via `ScopedCrudService`; creator stamping; mapper field-order tests). **Parity decisions (deviations from M§2, per the frozen contract ADR-0003):** `tags`/`linkedProjectIds` stay **strings** on the wire (Django serializes the CSV TextField as a string) — array normalization deferred to a v2 change; soft FKs `epicId`/`sprintId`/`clientRequirementId` stay **scalar id strings** — relation promotion + `""`→null backfill (ADR-0008) deferred to a live-DB data-quality pass once Epic/Sprint land (Phase 5).
+
 | Collection | CRUD | Resource fields | Parity |
 |---|---|---|---|
-| `client_requirements` | L/C/R/U/D | `…, workspaceId, projectId, title, description, clientName, priority, status, attachments, createdBy, createdByName` | ⏳ |
-| `functional_requirements` | L/C/R/U/D | `…, workspaceId, projectId, hierarchyId, epicId, sprintId, clientRequirementId, title, description, complexity, priority, status, progress, reusable, assignedTo, assignedToNames, tags, linkedProjectIds, createdBy, createdByName` | ⏳ |
+| `client_requirements` | L/C/R/U/D | `…, workspaceId, projectId, title, description, clientName, priority, status, attachments, createdBy, createdByName` | 🚧 |
+| `functional_requirements` | L/C/R/U/D | `…, workspaceId, projectId, hierarchyId, epicId, sprintId, clientRequirementId, title, description, complexity, priority, status, progress, reusable, assignedTo, assignedToNames, tags, linkedProjectIds, createdBy, createdByName` | 🚧 |
 
 ---
 

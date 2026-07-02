@@ -21,6 +21,9 @@ export const Permission = {
   ProjectCreate: 'project:create',
   ProjectUpdate: 'project:update',
   ProjectDelete: 'project:delete',
+  // Phase 4 — requirements (client + functional)
+  RequirementRead: 'requirement:read',
+  RequirementWrite: 'requirement:write',
 } as const;
 
 export type PermissionKey = (typeof Permission)[keyof typeof Permission];
@@ -30,6 +33,7 @@ const READ_ONLY: PermissionKey[] = [
   Permission.WorkspaceRead,
   Permission.MemberRead,
   Permission.ProjectRead,
+  Permission.RequirementRead,
 ];
 
 /** Default permissions for the 7 built-in roles (A§5.1). Tunable; seeded into

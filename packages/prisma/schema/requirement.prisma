@@ -1,0 +1,57 @@
+// Requirements — mapped to existing Django tables (requirements app, A§6.3).
+//
+// Parity notes:
+// - Soft FKs (epicId/sprintId/clientRequirementId) stay scalar strings for now:
+//   Epic/Sprint models land Phase 5, and relation promotion + `""`→null backfill
+//   (ADR-0008) is a dedicated data-quality pass against the live DB. Wire emits
+//   the id strings, matching Django.
+// - `tags`/`linkedProjectIds` are Django TextField (CSV) serialized AS STRINGS —
+//   kept as String here to preserve the frozen wire contract (ADR-0003). The
+//   array normalization (M§2) is deferred; it would be a v2 contract change.
+
+model ClientRequirement {
+  id            String   @id
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  workspaceId   String   @map("workspace_id")
+  projectId     String   @map("project_id")
+  title         String
+  description   String   @default("")
+  clientName    String   @default("") @map("client_name")
+  priority      String   @default("MEDIUM")
+  status        String   @default("DRAFT")
+  attachments   Json     @default("[]")
+  createdById   String   @map("created_by_id")
+  createdByName String   @default("") @map("created_by_name")
+
+  @@map("requirements_clientrequirement")
+}
+
+model FunctionalRequirement {
+  id                  String   @id
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+  workspaceId         String   @map("workspace_id")
+  projectId           String   @map("project_id")
+  hierarchyId         String   @map("hierarchy_id")
+  epicId              String   @default("") @map("epic_id")
+  sprintId            String   @default("") @map("sprint_id")
+  clientRequirementId String   @default("") @map("client_requirement_id")
+  title               String
+  description         String   @default("")
+  complexity          String   @default("MEDIUM")
+  priority            String   @default("")
+  status              String   @default("DRAFT")
+  progress            Int      @default(0)
+  reusable            Boolean  @default(false)
+  assignedTo          Json     @default("[]") @map("assigned_to")
+  assignedToNames     Json     @default("[]") @map("assigned_to_names")
+  tags                String   @default("")
+  linkedProjectIds    String   @default("") @map("linked_project_ids")
+  createdById         String   @map("created_by_id")
+  createdByName       String   @default("") @map("created_by_name")
+
+  @@index([projectId, epicId])
+  @@index([hierarchyId])
+  @@map("requirements_functionalrequirement")
+}

@@ -1,5 +1,10 @@
 # Phase 4 — Requirements (Client + Functional)
 
+**Status: 🚧 Implemented + unit-verified; live contract/e2e pending a DB+Django environment.**
+Done: `RequirementsModule` — `client_requirements` + `functional_requirements` scoped CRUD (reusing `ScopedCrudService` + RBAC `requirement:read/write`), creator stamping, Prisma models mapped to `requirements_*` (indexes preserved), mapper field-order unit tests; typecheck + DI graph green.
+**Scope deviation (documented):** soft-FK → relation promotion + `""`→null backfill and CSV→`String[]` normalization are **deferred** — wire parity (ADR-0003) keeps `tags`/`linkedProjectIds` as strings and the soft FKs as id strings; promotion happens in a live-DB data-quality pass once Epic/Sprint exist (Phase 5).
+Pending: live contract suite vs Django+Nest.
+
 ## Goal
 Port `ClientRequirement` and `FunctionalRequirement` with parity, and begin **soft-FK promotion** (ADR-0008) for FR links.
 
