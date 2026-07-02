@@ -126,14 +126,27 @@
 
 ## Phase 8 — HR (Attendance, Leave, Time Tracking)
 
+> **Status: 🚧 Implemented + unit-verified.** CRUD parity for all 6 collections (creator stamping per Django `perform_create`); **[NEW] server-side computation/approval ported from the frontend utils (D9)** — see workflow endpoints below. **Parity decisions:** `active_timers` stays **unscoped without `workspaceId`** (D5 gap reproduced; adding the column is a later migration, *not* done here — corrects my earlier note); computation uses the server's timezone for the 08:30 comparison (reconcile `WORK_TZ` before flipping source of truth).
+
 | Collection | CRUD | Resource fields | Parity |
 |---|---|---|---|
-| `attendance` | L/C/R/U/D | `…, workspaceId, userId, date, checkInTime, checkOutTime, workHours, status, lateMinutes, location, notes, isWeekend, isHoliday, createdBy, createdByName` | ⏳ |
-| `holidays` | L/C/R/U/D | `…, workspaceId, name, date, isOptional, description` | ⏳ |
-| `leave_requests` | L/C/R/U/D | `…, workspaceId, userId, createdBy, createdByName, type, startDate, endDate, reason, status, approvedBy, approvedAt, rejectionReason, daysCount` | ⏳ |
-| `leave_balances` | L/C/R/U/D | `…, workspaceId, userId, year, paidLeave, unpaidLeave, halfDay, compOff` | ⏳ |
-| `time_entries` | L/C/R/U/D | `…, workspaceId, userId, userName, userEmail, createdBy, createdByName, taskId, taskTitle, taskHierarchyId, projectId, projectName, description, startTime, endTime, duration, isBillable, billableRate, type, status, approvedBy, approvedAt, rejectionReason, tags` | ⏳ |
-| `active_timers` | L/C/R/U/D | `…, userId, taskId, taskTitle, taskHierarchyId, projectId, description, startTime, isPaused, pausedAt, totalPausedTime, type, pomodoroSettings` (+ new `workspaceId`, D5) | ⏳ |
+| `attendance` | L/C/R/U/D | `…, workspaceId, userId, date, checkInTime, checkOutTime, workHours, status, lateMinutes, location, notes, isWeekend, isHoliday, createdBy, createdByName` | 🚧 |
+| `holidays` | L/C/R/U/D | `…, workspaceId, name, date, isOptional, description` | 🚧 |
+| `leave_requests` | L/C/R/U/D | `…, workspaceId, userId, createdBy, createdByName, type, startDate, endDate, reason, status, approvedBy, approvedAt, rejectionReason, daysCount` | 🚧 |
+| `leave_balances` | L/C/R/U/D | `…, workspaceId, userId, year, paidLeave, unpaidLeave, halfDay, compOff` | 🚧 |
+| `time_entries` | L/C/R/U/D | `…, workspaceId, userId, userName, userEmail, createdBy, createdByName, taskId, taskTitle, taskHierarchyId, projectId, projectName, description, startTime, endTime, duration, isBillable, billableRate, type, status, approvedBy, approvedAt, rejectionReason, tags` | 🚧 |
+| `active_timers` | L/C/R/U/D | `…, userId, taskId, taskTitle, taskHierarchyId, projectId, description, startTime, isPaused, pausedAt, totalPausedTime, type, pomodoroSettings` (**unscoped**, no workspaceId — D5 deferred) | 🚧 |
+
+**New workflow endpoints (additive, [NEW] — the D9 computation/approval that was client-side):**
+
+| Method | Path | Purpose | Status |
+|---|---|---|---|
+| POST | `attendance/check-in` · `check-out` | compute `lateMinutes`/`workHours`/`status` server-side | ➕ 🚧 |
+| POST | `leave_requests/{id}/approve` · `reject` | approve → **deduct `LeaveBalance`** (mapped by type); manager-only; **self-approval blocked** | ➕ 🚧 |
+| POST | `time_entries/{id}/approve` · `reject` | manager-only, self-approval blocked | ➕ 🚧 |
+| POST | `active_timers/start` · `pause` · `resume` · `stop` | timer lifecycle; `stop` computes `duration` (minus paused) → creates `time_entries` | ➕ 🚧 |
+
+> Compute/deduction logic is **ported verbatim** from `frontend/src/lib/{attendance-utils,leave-balance-mapper,leave-utils}.ts` (unit-tested), so server values match the client on the reconciliation corpus before it becomes the source of truth.
 
 ---
 

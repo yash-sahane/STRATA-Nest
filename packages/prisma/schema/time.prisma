@@ -1,0 +1,56 @@
+// Time tracking — mapped to existing Django tables (A§6.9).
+// ActiveTimer has NO workspace column in Django (D5). Reproduced as-is (unscoped,
+// one per user); adding workspaceId + scoping is a later migration (documented).
+
+model TimeEntry {
+  id              String    @id
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  workspaceId     String    @map("workspace_id")
+  userId          String    @map("user_id")
+  userName        String    @map("user_name")
+  userEmail       String    @map("user_email")
+  createdById     String    @map("created_by_id")
+  createdByName   String    @default("") @map("created_by_name")
+  taskId          String    @default("") @map("task_id")
+  taskTitle       String    @default("") @map("task_title")
+  taskHierarchyId String    @default("") @map("task_hierarchy_id")
+  projectId       String    @default("") @map("project_id")
+  projectName     String    @default("") @map("project_name")
+  description     String    @default("")
+  startTime       DateTime  @map("start_time")
+  endTime         DateTime  @map("end_time")
+  duration        Int       @default(0)
+  isBillable      Boolean   @default(false) @map("is_billable")
+  billableRate    Float?    @map("billable_rate")
+  type            String    @default("MANUAL")
+  status          String    @default("PENDING")
+  approvedBy      String    @default("") @map("approved_by")
+  approvedAt      DateTime? @map("approved_at")
+  rejectionReason String    @default("") @map("rejection_reason")
+  tags            Json      @default("[]")
+
+  @@index([workspaceId, userId, startTime])
+  @@index([taskId])
+  @@map("time_tracking_timeentry")
+}
+
+model ActiveTimer {
+  id               String    @id
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+  userId           String    @unique @map("user_id")
+  taskId           String    @default("") @map("task_id")
+  taskTitle        String    @default("") @map("task_title")
+  taskHierarchyId  String    @default("") @map("task_hierarchy_id")
+  projectId        String    @default("") @map("project_id")
+  description      String    @default("")
+  startTime        DateTime  @map("start_time")
+  isPaused         Boolean   @default(false) @map("is_paused")
+  pausedAt         DateTime? @map("paused_at")
+  totalPausedTime  Int       @default(0) @map("total_paused_time")
+  type             String    @default("TIMER")
+  pomodoroSettings Json?     @map("pomodoro_settings")
+
+  @@map("time_tracking_activetimer")
+}

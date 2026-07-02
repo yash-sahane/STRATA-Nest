@@ -10,15 +10,18 @@ import { PrismaModule } from '@lt/prisma';
 import { HealthModule } from './health/health.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
+import { AttendanceModule } from './modules/attendance/attendance.module';
 import { AuthzModule } from './modules/authz/authz.module';
 import { PermissionsGuard } from './modules/authz/permissions.guard';
 import { EpicsModule } from './modules/epics/epics.module';
+import { LeaveModule } from './modules/leave/leave.module';
 import { MailModule } from './modules/mail/mail.module';
 import { ProjectsModule } from './modules/projects/projects.module';
 import { RealtimeModule } from './modules/realtime/realtime.module';
 import { RequirementsModule } from './modules/requirements/requirements.module';
 import { SprintsModule } from './modules/sprints/sprints.module';
 import { TasksModule } from './modules/tasks/tasks.module';
+import { TimeTrackingModule } from './modules/time-tracking/time-tracking.module';
 import { UsersModule } from './modules/users/users.module';
 import { WorkspacesModule } from './modules/workspaces/workspaces.module';
 import { RedisModule } from './redis/redis.module';
@@ -81,6 +84,9 @@ import { THROTTLE } from './throttling/throttle.constants';
     EpicsModule,
     SprintsModule,
     TasksModule,
+    AttendanceModule,
+    LeaveModule,
+    TimeTrackingModule,
     RealtimeModule,
   ],
   providers: [

@@ -54,3 +54,24 @@ export interface SprintLifecyclePayload {
   projectId: string;
   sprintId: string;
 }
+
+// --- Phase 8: HR domain events -----------------------------------------------
+export const HrEvents = {
+  LeaveApproved: 'leave.approved',
+  LeaveRejected: 'leave.rejected',
+  TimeEntryApproved: 'time_entry.approved',
+  TimeEntryRejected: 'time_entry.rejected',
+} as const;
+
+export interface LeaveDecisionPayload {
+  workspaceId: string;
+  userId: string;
+  leaveRequestId: string;
+  type: string;
+  daysCount: number;
+}
+export interface TimeEntryDecisionPayload {
+  workspaceId: string;
+  userId: string;
+  timeEntryId: string;
+}

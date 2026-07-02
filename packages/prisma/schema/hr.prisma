@@ -1,0 +1,76 @@
+// HR — Attendance + Leave, mapped to existing Django tables (A§6.7-6.8).
+
+model Attendance {
+  id            String    @id
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  workspaceId   String    @map("workspace_id")
+  userId        String    @map("user_id")
+  date          DateTime  @db.Date
+  checkInTime   DateTime  @map("check_in_time")
+  checkOutTime  DateTime? @map("check_out_time")
+  workHours     Float?    @map("work_hours")
+  status        String    @default("PRESENT")
+  lateMinutes   Int       @default(0) @map("late_minutes")
+  location      String    @default("")
+  notes         String    @default("")
+  isWeekend     Boolean   @default(false) @map("is_weekend")
+  isHoliday     Boolean   @default(false) @map("is_holiday")
+  createdById   String?   @map("created_by_id")
+  createdByName String    @default("") @map("created_by_name")
+
+  @@unique([workspaceId, userId, date])
+  @@index([workspaceId, date])
+  @@map("attendance_attendance")
+}
+
+model Holiday {
+  id          String   @id
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  workspaceId String   @map("workspace_id")
+  name        String
+  date        DateTime @db.Date
+  isOptional  Boolean  @default(false) @map("is_optional")
+  description String   @default("")
+
+  @@unique([workspaceId, date, name])
+  @@map("attendance_holiday")
+}
+
+model LeaveRequest {
+  id              String    @id
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  workspaceId     String    @map("workspace_id")
+  userId          String    @map("user_id")
+  createdById     String    @map("created_by_id")
+  createdByName   String    @default("") @map("created_by_name")
+  type            String
+  startDate       DateTime  @map("start_date") @db.Date
+  endDate         DateTime  @map("end_date") @db.Date
+  reason          String
+  status          String    @default("PENDING")
+  approvedBy      String    @default("") @map("approved_by")
+  approvedAt      DateTime? @map("approved_at")
+  rejectionReason String    @default("") @map("rejection_reason")
+  daysCount       Float     @default(0) @map("days_count")
+
+  @@map("leave_leaverequest")
+}
+
+model LeaveBalance {
+  id          String   @id
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  workspaceId String   @map("workspace_id")
+  userId      String   @map("user_id")
+  year        Int
+  paidLeave   Float    @default(0) @map("paid_leave")
+  unpaidLeave Float    @default(0) @map("unpaid_leave")
+  halfDay     Float    @default(0) @map("half_day")
+  compOff     Float    @default(0) @map("comp_off")
+
+  @@unique([workspaceId, userId, year])
+  @@map("leave_leavebalance")
+}

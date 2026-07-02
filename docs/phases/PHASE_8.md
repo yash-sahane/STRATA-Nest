@@ -1,5 +1,10 @@
 # Phase 8 — Attendance, Leave, Time Tracking
 
+**Status: 🚧 Implemented + unit-verified; live contract/e2e pending a DB+Django environment.**
+Done: `AttendanceModule` (attendance, holidays), `LeaveModule` (leave_requests, leave_balances), `TimeTrackingModule` (time_entries scoped, active_timers unscoped) — CRUD parity via `ScopedCrudService` + creator stamping. **[NEW] D9 server-side logic ported verbatim from the frontend utils and unit-tested:** attendance check-in/out (`lateMinutes`/`workHours`/`status`, 08:30 + 15m grace, 4h half-day, alternate-Saturday weekends); `LeaveApprovalService` (approve → **deduct the mapped `LeaveBalance` field**, manager-only, **self-approval blocked**); timer start/pause/resume/stop (duration minus paused) → time entry; time-entry approve/reject. Typecheck + DI graph green; 56 api unit tests.
+**Deferred/deviations (documented):** `active_timers` stays **unscoped without `workspaceId`** (D5 gap reproduced; column addition is a later migration); compute uses the server TZ for the 08:30 comparison (align `WORK_TZ` before flipping source of truth); `LeaveBalance` writes are manager-only (`leave:approve`) — a slight tightening vs Django's unguarded balance edits.
+Pending: dual-source reconciliation (server vs frontend values) + live contract/e2e.
+
 ## Goal
 Port the HR domains and **move their business rules server-side** — hours/late computation, leave approval + balance deduction, timer lifecycle — which live in the frontend today (A§6.7–6.9, D9).
 

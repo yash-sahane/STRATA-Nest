@@ -13,7 +13,7 @@ describe('permissionsForRole', () => {
     expect(set.has(Permission.MemberInvite)).toBe(true);
   });
 
-  it('MEMBER is read-only (all *:read, no writes)', () => {
+  it('MEMBER baseline: all reads + own HR writes, no manager writes/approvals', () => {
     const set = permissionsForRole('MEMBER');
     expect([...set].sort()).toEqual(
       [
@@ -23,12 +23,19 @@ describe('permissionsForRole', () => {
         Permission.RequirementRead,
         Permission.PlanningRead,
         Permission.TaskRead,
+        Permission.HrRead,
+        Permission.HrWrite,
       ].sort(),
     );
     expect(set.has(Permission.ProjectCreate)).toBe(false);
-    expect(set.has(Permission.RequirementWrite)).toBe(false);
-    expect(set.has(Permission.PlanningWrite)).toBe(false);
     expect(set.has(Permission.TaskWrite)).toBe(false);
+    expect(set.has(Permission.LeaveApprove)).toBe(false); // members can't approve leave (D9)
+    expect(set.has(Permission.TimeApprove)).toBe(false);
+  });
+
+  it('MANAGER can approve leave and time; ASSISTANT_MANAGER too', () => {
+    expect(permissionsForRole('MANAGER').has(Permission.LeaveApprove)).toBe(true);
+    expect(permissionsForRole('ASSISTANT_MANAGER').has(Permission.TimeApprove)).toBe(true);
   });
 
   it('a custom role uses its JSON permissions', () => {

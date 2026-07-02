@@ -30,11 +30,18 @@ export const Permission = {
   // Phase 6 — tasks (task + labels; comments/kanban are unscoped, see task.prisma)
   TaskRead: 'task:read',
   TaskWrite: 'task:write',
+  // Phase 8 — HR (attendance, leave, time). Members submit their own records
+  // (HrWrite is in the baseline); only managers approve (Leave/Time Approve).
+  HrRead: 'hr:read',
+  HrWrite: 'hr:write',
+  LeaveApprove: 'leave:approve',
+  TimeApprove: 'time:approve',
 } as const;
 
 export type PermissionKey = (typeof Permission)[keyof typeof Permission];
 
 const ALL: PermissionKey[] = Object.values(Permission);
+/** Member baseline: all reads + submitting one's own HR records. */
 const READ_ONLY: PermissionKey[] = [
   Permission.WorkspaceRead,
   Permission.MemberRead,
@@ -42,6 +49,8 @@ const READ_ONLY: PermissionKey[] = [
   Permission.RequirementRead,
   Permission.PlanningRead,
   Permission.TaskRead,
+  Permission.HrRead,
+  Permission.HrWrite,
 ];
 
 /** Default permissions for the 7 built-in roles (A§5.1). Tunable; seeded into
