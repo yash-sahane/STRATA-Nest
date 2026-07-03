@@ -1,5 +1,10 @@
 # Phase 10 — Files + Email Queue
 
+**Status: 🚧 Implemented + unit-verified; live contract/e2e pending a DB+Redis+worker environment.**
+Done: `FilesModule` (multipart upload + CRUD + preview/view/download streaming) behind **StorageService** (arch §13) — local driver fully implemented with a path-traversal guard; blob key layout + `url` kept byte-identical to Django. `EmailModule` **producer** enqueues to the BullMQ `email` queue; `MailService` (reset/welcome/invitation) and the ported `email/send-*` HTTP endpoints now enqueue instead of sending inline (D7). `apps/worker` runs the **email processor** (Resend when keyed, else logs) with retries/backoff + `idempotencyKey→jobId` dedupe. Typecheck + DI graph green for **both api and worker**; **78 api + 2 worker unit tests**.
+**Deferred/deviations (documented):** S3 driver is lazy-loaded and throws if selected without `@aws-sdk/client-s3` (local is the built driver); `email/send-*` responses are now **optimistic** (`{success, backend, sent, queued}`) rather than the synchronous transport outcome; files are auth+membership-scoped only (`FileRead/FileWrite` reserved for later RBAC); a true inline SMTP fallback is represented by `EMAIL_TRANSPORT=inline` (logs) — Resend/Django-mail send runs in the worker.
+Pending: live streaming-header/`url` reconciliation, enqueue→processed integration test against real Redis, S3 driver + `@aws-sdk` install.
+
 ## Goal
 Port file uploads/streaming behind a `StorageService`, and move email from synchronous inline sends to the BullMQ **email queue** (A§6.13–6.14, D7).
 

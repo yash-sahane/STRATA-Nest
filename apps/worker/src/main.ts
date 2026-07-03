@@ -13,7 +13,7 @@ async function bootstrap(): Promise<void> {
   const app = await NestFactory.createApplicationContext(WorkerModule, { bufferLogs: false });
   app.enableShutdownHooks();
   Logger.log(
-    `Worker ready — queue Redis db ${env.REDIS_QUEUE_DB}. No processors registered (Phase 0).`,
+    `Worker ready — queue Redis db ${env.REDIS_QUEUE_DB}. Processors: email.`,
     'Worker',
   );
 }

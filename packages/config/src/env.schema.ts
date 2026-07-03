@@ -47,9 +47,12 @@ export const envSchema = z.object({
   // dark-launch); true = enforce per-permission role checks on writes.
   RBAC_ENFORCED: z.coerce.boolean().default(false),
 
-  // Email (Resend; queued — ADR-0007)
+  // Email (Resend; queued — ADR-0007). EMAIL_TRANSPORT: 'queue' enqueues to
+  // BullMQ (worker sends); 'inline' logs synchronously (the retained fallback
+  // for when the worker is unavailable, Phase 10 rollback strategy).
   RESEND_API_KEY: z.string().default(''),
   EMAIL_FROM: z.string().default('noreply@example.com'),
+  EMAIL_TRANSPORT: z.enum(['queue', 'inline']).default('queue'),
 
   // Storage (StorageService — arch §13)
   STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),

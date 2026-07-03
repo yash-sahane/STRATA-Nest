@@ -14,11 +14,14 @@ import { ActivityModule } from './modules/activity/activity.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
 import { AuthzModule } from './modules/authz/authz.module';
 import { PermissionsGuard } from './modules/authz/permissions.guard';
+import { EmailModule } from './modules/email/email.module';
 import { EpicsModule } from './modules/epics/epics.module';
+import { FilesModule } from './modules/files/files.module';
 import { LeaveModule } from './modules/leave/leave.module';
 import { MailModule } from './modules/mail/mail.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { ProjectsModule } from './modules/projects/projects.module';
+import { StorageModule } from './modules/storage/storage.module';
 import { RealtimeModule } from './modules/realtime/realtime.module';
 import { RequirementsModule } from './modules/requirements/requirements.module';
 import { SprintsModule } from './modules/sprints/sprints.module';
@@ -75,6 +78,8 @@ import { THROTTLE } from './throttling/throttle.constants';
     EventEmitterModule.forRoot(),
     PrismaModule,
     RedisModule,
+    StorageModule,
+    EmailModule,
     MailModule,
     AuthzModule,
     HealthModule,
@@ -91,6 +96,7 @@ import { THROTTLE } from './throttling/throttle.constants';
     TimeTrackingModule,
     NotificationsModule,
     ActivityModule,
+    FilesModule,
     RealtimeModule,
   ],
   providers: [

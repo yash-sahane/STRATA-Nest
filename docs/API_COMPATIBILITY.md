@@ -171,18 +171,26 @@
 
 ## Phase 10 — Files & Email
 
+> **Status: 🚧 Implemented + unit-verified.** Files behind **StorageService** (local driver full + path-traversal guard; S3 lazy-loaded, fails loudly if selected without the SDK — modules never touch fs/AWS directly). Email moved **off inline sends onto the BullMQ `email` queue** (D7): API produces jobs, the **worker** consumes + sends (Resend when keyed, else logs). Retries (5×, exponential backoff) + **idempotencyKey→jobId** dedupe; `EMAIL_TRANSPORT=inline` is the retained synchronous fallback.
+
 | Method | Path | Django response | Parity |
 |---|---|---|---|
-| POST | `files/` (multipart) | `201 <File>` | ⏳ |
-| GET | `files/{id}/` | `<File>` | ⏳ |
-| DELETE | `files/{id}/` | `204` (deletes blob) | ⏳ |
-| GET | `files/{id}/preview/` · `view/` | inline stream (`Content-Disposition: inline`) | ⏳ |
-| GET | `files/{id}/download/` | attachment stream | ⏳ |
-| POST | `email/send-invitation/` | `{success, backend, ...}` | ⏳ |
-| POST | `email/send-leave/` | `{success, ...}` | ⏳ |
-| POST | `email/send-notification/` | `{success, ...}` | ⏳ |
+| POST | `files/` (multipart) | `201 <File>` | 🚧 |
+| GET | `files/{id}/` | `<File>` | 🚧 |
+| DELETE | `files/{id}/` | `204` (deletes blob) | 🚧 |
+| GET | `files/{id}/preview/` · `view/` | inline stream (`Content-Disposition: inline`) | 🚧 |
+| GET | `files/{id}/download/` | attachment stream | 🚧 |
+| POST | `email/send-invitation/` | `{success, backend, sent, queued}` | 🚧 |
+| POST | `email/send-leave/` | `{success, backend, sent, queued}` | 🚧 |
+| POST | `email/send-notification/` | `{success, backend, sent, queued}` | 🚧 |
 
-**`<File>`**: `id, createdAt, updatedAt, name, mimeType, size, workspaceId, projectId, uploadedBy, bucketId, url`
+**`<File>`**: `id, name, mimeType, size, workspaceId, projectId, uploadedBy, bucketId, url, createdAt, updatedAt` (createdAt/updatedAt serialize last — NativeModelSerializer pop-and-re-add).
+
+**Parity decisions / deviations:**
+- **Storage key layout preserved**: `uploads/{workspaceId|_none}/{id}/{filename}` (Django `_upload_path`); `url` = `media/<key>` (matches `MEDIA_URL + name`). Reconcile the URL host/prefix at the live gate.
+- **Files scoping** = Django's viewset: files in the caller's ACTIVE workspaces **plus global files** (empty `workspaceId`); admins see all. Auth + membership only (no role gate) — `FileRead/FileWrite` are defined but reserved for later RBAC tightening.
+- **`email/send-*` now enqueues [NEW, D7]** — Django sent synchronously and returned the transport outcome (`backend: resend|django`, `id`/`error`); the endpoints now accept the job and return an **optimistic** `{success:true, backend:'queue', sent:true, queued:true}` (or `backend:'inline'` when `EMAIL_TRANSPORT=inline`). The frontend keys on `success`; the response-shape change is documented.
+- **`bigint` size** is serialized as a JSON number (Django `BigIntegerField` → int).
 
 ---
 

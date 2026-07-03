@@ -24,4 +24,5 @@ export const MODEL_COLLECTION: Record<string, string> = {
   Notification: 'notifications',
   ActivityLog: 'activity_logs',
   SavedSearch: 'saved_searches',
+  UploadedFile: 'files',
 };

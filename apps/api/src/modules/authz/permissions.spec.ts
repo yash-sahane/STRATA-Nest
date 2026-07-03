@@ -29,6 +29,8 @@ describe('permissionsForRole', () => {
         Permission.NotificationWrite,
         Permission.ActivityRead,
         Permission.ActivityWrite,
+        Permission.FileRead,
+        Permission.FileWrite,
       ].sort(),
     );
     expect(set.has(Permission.ProjectCreate)).toBe(false);

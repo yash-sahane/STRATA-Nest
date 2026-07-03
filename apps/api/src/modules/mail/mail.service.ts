@@ -1,20 +1,48 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { EmailKind } from '@lt/shared';
+import { EmailService } from '../email/email.service';
 
 /**
- * Phase-1 mail STUB. Real transactional email moves to the BullMQ email queue in
- * Phase 10 (M§6.2) — this keeps Auth/Users logic decoupled from transport so
- * responses ({ok:true}, invite results) are already correct. Currently logs only.
+ * Transactional mail (Phases 1/2). Phase 10 moves these OFF inline sends onto
+ * the BullMQ email queue (D7) via EmailService — the method contract callers
+ * use is unchanged. Idempotency keys keep retries/double-submits from sending
+ * twice. The worker renders + delivers (Resend, else logs).
  */
 @Injectable()
 export class MailService {
-  private readonly logger = new Logger('Mail');
+  constructor(
+    private readonly email: EmailService,
+    private readonly config: ConfigService,
+  ) {}
+
+  private get frontend(): string {
+    return this.config.get<string>('FRONTEND_URL', 'http://localhost:3000');
+  }
 
   async sendPasswordReset(email: string, link: string): Promise<void> {
-    this.logger.warn(`[stub] password-reset email to ${email}: ${link}`);
+    await this.email.enqueue({
+      kind: EmailKind.PasswordReset,
+      to: email,
+      subject: 'Reset your password',
+      text: `Reset your password using this link: ${link}`,
+      context: { link },
+      idempotencyKey: `reset:${email}:${link}`,
+    });
   }
 
   async sendWelcome(email: string, name: string, tempPassword?: string): Promise<void> {
-    this.logger.warn(`[stub] welcome email to ${email} (${name})${tempPassword ? ' with temp password' : ''}`);
+    const login = `${this.frontend}/login`;
+    await this.email.enqueue({
+      kind: EmailKind.Welcome,
+      to: email,
+      subject: 'Welcome to L-T Connect',
+      text: tempPassword
+        ? `Hi ${name}, your account is ready. Temporary password: ${tempPassword}. Sign in at ${login}.`
+        : `Hi ${name}, your account is ready. Sign in at ${login}.`,
+      context: { name, hasTempPassword: Boolean(tempPassword) },
+      idempotencyKey: `welcome:${email}`,
+    });
   }
 
   async sendWorkspaceInvitation(
@@ -23,6 +51,13 @@ export class MailService {
     inviterName: string,
     inviteCode: string,
   ): Promise<void> {
-    this.logger.warn(`[stub] invite email to ${email} for "${workspaceName}" from ${inviterName} (code ${inviteCode})`);
+    await this.email.enqueue({
+      kind: EmailKind.WorkspaceInvitation,
+      to: email,
+      subject: `You're invited to ${workspaceName}`,
+      text: `${inviterName} invited you to join "${workspaceName}". Use invite code ${inviteCode} at ${this.frontend}.`,
+      context: { workspaceName, inviterName, inviteCode },
+      idempotencyKey: `invite:${email}:${inviteCode}`,
+    });
   }
 }

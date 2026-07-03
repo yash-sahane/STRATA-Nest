@@ -42,6 +42,10 @@ export const Permission = {
   NotificationWrite: 'notification:write',
   ActivityRead: 'activity:read',
   ActivityWrite: 'activity:write',
+  // Phase 10 — files. Django gated file upload/delete on authenticated
+  // membership only (no role check), so both are in the member baseline.
+  FileRead: 'file:read',
+  FileWrite: 'file:write',
 } as const;
 
 export type PermissionKey = (typeof Permission)[keyof typeof Permission];
@@ -61,6 +65,8 @@ const READ_ONLY: PermissionKey[] = [
   Permission.NotificationWrite,
   Permission.ActivityRead,
   Permission.ActivityWrite,
+  Permission.FileRead,
+  Permission.FileWrite,
 ];
 
 /** Default permissions for the 7 built-in roles (A§5.1). Tunable; seeded into

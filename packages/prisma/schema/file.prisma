@@ -1,0 +1,22 @@
+// File uploads (`files_uploadedfile`, A§6.13). The Django `file` FileField
+// stores the relative storage key (`uploads/{ws}/{id}/{filename}`); the blob
+// itself lives behind StorageService (local/S3, arch §13). `uploadedById` is
+// SET_NULL on user delete.
+
+model UploadedFile {
+  id           String   @id
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+  name         String
+  filePath     String   @map("file") // storage key, e.g. uploads/{ws}/{id}/{name}
+  mimeType     String   @default("") @map("mime_type")
+  size         BigInt   @default(0)
+  workspaceId  String   @default("") @map("workspace_id")
+  projectId    String   @default("") @map("project_id")
+  uploadedById String?  @map("uploaded_by_id")
+  bucket       String   @default("default")
+
+  @@index([workspaceId])
+  @@index([projectId])
+  @@map("files_uploadedfile")
+}
