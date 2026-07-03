@@ -46,6 +46,11 @@ export const Permission = {
   // membership only (no role check), so both are in the member baseline.
   FileRead: 'file:read',
   FileWrite: 'file:write',
+  // Phase 11 — integrations. Django did not workspace-scope these at all (D5);
+  // the Nest version scopes by project→workspace membership. Reads are baseline;
+  // writes (which hold access tokens) require the integration:write permission.
+  IntegrationRead: 'integration:read',
+  IntegrationWrite: 'integration:write',
 } as const;
 
 export type PermissionKey = (typeof Permission)[keyof typeof Permission];
@@ -67,6 +72,9 @@ const READ_ONLY: PermissionKey[] = [
   Permission.ActivityWrite,
   Permission.FileRead,
   Permission.FileWrite,
+  Permission.IntegrationRead,
+  // IntegrationWrite is NOT baseline — writes carry access tokens, so under
+  // enforced RBAC only managers manage integrations (membership floor when off).
 ];
 
 /** Default permissions for the 7 built-in roles (A§5.1). Tunable; seeded into

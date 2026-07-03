@@ -1,0 +1,63 @@
+// Integrations (A§6.12). One integration per provider per project (OneToOne →
+// unique projectId). `accessToken` is stored ENCRYPTED at rest (D4) and is
+// write-only on the wire (never serialized back). Commits are unique per
+// (project, sha). These tables have no workspace column — scoping is via the
+// project→workspace relation (closes D5 without a schema change).
+
+model GitHubIntegration {
+  id               String   @id
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+  projectId        String   @unique @map("project_id")
+  repoOwner        String   @map("repo_owner")
+  repoName         String   @map("repo_name")
+  accessToken      String   @map("access_token") // encrypted ciphertext
+  webhookSecret    String   @default("") @map("webhook_secret")
+  autoUpdateStatus Boolean  @default(false) @map("auto_update_status")
+  enabledEvents    Json     @default("[]") @map("enabled_events")
+
+  @@map("integrations_githubintegration")
+}
+
+model GitLabIntegration {
+  id               String   @id
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+  projectId        String   @unique @map("project_id")
+  projectPath      String   @map("project_path")
+  accessToken      String   @map("access_token") // encrypted ciphertext
+  webhookSecret    String   @default("") @map("webhook_secret")
+  autoUpdateStatus Boolean  @default(false) @map("auto_update_status")
+  enabledEvents    Json     @default("[]") @map("enabled_events")
+
+  @@map("integrations_gitlabintegration")
+}
+
+model DiscordIntegration {
+  id            String   @id
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  projectId     String   @unique @map("project_id")
+  webhookUrl    String   @map("webhook_url")
+  enabledEvents Json     @default("[]") @map("enabled_events")
+
+  @@map("integrations_discordintegration")
+}
+
+model GitCommit {
+  id            String   @id
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  projectId     String   @map("project_id")
+  provider      String
+  commitSha     String   @map("commit_sha")
+  message       String
+  author        String
+  authorEmail   String   @map("author_email")
+  timestamp     DateTime
+  linkedTaskIds Json     @default("[]") @map("linked_task_ids")
+  url           String
+
+  @@unique([projectId, commitSha])
+  @@map("integrations_gitcommit")
+}

@@ -15,7 +15,9 @@ import { AppModule } from './app.module';
 
 async function bootstrap(): Promise<void> {
   const env = validateEnv(process.env as Record<string, unknown>);
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  // rawBody: capture the exact request bytes so inbound webhooks can verify
+  // provider HMAC signatures over the raw payload (Phase 11).
+  const app = await NestFactory.create(AppModule, { bufferLogs: true, rawBody: true });
   app.useLogger(app.get(Logger)); // structured pino logging + correlation ids
   app.useWebSocketAdapter(new WsAdapter(app)); // raw WebSocket (/ws/collections/, A§7)
 

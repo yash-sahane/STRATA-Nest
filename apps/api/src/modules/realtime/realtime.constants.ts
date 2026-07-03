@@ -25,4 +25,8 @@ export const MODEL_COLLECTION: Record<string, string> = {
   ActivityLog: 'activity_logs',
   SavedSearch: 'saved_searches',
   UploadedFile: 'files',
+  GitHubIntegration: 'github_integrations',
+  GitLabIntegration: 'gitlab_integrations',
+  DiscordIntegration: 'discord_integrations',
+  GitCommit: 'git_commits',
 };

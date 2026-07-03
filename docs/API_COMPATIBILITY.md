@@ -196,13 +196,27 @@
 
 ## Phase 11 — Integrations
 
+> **Status: 🚧 Implemented + unit-verified.** CRUD parity for the 4 collections with **`accessToken` encrypted at rest (AES-256-GCM) and write-only** (never echoed — D4). **[NEW] project→workspace scoping (D5)** — Django never workspace-scoped these tables; the Nest version filters by the caller's accessible projects. **[NEW] public webhook receivers** verify the provider signature over the **raw body** and enqueue to the `git` queue; the **worker** records commits idempotently, links tasks, and (opt-in) auto-advances them to DONE.
+
 | Collection | CRUD | Resource fields | Parity |
 |---|---|---|---|
-| `github_integrations` | L/C/R/U/D | `…, projectId, repoOwner, repoName, accessToken(write-only), webhookSecret, autoUpdateStatus, enabledEvents` | ⏳ |
-| `gitlab_integrations` | L/C/R/U/D | `…, projectId, projectPath, accessToken(write-only), webhookSecret, autoUpdateStatus, enabledEvents` | ⏳ |
-| `discord_integrations` | L/C/R/U/D | `…, projectId, webhookUrl, enabledEvents` | ⏳ |
-| `git_commits` | L/C/R/U/D | `…, projectId, provider, commitSha, message, author, authorEmail, timestamp, linkedTaskIds, url` | ⏳ |
-| POST | `integrations/*/webhook/` (**new**, D-fix) | verify + enqueue (`git` queue) | ➕ |
+| `github_integrations` | L/C/R/U/D | `…, projectId, repoOwner, repoName, accessToken(write-only), webhookSecret, autoUpdateStatus, enabledEvents` | 🚧 |
+| `gitlab_integrations` | L/C/R/U/D | `…, projectId, projectPath, accessToken(write-only), webhookSecret, autoUpdateStatus, enabledEvents` | 🚧 |
+| `discord_integrations` | L/C/R/U/D | `…, projectId, webhookUrl, enabledEvents` | 🚧 |
+| `git_commits` | L/C/R/U/D | `…, projectId, provider, commitSha, message, author, authorEmail, timestamp, linkedTaskIds, url` | 🚧 |
+
+**New webhook endpoints (additive, [NEW] — the D-fix, PUBLIC / signature-authed):**
+
+| Method | Path | Verify | Result | Status |
+|---|---|---|---|---|
+| POST | `integrations/github/webhook/{projectId}` | HMAC-SHA256 `X-Hub-Signature-256` over raw body | `202 {accepted, commits}` → `git` queue | ➕ 🚧 |
+| POST | `integrations/gitlab/webhook/{projectId}` | `X-Gitlab-Token` equals `webhookSecret` | `202 {accepted, commits}` → `git` queue | ➕ 🚧 |
+
+**Parity decisions / deviations:**
+- **Tokens encrypted at rest [NEW, D4]** — stored as `enc:v1:` + base64(iv|tag|ciphertext) via `INTEGRATION_TOKEN_ENC_KEY`; a unit test proves plaintext is never persisted and `accessToken` is never serialized. Decrypt is tolerant of legacy plaintext for the migration window. Existing rows need a one-time **encrypt-in-place data migration** (guarded, reversible key-wrap) at the live gate.
+- **Project→workspace scoping [NEW, D5]** — no `workspace_id` column added; scoping is relational (accessible projects), so no schema change to the existing tables. Writes require `integration:write` (manager-level under enforced RBAC; membership floor when off) since they carry secrets.
+- **`git` queue processing is [NEW]** — Django only stored config/records; the worker now records commits idempotently (unique `project+sha`), parses `#REF`/`ABC-123` task refs → `linkedTaskIds` (resolved task ids), auto-updates status to `DONE` on close-intent when `autoUpdateStatus`, and dispatches to Discord. `deliveryId → jobId` dedupes provider re-deliveries.
+- **Raw-body capture**: API boots with `rawBody: true` so signatures verify over exact bytes.
 
 ---
 

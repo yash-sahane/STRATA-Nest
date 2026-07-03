@@ -7,6 +7,7 @@
 /** Logical queue names (one BullMQ queue each, on the queue Redis DB). */
 export const Queues = {
   Email: 'email',
+  Git: 'git',
 } as const;
 export type QueueName = (typeof Queues)[keyof typeof Queues];
 
@@ -40,4 +41,32 @@ export interface EmailJob {
   context?: Record<string, unknown>;
   /** Dedupe key → BullMQ jobId; a duplicate enqueue is ignored. */
   idempotencyKey?: string;
+}
+
+/** Job name used when adding to the git queue. */
+export const GIT_JOB = 'process-webhook';
+
+/** A single commit as it arrives in a provider webhook payload. */
+export interface GitCommitInput {
+  sha: string;
+  message: string;
+  author: string;
+  authorEmail: string;
+  timestamp: string;
+  url: string;
+}
+
+/**
+ * Git webhook job (Phase 11). The API webhook controllers verify the provider
+ * signature, normalize the payload to `commits`, and enqueue this; the worker's
+ * git processor records commits idempotently, links tasks, and (when the
+ * integration opts in) auto-updates task status. `deliveryId` → jobId dedupes
+ * provider re-deliveries.
+ */
+export interface GitJob {
+  provider: 'GITHUB' | 'GITLAB';
+  projectId: string;
+  event: string;
+  commits: GitCommitInput[];
+  deliveryId?: string;
 }

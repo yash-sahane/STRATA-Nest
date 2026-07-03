@@ -162,6 +162,9 @@ importers:
       '@lt/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@lt/prisma':
+        specifier: workspace:*
+        version: link:../../packages/prisma
       '@lt/shared':
         specifier: workspace:*
         version: link:../../packages/shared

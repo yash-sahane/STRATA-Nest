@@ -17,6 +17,7 @@ import { PermissionsGuard } from './modules/authz/permissions.guard';
 import { EmailModule } from './modules/email/email.module';
 import { EpicsModule } from './modules/epics/epics.module';
 import { FilesModule } from './modules/files/files.module';
+import { IntegrationsModule } from './modules/integrations/integrations.module';
 import { LeaveModule } from './modules/leave/leave.module';
 import { MailModule } from './modules/mail/mail.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
@@ -97,6 +98,7 @@ import { THROTTLE } from './throttling/throttle.constants';
     NotificationsModule,
     ActivityModule,
     FilesModule,
+    IntegrationsModule,
     RealtimeModule,
   ],
   providers: [
