@@ -22,6 +22,12 @@
   --color-accent-foreground: hsl(var(--accent-foreground));
   --color-destructive: hsl(var(--destructive));
   --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-success: hsl(var(--success));
+  --color-success-foreground: hsl(var(--success-foreground));
+  --color-warning: hsl(var(--warning));
+  --color-warning-foreground: hsl(var(--warning-foreground));
+  --color-info: hsl(var(--info));
+  --color-info-foreground: hsl(var(--info-foreground));
   --color-border: hsl(var(--border));
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
@@ -53,6 +59,15 @@
     --accent-foreground: 0 0% 9%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 0 0% 98%;
+    /* Semantic status tokens (DS-01). success=positive/approved/done,
+       warning=caution/pending, info=in-progress/informational.
+       Foregrounds chosen for contrast — warning uses near-black. */
+    --success: 142 71% 45%;
+    --success-foreground: 0 0% 98%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 9%;
+    --info: 217 91% 60%;
+    --info-foreground: 0 0% 98%;
     --border: 0 0% 89.8%;
     --input: 0 0% 89.8%;
     --ring: 0 0% 3.9%;
@@ -81,6 +96,13 @@
     --accent-foreground: 0 0% 98%;
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 0 0% 98%;
+    /* Semantic status tokens (DS-01) — dark theme variants. */
+    --success: 142 64% 40%;
+    --success-foreground: 0 0% 98%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 9%;
+    --info: 217 74% 55%;
+    --info-foreground: 0 0% 98%;
     --border: 0 0% 14.9%;
     --input: 0 0% 14.9%;
     --ring: 0 0% 83.1%;
@@ -163,4 +185,32 @@
 /* Root CSS Variables */
 :root {
   --sidebar-width: 16rem;
+
+  /* Motion scale (ANIM-01). Reference these for consistent durations:
+     micro = hover/focus, standard = dropdowns/tabs, overlay = dialog/sheet,
+     layout = large structural transitions (e.g. sidebar collapse). */
+  --duration-micro: 120ms;
+  --duration-standard: 180ms;
+  --duration-overlay: 240ms;
+  --duration-layout: 320ms;
+}
+
+/* Accessibility: honor the OS "reduce motion" preference (A11Y-01).
+   Neutralizes transitions and entrance/exit animations while preserving
+   essential looping progress spinners (`animate-spin`). The manual
+   `.no-animations` toggle above remains an independent user override. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .animate-spin {
+    animation-duration: 1s !important;
+    animation-iteration-count: infinite !important;
+  }
 }
