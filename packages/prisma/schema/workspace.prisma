@@ -1,6 +1,5 @@
-// Workspace domain — mapped to existing Django tables (workspaces app).
-// Cross-refs use scalar FK columns (workspaceId/userId/...) + explicit queries,
-// matching Django's real FK columns without modeling every relation yet.
+// Workspace domain (workspaces app). Cross-references use scalar FK columns
+// (workspaceId/userId/...) with explicit queries rather than modeled relations.
 
 model Workspace {
   id          String   @id

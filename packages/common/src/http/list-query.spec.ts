@@ -13,7 +13,7 @@ const spec: ListQuerySpec = {
   defaultOrderBy: { createdAt: 'desc' },
 };
 
-describe('parseListQuery (allowlisted CamelCaseQueryFilter — D11)', () => {
+describe('parseListQuery (allowlisted field filter)', () => {
   it('maps simple equality', () => {
     const { where } = parseListQuery({ status: 'ACTIVE' }, spec);
     expect(where).toEqual({ status: 'ACTIVE' });

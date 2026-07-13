@@ -25,7 +25,7 @@ export class LeaveRequestsController {
   ) {}
   @Get() list(@CurrentUser() u: User, @Query() q: Q) { return this.svc.list(u, q); }
   @Post() @RequirePermission(Permission.HrWrite) create(@CurrentUser() u: User, @Body() d: CreateLeaveRequestDto) { return this.svc.create(u, d); }
-  /** [NEW] approve (deducts balance) / reject — manager-only, self-approval blocked. */
+  /** approve (deducts balance) / reject — manager-only, self-approval blocked. */
   @Post(':id/approve') approve(@CurrentUser() u: User, @Param('id') id: string) { return this.approvals.approve(u, id); }
   @Post(':id/reject') reject(@CurrentUser() u: User, @Param('id') id: string, @Body() d: RejectLeaveDto) { return this.approvals.reject(u, id, d.reason); }
   @Get(':id') get(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.retrieve(u, id); }

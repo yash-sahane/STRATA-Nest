@@ -1,0 +1,19 @@
+// Retention archive. Historical/compliance records
+// (Attendance, Leave, LeaveBalance, TimeEntry, ActivityLog, optionally GitCommit)
+// are SNAPSHOTTED here before an aggregate-root delete removes the live rows —
+// no silent destruction of historical records. Additive table; not part of
+// the mapped production schema.
+
+model RetentionArchive {
+  id          String   @id
+  entityType  String   @map("entity_type") // e.g. "attendance", "leave_request", "activity_log"
+  entityId    String   @map("entity_id")
+  workspaceId String   @default("") @map("workspace_id")
+  reason      String   @default("") // e.g. "workspace_deleted:<id>"
+  snapshot    Json // full row snapshot
+  archivedAt  DateTime @default(now()) @map("archived_at")
+
+  @@index([entityType, entityId])
+  @@index([workspaceId])
+  @@map("retention_archive")
+}

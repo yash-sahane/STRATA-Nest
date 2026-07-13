@@ -7,7 +7,7 @@ import { RealtimeSubscriber } from './realtime.subscriber';
 import { SocketRegistry } from './socket-registry';
 
 /**
- * Realtime layer (Phase 7). Imports AuthModule for TokenService (cookie auth).
+ * Realtime layer. Imports AuthModule for TokenService (cookie auth).
  * RealtimeService registers the Prisma write hook on init (central CRUD events).
  */
 @Module({
@@ -19,5 +19,6 @@ import { SocketRegistry } from './socket-registry';
     RealtimeSubscriber,
     SocketRegistry,
   ],
+  exports: [RealtimeService], // used by DeletionModule for explicit delete-frame emission
 })
 export class RealtimeModule {}

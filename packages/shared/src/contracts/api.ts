@@ -1,8 +1,6 @@
 /**
- * FROZEN wire-contract types (ADR-0003). These shapes are consumed by the
+ * Versioned wire-contract types. These shapes are consumed by the
  * Next.js frontend and MUST NOT change under /api/v1.
- *   - error envelope:      CURRENT_SYSTEM_AUDIT.md §4.5
- *   - pagination envelope: CURRENT_SYSTEM_AUDIT.md §4.4
  */
 
 export interface ApiErrorEnvelope {
@@ -20,7 +18,7 @@ export interface PaginatedResponse<T> {
   pageSize: number;
 }
 
-/** WebSocket frame shape (CURRENT_SYSTEM_AUDIT.md §7.1) — also frozen. */
+/** WebSocket frame shape — also part of the versioned contract. */
 export interface RealtimeFrame<T = unknown> {
   event: string;
   payload: T;

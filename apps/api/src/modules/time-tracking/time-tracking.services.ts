@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { generateId, paginate, parseListQuery, type ListQuerySpec } from '@lt/common';
-import type { PaginatedResponse } from '@lt/shared';
-import { PrismaService } from '@lt/prisma';
+import { generateId, paginate, parseListQuery, type ListQuerySpec } from '@strata/common';
+import type { PaginatedResponse } from '@strata/shared';
+import { PrismaService } from '@strata/prisma';
 import type { ActiveTimer, Prisma, TimeEntry, User } from '@prisma/client';
 import { Permission, type PermissionKey } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
@@ -40,7 +40,7 @@ export class TimeEntriesService extends ScopedCrudService<
     return timeEntryResponse(row);
   }
   create(user: User, dto: CreateTimeEntryDto) {
-    // Django perform_create stamps user/user_name/user_email/created_by = caller.
+    // userId/userName/userEmail/createdById are stamped from the caller.
     return this.createIn(user, dto.workspaceId, {
       workspaceId: dto.workspaceId,
       userId: user.id,
@@ -78,7 +78,12 @@ export class TimeEntriesService extends ScopedCrudService<
   }
 }
 
-/** ActiveTimer has no workspace column (D5) — non-scoped, one per user. Reproduced. */
+/**
+ * ActiveTimer has no workspace column; it is tied to a single user
+ * (`user_id` is UNIQUE). Every read/write is therefore scoped to the caller's
+ * own timer — a user can only ever see or mutate their own, never another
+ * user's by id.
+ */
 @Injectable()
 export class ActiveTimersService {
   private readonly spec: ListQuerySpec = {
@@ -89,10 +94,12 @@ export class ActiveTimersService {
   constructor(private readonly prisma: PrismaService) {}
 
   async list(
+    user: User,
     query: Record<string, string | string[] | undefined>,
   ): Promise<PaginatedResponse<ReturnType<typeof activeTimerResponse>>> {
     const parsed = parseListQuery(query, this.spec);
-    const where = parsed.where as Prisma.ActiveTimerWhereInput;
+    // Force the caller's own scope — never trust a client-supplied userId filter.
+    const where = { ...(parsed.where as Prisma.ActiveTimerWhereInput), userId: user.id };
     const [items, total] = await this.prisma.$transaction([
       this.prisma.activeTimer.findMany({
         where,
@@ -105,9 +112,9 @@ export class ActiveTimersService {
     return paginate(items.map(activeTimerResponse), total, parsed.page, parsed.pageSize);
   }
 
-  async retrieve(id: string) {
+  async retrieve(user: User, id: string) {
     const t = await this.prisma.activeTimer.findUnique({ where: { id } });
-    if (!t) throw new NotFoundException('Not found.');
+    if (!t || t.userId !== user.id) throw new NotFoundException('Not found.');
     return activeTimerResponse(t);
   }
 
@@ -129,8 +136,8 @@ export class ActiveTimersService {
     return activeTimerResponse(t);
   }
 
-  async update(id: string, dto: UpdateActiveTimerDto): Promise<ReturnType<typeof activeTimerResponse>> {
-    await this.ensure(id);
+  async update(user: User, id: string, dto: UpdateActiveTimerDto): Promise<ReturnType<typeof activeTimerResponse>> {
+    await this.ensureOwned(user, id);
     const data: Prisma.ActiveTimerUpdateInput = {};
     if (dto.isPaused !== undefined) data.isPaused = dto.isPaused;
     if (dto.description !== undefined) data.description = dto.description;
@@ -140,15 +147,18 @@ export class ActiveTimersService {
     return activeTimerResponse(await this.prisma.activeTimer.update({ where: { id }, data }));
   }
 
-  async remove(id: string): Promise<void> {
-    await this.ensure(id);
+  async remove(user: User, id: string): Promise<void> {
+    await this.ensureOwned(user, id);
     await this.prisma.activeTimer.delete({ where: { id } });
   }
 
-  private async ensure(id: string): Promise<void> {
-    if (!(await this.prisma.activeTimer.findUnique({ where: { id }, select: { id: true } }))) {
-      throw new NotFoundException('Not found.');
-    }
+  /** Assert the timer exists AND belongs to the caller (else 404 — no cross-user access). */
+  private async ensureOwned(user: User, id: string): Promise<void> {
+    const row = await this.prisma.activeTimer.findUnique({
+      where: { id },
+      select: { userId: true },
+    });
+    if (!row || row.userId !== user.id) throw new NotFoundException('Not found.');
   }
 
   private timerOf(userId: string) {

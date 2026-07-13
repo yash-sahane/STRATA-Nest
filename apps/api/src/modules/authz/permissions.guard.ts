@@ -10,7 +10,8 @@ import { WorkspaceAccessService } from './workspace-access.service';
  * Enforces `@RequirePermission(...)` when the target workspace id is resolvable
  * from the request (body/query/params.workspaceId). For resource-detail routes
  * where the workspace is on the resource, the owning service enforces it after
- * a scoped fetch (so out-of-scope resources 404 as in Django).
+ * a scoped fetch (so an out-of-scope resource simply 404s, since the scoped
+ * query never finds it).
  */
 @Injectable()
 export class PermissionsGuard implements CanActivate {

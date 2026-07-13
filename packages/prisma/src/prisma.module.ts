@@ -1,7 +1,7 @@
 import { Global, Module } from '@nestjs/common';
 import { PrismaService } from './prisma.service';
 
-/** Global so every (future) domain module can inject PrismaService directly (arch §3). */
+/** Global so every domain module can inject PrismaService directly. */
 @Global()
 @Module({
   providers: [PrismaService],

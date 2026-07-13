@@ -1,17 +1,15 @@
 import { randomInt } from 'node:crypto';
 
 /**
- * Native resource ID generator — byte-compatible with the Django implementation
- * `apps/core/models.generate_native_id` (CURRENT_SYSTEM_AUDIT.md §4.1; ADR-0002).
- *
- * Django: `"".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(20))`
+ * Native resource ID generator — the application's permanent ID format:
  *   - alphabet = a-z + A-Z + 0-9  (62 symbols, lowercase then uppercase then digits)
  *   - length   = 20
  *   - selection = cryptographically secure, uniform
  *
- * Parity matters because these IDs are stored as soft-FK strings across tables
- * and used as frontend cache keys; a different scheme would break existing data
- * (ADR-0002). `randomInt` is CSPRNG-backed and unbiased over [0, max).
+ * This exact format matters because these IDs are stored as soft-FK strings
+ * across tables and used as frontend cache keys; a different scheme would
+ * break existing data. `randomInt` is CSPRNG-backed and unbiased
+ * over [0, max).
  */
 export const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 export const ID_LENGTH = 20;

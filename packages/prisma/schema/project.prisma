@@ -1,6 +1,5 @@
-// Project — mapped to the existing Django `projects_project` table (A§6.2).
-// `startDate`/`endDate` are DateFields (date-only on the wire); `member_ids` and
-// `project_settings` are JSON. The DB already has the (workspace,status) index.
+// Project (`projects_project`). `startDate`/`endDate` serialize date-only on the
+// wire; `member_ids` and `project_settings` are JSON. Indexed on (workspace, status).
 
 model Project {
   id              String    @id

@@ -1,5 +1,5 @@
 /*
- * Auth latency benchmark (Phase 1A). Node >= 18 (global fetch).
+ * Auth latency benchmark. Node >= 18 (global fetch).
  * Usage:
  *   BASE=http://localhost:8000 EMAIL=u@x.test PASSWORD=pw N=50 \
  *     node scripts/verify/auth-benchmark.mjs "NestJS"

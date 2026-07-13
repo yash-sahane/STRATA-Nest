@@ -3,10 +3,10 @@ import { ConfigService } from '@nestjs/config';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 
 const ALGO = 'aes-256-gcm';
-const PREFIX = 'enc:v1:'; // marks app-level encrypted values (D4)
+const PREFIX = 'enc:v1:'; // marks app-level encrypted values
 
 /**
- * App-level encryption for integration access tokens at rest (D4). AES-256-GCM
+ * App-level encryption for integration access tokens at rest. AES-256-GCM
  * with a key derived (sha256) from INTEGRATION_TOKEN_ENC_KEY, so any non-empty
  * secret yields a valid 32-byte key. Ciphertext = `enc:v1:` + base64(iv|tag|ct),
  * so plaintext is NEVER what lands in the column. Decryption is only performed
@@ -20,7 +20,13 @@ export class TokenCipher {
 
   constructor(config: ConfigService) {
     const secret = config.get<string>('INTEGRATION_TOKEN_ENC_KEY', '') ?? '';
+    const isProd = config.get<string>('NODE_ENV') === 'production';
     if (!secret) {
+      if (isProd) {
+        // Fail closed — never encrypt production tokens with a predictable key
+        // (env validation already blocks this; this is defense in depth).
+        throw new Error('INTEGRATION_TOKEN_ENC_KEY is required in production (token encryption at rest, D4).');
+      }
       this.logger.warn(
         'INTEGRATION_TOKEN_ENC_KEY is empty — using a derived dev key. Set a real secret in production.',
       );
@@ -38,7 +44,7 @@ export class TokenCipher {
   }
 
   decrypt(value: string): string {
-    if (!value.startsWith(PREFIX)) return value; // tolerate legacy/plaintext during migration
+    if (!value.startsWith(PREFIX)) return value; // not prefixed → treat as plaintext and return as-is
     const raw = Buffer.from(value.slice(PREFIX.length), 'base64');
     const iv = raw.subarray(0, 12);
     const tag = raw.subarray(12, 28);

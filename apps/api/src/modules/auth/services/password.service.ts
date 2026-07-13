@@ -2,14 +2,14 @@ import { Injectable } from '@nestjs/common';
 import { pbkdf2Sync, randomBytes, timingSafeEqual } from 'node:crypto';
 
 /**
- * Django-compatible `pbkdf2_sha256` password hashing (PHASE_1_AUTH_PLAN §6/§7).
+ * PBKDF2-SHA256 password hashing — the application's permanent password format.
  *
- * Encoded format (identical to Django's PBKDF2PasswordHasher):
+ * Encoded format:
  *   pbkdf2_sha256$<iterations>$<salt>$<base64(dk)>
  *
- * - `verify` uses the iterations+salt embedded in the stored hash, so it accepts
- *   hashes written by ANY Django version (dual-run, ADR-0009).
- * - `hash` writes the same format so Django can still read passwords Nest writes.
+ * - `verify` reads the iterations+salt embedded in the stored hash, so it accepts
+ *   hashes written with any historical iteration count.
+ * - `hash` always writes the current format.
  */
 @Injectable()
 export class PasswordService {

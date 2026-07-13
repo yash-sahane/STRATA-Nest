@@ -26,7 +26,7 @@ describe('LocalStorageDriver', () => {
     await expect(driver.remove('uploads/w1/f1/none.txt')).resolves.toBeUndefined();
   });
 
-  it('url mirrors Django MEDIA_URL + key', () => {
+  it('url is the fixed media prefix + key', () => {
     expect(driver.url('uploads/w1/f1/a.png')).toBe('media/uploads/w1/f1/a.png');
   });
 
@@ -35,7 +35,7 @@ describe('LocalStorageDriver', () => {
   });
 });
 
-describe('StorageService.key (Django _upload_path parity)', () => {
+describe('StorageService.key (fixed upload path layout)', () => {
   it('uses the workspace id, or _none when empty', () => {
     expect(StorageService.key('w1', 'id1', 'a.txt')).toBe('uploads/w1/id1/a.txt');
     expect(StorageService.key('', 'id1', 'a.txt')).toBe('uploads/_none/id1/a.txt');

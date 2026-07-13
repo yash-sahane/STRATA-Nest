@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import type { PrismaService } from '@lt/prisma';
+import type { PrismaService } from '@strata/prisma';
 import type { User } from '@prisma/client';
 import { FilesService, type UploadPart } from './files.service';
 import { StorageService } from '../storage/storage.service';
@@ -39,7 +39,7 @@ describe('FilesService.create (multipart upload)', () => {
     const { svc, create, save } = build(part);
     const res = await svc.create(user, part, { workspaceId: 'w1' });
 
-    // blob saved under the Django key layout (id segment is server-generated)
+    // blob saved under the fixed upload key layout (id segment is server-generated)
     expect(save).toHaveBeenCalledTimes(1);
     const [key, buf, mime] = save.mock.calls[0];
     expect(key).toMatch(/^uploads\/w1\/[A-Za-z0-9_-]+\/a\.txt$/);

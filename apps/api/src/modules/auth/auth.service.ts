@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { generateId } from '@lt/common';
-import { PrismaService } from '@lt/prisma';
+import { generateId } from '@strata/common';
+import { PrismaService } from '@strata/prisma';
 import type { User } from '@prisma/client';
 import { MailService } from '../mail/mail.service';
 import { UserMapper, type UserResponse } from '../users/user.mapper';
@@ -58,7 +58,7 @@ export class AuthService {
 
   async login(email: string, password: string): Promise<{ user: UserResponse; sessionId: string; tokens: SessionTokens }> {
     const user = await this.prisma.user.findUnique({ where: { email } });
-    // Django LoginSerializer → 400 ValidationError (message is a list) on any failure.
+    // Frozen contract: 400 ValidationError (message is a list) on any login failure.
     if (!user || !this.passwords.verify(password, user.password) || !user.isActive) {
       this.audit.loginFailure(email);
       throw new BadRequestException({ message: ['Invalid email or password'], type: 'ValidationError' });
@@ -112,7 +112,7 @@ export class AuthService {
       this.audit.refreshRejected('wrong_type');
       return { softError: { status: 401, message: 'Invalid refresh token' } };
     }
-    // Compatibility mode accepts signature-valid Django tokens; strict mode requires the jti (D1).
+    // Compatibility mode accepts any signature-valid refresh token; strict mode requires the jti to be tracked in Redis.
     const strict = this.config.get<boolean>('AUTH_STRICT_REFRESH', false);
     if (strict && !(await this.refreshStore.isActive(claims.user_id, claims.jti))) {
       this.audit.refreshRejected('revoked_or_unknown_jti');
@@ -144,7 +144,7 @@ export class AuthService {
     hasTempPassword: boolean;
     isAdmin: boolean;
   }> {
-    // D17 parity: Django MeView queries memberships WITHOUT a status filter.
+    // The /me endpoint intentionally queries memberships WITHOUT a status filter, so a user sees every workspace they belong to regardless of membership state.
     const rows = await this.prisma.workspaceMember.findMany({
       where: { userId: user.id },
       select: { workspaceId: true },
@@ -184,7 +184,7 @@ export class AuthService {
   // --- password reset -----------------------------------------------------
 
   async requestPasswordReset(email: string): Promise<{ ok: true }> {
-    // Constant-time contract: always {ok:true}, never reveal existence (A§5.3).
+    // Constant-time contract: always {ok:true}, never reveal existence.
     this.audit.passwordResetRequested(email);
     const user = await this.prisma.user.findFirst({
       where: { email: { equals: email, mode: 'insensitive' } },

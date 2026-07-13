@@ -1,7 +1,7 @@
-import { toDjangoIso } from '@lt/common';
+import { formatApiTimestamp } from '@strata/common';
 import type { ActiveTimer, TimeEntry } from '@prisma/client';
 
-const isoOrNull = (d: Date | null): string | null => (d ? toDjangoIso(d) : null);
+const isoOrNull = (d: Date | null): string | null => (d ? formatApiTimestamp(d) : null);
 
 export function timeEntryResponse(t: TimeEntry) {
   return {
@@ -18,8 +18,8 @@ export function timeEntryResponse(t: TimeEntry) {
     projectId: t.projectId,
     projectName: t.projectName,
     description: t.description,
-    startTime: toDjangoIso(t.startTime),
-    endTime: toDjangoIso(t.endTime),
+    startTime: formatApiTimestamp(t.startTime),
+    endTime: formatApiTimestamp(t.endTime),
     duration: t.duration,
     isBillable: t.isBillable,
     billableRate: t.billableRate,
@@ -29,8 +29,8 @@ export function timeEntryResponse(t: TimeEntry) {
     approvedAt: isoOrNull(t.approvedAt),
     rejectionReason: t.rejectionReason,
     tags: t.tags,
-    createdAt: toDjangoIso(t.createdAt),
-    updatedAt: toDjangoIso(t.updatedAt),
+    createdAt: formatApiTimestamp(t.createdAt),
+    updatedAt: formatApiTimestamp(t.updatedAt),
   };
 }
 
@@ -43,13 +43,13 @@ export function activeTimerResponse(t: ActiveTimer) {
     taskHierarchyId: t.taskHierarchyId,
     projectId: t.projectId,
     description: t.description,
-    startTime: toDjangoIso(t.startTime),
+    startTime: formatApiTimestamp(t.startTime),
     isPaused: t.isPaused,
     pausedAt: isoOrNull(t.pausedAt),
     totalPausedTime: t.totalPausedTime,
     type: t.type,
     pomodoroSettings: t.pomodoroSettings,
-    createdAt: toDjangoIso(t.createdAt),
-    updatedAt: toDjangoIso(t.updatedAt),
+    createdAt: formatApiTimestamp(t.createdAt),
+    updatedAt: formatApiTimestamp(t.updatedAt),
   };
 }

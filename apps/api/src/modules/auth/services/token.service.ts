@@ -5,7 +5,7 @@ import { randomBytes } from 'node:crypto';
 
 export type TokenType = 'access' | 'refresh';
 
-/** SimpleJWT-compatible claim set (PHASE_1_AUTH_PLAN §6). */
+/** JWT claim set. */
 export interface JwtClaims {
   user_id: string;
   token_type: TokenType;
@@ -15,10 +15,10 @@ export interface JwtClaims {
 }
 
 /**
- * Issues/verifies HS256 tokens with the SAME signing key + claim layout as
- * Django SimpleJWT, so cookies are cross-verifiable during dual-run (ADR-0009).
- * During the transition, set JWT_ACCESS_SECRET = Django SECRET_KEY (SimpleJWT
- * uses one SIGNING_KEY for both access and refresh).
+ * Issues/verifies HS256 tokens with a fixed claim layout (`user_id`, `token_type`,
+ * `jti` — snake_case is intentional, not an oversight) and a single signing key
+ * shared by access and refresh tokens. This layout is part of the
+ * public auth contract; do not refactor the field names.
  */
 @Injectable()
 export class TokenService {

@@ -1,9 +1,9 @@
-// TARGET normalized RBAC tables (ADR-0005).
+// Normalized RBAC tables.
 //
-// NOT queried at runtime in Phase 2. The PermissionsService resolves permissions
-// from the built-in role→permission map (code) + legacy WorkspaceRole.permissions
-// JSON. These tables are the documented end-state: enable them with a
-// `prisma migrate` + a seed of the default map, then cut PermissionsService over.
+// Not queried at runtime today: permissions resolve from the built-in
+// role->permission map (in code) plus the WorkspaceRole.permissions JSON. These
+// tables are the normalized end-state - enable them with a migration + a seed of
+// the default map, then point the permission resolver at them.
 
 model Permission {
   id          String           @id

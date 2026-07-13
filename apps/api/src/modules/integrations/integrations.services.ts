@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { generateId, paginate, parseListQuery, type ListQuerySpec } from '@lt/common';
-import type { PaginatedResponse } from '@lt/shared';
-import { PrismaService } from '@lt/prisma';
+import { generateId, paginate, parseListQuery, type ListQuerySpec } from '@strata/common';
+import type { PaginatedResponse } from '@strata/shared';
+import { PrismaService } from '@strata/prisma';
 import type {
   DiscordIntegration,
   GitCommit,
@@ -30,7 +30,7 @@ import {
   gitlabIntegrationResponse,
 } from './mappers';
 
-/** Shared project-scoped CRUD for the integration collections (scoped via D5 fix). */
+/** Shared project-scoped CRUD for the integration collections (scoped to the caller's project). */
 abstract class ProjectScopedService<TRow extends { projectId: string }, TResponse> {
   protected abstract readonly model: string;
   protected abstract readonly spec: ListQuerySpec;
@@ -118,7 +118,7 @@ export class GitHubIntegrationsService extends ProjectScopedService<
       projectId: dto.projectId,
       repoOwner: dto.repoOwner,
       repoName: dto.repoName,
-      accessToken: this.cipher.encrypt(dto.accessToken), // D4: never store plaintext
+      accessToken: this.cipher.encrypt(dto.accessToken), // never store plaintext
       webhookSecret: dto.webhookSecret ?? '',
       autoUpdateStatus: dto.autoUpdateStatus ?? false,
       enabledEvents: (dto.enabledEvents ?? []) as Prisma.InputJsonValue,

@@ -1,7 +1,7 @@
 import type { Readable } from 'node:stream';
 
 /**
- * Storage abstraction (arch §13). Domain modules depend ONLY on this interface,
+ * Storage abstraction. Domain modules depend ONLY on this interface,
  * never on fs or an AWS SDK directly — swapping local↔S3 is a config change.
  */
 export interface StorageDriver {
@@ -13,6 +13,6 @@ export interface StorageDriver {
   createReadStream(key: string): Readable;
   /** Remove the object; must not throw if it is already gone. */
   remove(key: string): Promise<void>;
-  /** Public URL as the frontend expects it (Django `file.url` parity). */
+  /** Public URL as the frontend expects it (stable `file.url` contract). */
   url(key: string): string;
 }

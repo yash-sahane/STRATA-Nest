@@ -14,6 +14,7 @@ import {
   UpdateTaskCommentDto,
   UpdateTaskDto,
 } from './dto';
+import { TaskDeletionService } from '../deletion/task-deletion.service';
 import { LabelsService, TasksService } from './tasks.services';
 import { KanbanColumnsService, TaskCommentsService } from './unscoped.services';
 
@@ -22,13 +23,17 @@ type Q = Record<string, string | string[] | undefined>;
 @ApiTags('tasks')
 @Controller('tasks')
 export class TasksController {
-  constructor(private readonly svc: TasksService) {}
+  constructor(
+    private readonly svc: TasksService,
+    private readonly deletion: TaskDeletionService,
+  ) {}
   @Get() list(@CurrentUser() u: User, @Query() q: Q) { return this.svc.list(u, q); }
   @Post() @RequirePermission(Permission.TaskWrite) create(@CurrentUser() u: User, @Body() d: CreateTaskDto) { return this.svc.create(u, d); }
   @Get(':id') get(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.retrieve(u, id); }
   @Patch(':id') patch(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateTaskDto) { return this.svc.patch(u, id, d); }
   @Put(':id') put(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateTaskDto) { return this.svc.patch(u, id, d); }
-  @Delete(':id') @HttpCode(204) remove(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.remove(u, id); }
+  /** Task aggregate delete → cascades TaskComments (DeletionModule). */
+  @Delete(':id') @HttpCode(204) remove(@CurrentUser() u: User, @Param('id') id: string) { return this.deletion.delete(u, id); }
 }
 
 @ApiTags('labels')
@@ -43,28 +48,28 @@ export class LabelsController {
   @Delete(':id') @HttpCode(204) remove(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.remove(u, id); }
 }
 
-// --- Unscoped (Django parity: no workspace scope) ---
+// --- Parent-scoped through Task / Project (membership-checked) ---
 
 @ApiTags('task_comments')
 @Controller('task_comments')
 export class TaskCommentsController {
   constructor(private readonly svc: TaskCommentsService) {}
-  @Get() list(@Query() q: Q) { return this.svc.list(q); }
+  @Get() list(@CurrentUser() u: User, @Query() q: Q) { return this.svc.list(u, q); }
   @Post() create(@CurrentUser() u: User, @Body() d: CreateTaskCommentDto) { return this.svc.create(u, d); }
-  @Get(':id') get(@Param('id') id: string) { return this.svc.retrieve(id); }
-  @Patch(':id') patch(@Param('id') id: string, @Body() d: UpdateTaskCommentDto) { return this.svc.update(id, d); }
-  @Put(':id') put(@Param('id') id: string, @Body() d: UpdateTaskCommentDto) { return this.svc.update(id, d); }
-  @Delete(':id') @HttpCode(204) remove(@Param('id') id: string) { return this.svc.remove(id); }
+  @Get(':id') get(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.retrieve(u, id); }
+  @Patch(':id') patch(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateTaskCommentDto) { return this.svc.update(u, id, d); }
+  @Put(':id') put(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateTaskCommentDto) { return this.svc.update(u, id, d); }
+  @Delete(':id') @HttpCode(204) remove(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.remove(u, id); }
 }
 
 @ApiTags('kanban_columns')
 @Controller('kanban_columns')
 export class KanbanColumnsController {
   constructor(private readonly svc: KanbanColumnsService) {}
-  @Get() list(@Query() q: Q) { return this.svc.list(q); }
-  @Post() create(@Body() d: CreateKanbanColumnDto) { return this.svc.create(d); }
-  @Get(':id') get(@Param('id') id: string) { return this.svc.retrieve(id); }
-  @Patch(':id') patch(@Param('id') id: string, @Body() d: UpdateKanbanColumnDto) { return this.svc.update(id, d); }
-  @Put(':id') put(@Param('id') id: string, @Body() d: UpdateKanbanColumnDto) { return this.svc.update(id, d); }
-  @Delete(':id') @HttpCode(204) remove(@Param('id') id: string) { return this.svc.remove(id); }
+  @Get() list(@CurrentUser() u: User, @Query() q: Q) { return this.svc.list(u, q); }
+  @Post() create(@CurrentUser() u: User, @Body() d: CreateKanbanColumnDto) { return this.svc.create(u, d); }
+  @Get(':id') get(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.retrieve(u, id); }
+  @Patch(':id') patch(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateKanbanColumnDto) { return this.svc.update(u, id, d); }
+  @Put(':id') put(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateKanbanColumnDto) { return this.svc.update(u, id, d); }
+  @Delete(':id') @HttpCode(204) remove(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.remove(u, id); }
 }

@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
-# L-T-Connect Worker image (BullMQ consumers). Never serves HTTP (arch §1).
+# STRATA Worker image (BullMQ consumers). Never serves HTTP.
 FROM node:20-alpine AS base
-RUN corepack enable
+# tini = PID 1 init for correct SIGTERM propagation → graceful queue drain.
+RUN corepack enable && apk add --no-cache tini
 WORKDIR /repo
 
 FROM base AS deps
@@ -9,15 +10,23 @@ COPY package.json pnpm-workspace.yaml .npmrc tsconfig.base.json ./
 COPY apps/worker/package.json apps/worker/package.json
 COPY packages/config/package.json packages/config/package.json
 COPY packages/shared/package.json packages/shared/package.json
+# @strata/prisma is required by the worker's git processor; its manifest must be
+# present for the workspace install to resolve.
+COPY packages/prisma/package.json packages/prisma/package.json
 RUN pnpm install
 
 FROM deps AS build
 COPY . .
-# turbo builds @lt/worker's workspace deps (shared, config) first (^build).
-RUN pnpm exec turbo run build --filter=@lt/worker
+RUN pnpm --filter @strata/prisma run generate || echo "prisma generate skipped (no models yet)"
+# Build the worker and its workspace dependencies (shared, config, prisma) in
+# dependency order. The "..." suffix includes the package's dependencies.
+RUN pnpm --filter "@strata/worker..." run build
 
+# --- runtime (non-root) ---
 FROM base AS runtime
 ENV NODE_ENV=production
 COPY --from=build /repo /repo
 WORKDIR /repo/apps/worker
+USER node
+ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "dist/main.js"]

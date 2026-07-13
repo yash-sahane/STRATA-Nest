@@ -1,10 +1,8 @@
 /**
- * Cookie helpers for auth tests (mirrors the frozen cookie names — ADR-0003/0009).
- * Once AuthModule lands, a `mintTestToken` helper will be added here so tests can
- * create valid sessions without hitting the login endpoint.
+ * Cookie helpers for auth tests (mirrors the versioned cookie names).
  */
-export const ACCESS_COOKIE = 'lt_access';
-export const REFRESH_COOKIE = 'lt_refresh';
+export const ACCESS_COOKIE = 'strata_access';
+export const REFRESH_COOKIE = 'strata_refresh';
 
 /** Build a `Cookie` request header carrying access (and optional refresh) tokens. */
 export function authCookieHeader(accessToken: string, refreshToken?: string): string {
@@ -20,7 +18,7 @@ export interface ParsedCookie {
 
 /**
  * Parse a `Set-Cookie` response header array into name → { value, attrs }.
- * Lets contract tests assert cookie flags (HttpOnly, SameSite, Max-Age, …) match Django.
+ * Lets contract tests assert cookie flags (HttpOnly, SameSite, Max-Age, …) match the versioned contract.
  */
 export function parseSetCookies(setCookie: string[] | undefined): Record<string, ParsedCookie> {
   const out: Record<string, ParsedCookie> = {};

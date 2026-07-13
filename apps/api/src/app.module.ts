@@ -4,19 +4,23 @@ import { APP_GUARD } from '@nestjs/core';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
+import type Redis from 'ioredis';
 import { LoggerModule } from 'nestjs-pino';
-import { validateEnv } from '@lt/config';
-import { PrismaModule } from '@lt/prisma';
+import { validateEnv } from '@strata/config';
+import { PrismaModule } from '@strata/prisma';
 import { HealthModule } from './health/health.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
 import { ActivityModule } from './modules/activity/activity.module';
+import { AiModule } from './modules/ai/ai.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
 import { AuthzModule } from './modules/authz/authz.module';
 import { PermissionsGuard } from './modules/authz/permissions.guard';
 import { EmailModule } from './modules/email/email.module';
 import { EpicsModule } from './modules/epics/epics.module';
 import { FilesModule } from './modules/files/files.module';
+import { GenerationModule } from './modules/generation/generation.module';
 import { IntegrationsModule } from './modules/integrations/integrations.module';
 import { LeaveModule } from './modules/leave/leave.module';
 import { MailModule } from './modules/mail/mail.module';
@@ -31,7 +35,9 @@ import { TimeTrackingModule } from './modules/time-tracking/time-tracking.module
 import { UsersModule } from './modules/users/users.module';
 import { WorkspacesModule } from './modules/workspaces/workspaces.module';
 import { RedisModule } from './redis/redis.module';
+import { REDIS_CLIENT } from './redis/redis.constants';
 import { AuthThrottlerGuard } from './throttling/auth-throttler.guard';
+import { RedisThrottlerStorage } from './throttling/redis-throttler.storage';
 import { THROTTLE } from './throttling/throttle.constants';
 
 /**
@@ -41,7 +47,15 @@ import { THROTTLE } from './throttling/throttle.constants';
  */
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }),
+    // envFilePath is resolved relative to this file (not process.cwd()) so the
+    // repo-root .env loads whether started from the repo root, from apps/api
+    // directly, or via the e2e test runner (which imports AppModule directly,
+    // bypassing main.ts entirely).
+    ConfigModule.forRoot({
+      isGlobal: true,
+      validate: validateEnv,
+      envFilePath: join(__dirname, '../../../.env'),
+    }),
     LoggerModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
@@ -73,9 +87,14 @@ import { THROTTLE } from './throttling/throttle.constants';
         },
       }),
     }),
-    ThrottlerModule.forRoot([
-      { name: 'default', ttl: THROTTLE.default.ttl, limit: THROTTLE.default.limit },
-    ]),
+    // Redis-backed storage so rate limits are shared across replicas.
+    ThrottlerModule.forRootAsync({
+      inject: [REDIS_CLIENT],
+      useFactory: (redis: Redis) => ({
+        throttlers: [{ name: 'default', ttl: THROTTLE.default.ttl, limit: THROTTLE.default.limit }],
+        storage: new RedisThrottlerStorage(redis),
+      }),
+    }),
     EventEmitterModule.forRoot(),
     PrismaModule,
     RedisModule,
@@ -99,6 +118,8 @@ import { THROTTLE } from './throttling/throttle.constants';
     ActivityModule,
     FilesModule,
     IntegrationsModule,
+    GenerationModule,
+    AiModule,
     RealtimeModule,
   ],
   providers: [

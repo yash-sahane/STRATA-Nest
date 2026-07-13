@@ -7,12 +7,12 @@ import { SocketRegistry } from './socket-registry';
 
 /**
  * Raw-WebSocket gateway at `/ws/collections/` — matches the frontend's native
- * `WebSocket` client and the frozen frame contract (A§7.1, ADR-0003):
+ * `WebSocket` client and the frame contract:
  *   client → { action: 'subscribe' | 'unsubscribe', channels: [...] }
  *   server → { event, payload, channels, timestamp }
  *
  * Anonymous connections are rejected (close 4401). Subscription is permissive;
- * the security boundary is broadcast-time workspace filtering (D2 fix, see
+ * the security boundary is broadcast-time workspace filtering (see
  * RealtimeService.canReceive), so subscribing to a channel never leaks data.
  */
 @WebSocketGateway({ path: '/ws/collections/' })
@@ -25,13 +25,31 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
   ) {}
 
   async handleConnection(socket: WebSocket, request: IncomingMessage): Promise<void> {
+    // RC finding (live-verified race): authenticate() awaits a DB round-trip.
+    // A client that sends `subscribe` immediately on 'open' (the natural
+    // pattern — matches the real frontend client) can have that message
+    // arrive before this async function resumes and attaches the 'message'
+    // listener below, silently dropping it (no listener = no ack, no error;
+    // the client just never receives any broadcasts). Fix: attach the
+    // listener SYNCHRONOUSLY first and queue anything that arrives before
+    // auth/registration completes, then drain the queue.
+    const queued: string[] = [];
+    const buffer = (data: RawData): void => {
+      queued.push(data.toString());
+    };
+    socket.on('message', buffer);
+
     const authed = await this.auth.authenticate(request);
     if (!authed) {
+      socket.off('message', buffer);
       socket.close(4401);
       return;
     }
     this.registry.add(socket, authed.user, authed.workspaceIds);
+
+    socket.off('message', buffer);
     socket.on('message', (data: RawData) => this.onMessage(socket, data.toString()));
+    for (const raw of queued) this.onMessage(socket, raw);
   }
 
   handleDisconnect(socket: WebSocket): void {

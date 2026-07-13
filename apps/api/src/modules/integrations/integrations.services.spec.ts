@@ -1,5 +1,5 @@
 import type { ConfigService } from '@nestjs/config';
-import type { PrismaService } from '@lt/prisma';
+import type { PrismaService } from '@strata/prisma';
 import type { User } from '@prisma/client';
 import { GitHubIntegrationsService } from './integrations.services';
 import { IntegrationAccess } from './integration-access.service';

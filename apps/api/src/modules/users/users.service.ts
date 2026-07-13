@@ -1,8 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
-import { generateId, paginate, parseListQuery, type ListQuerySpec } from '@lt/common';
-import type { PaginatedResponse } from '@lt/shared';
-import { PrismaService } from '@lt/prisma';
+import { generateId, paginate, parseListQuery, type ListQuerySpec } from '@strata/common';
+import type { PaginatedResponse } from '@strata/shared';
+import { PrismaService } from '@strata/prisma';
 import type { Prisma, User } from '@prisma/client';
 import { MailService } from '../mail/mail.service';
 import { PasswordService } from '../auth/services/password.service';
@@ -47,7 +47,7 @@ export class UsersService {
     return user.isSuperuser || user.isAdminFlag;
   }
 
-  /** Prisma `where` restricting the User set to the caller's directory (A§5.4). */
+  /** Prisma `where` restricting the User set to the caller's directory. */
   private async directoryScope(caller: User): Promise<Prisma.UserWhereInput> {
     if (this.isPlatformAdmin(caller)) return {};
     const memberships = await this.prisma.workspaceMember.findMany({
@@ -93,7 +93,7 @@ export class UsersService {
     const target = await this.prisma.user.findFirst({ where: { AND: [scope, { id }] } });
     if (!target) throw new NotFoundException('No User matches the given query.');
     if (target.id !== caller.id && !this.isPlatformAdmin(caller)) {
-      return { softError: { status: 403, message: 'Forbidden' } }; // Django plain {message} 403
+      return { softError: { status: 403, message: 'Forbidden' } }; // plain {message} 403 body (frozen contract)
     }
     const data: Prisma.UserUpdateInput = {};
     if (dto.name !== undefined) data.name = dto.name;

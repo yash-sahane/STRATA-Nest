@@ -1,7 +1,7 @@
 /**
- * Prisma model name → frontend collection slug (the REALTIME_COLLECTION mapping,
- * A§7). Only models that were realtime-broadcast in Django appear here; `User`
- * and the authz.* tables are intentionally excluded.
+ * Prisma model name → frontend collection slug (the REALTIME_COLLECTION
+ * mapping). Only models the frontend needs realtime events for are listed
+ * here; `User` and the authz.* tables are intentionally excluded.
  */
 export const MODEL_COLLECTION: Record<string, string> = {
   Workspace: 'workspaces',
@@ -21,6 +21,15 @@ export const MODEL_COLLECTION: Record<string, string> = {
   TaskComment: 'task_comments',
   KanbanColumn: 'kanban_columns',
   Label: 'labels',
+  // HR/time collections — must broadcast on every write like every other
+  // realtime-enabled model, so they are listed here for the write hook to
+  // emit their events.
+  Attendance: 'attendance',
+  Holiday: 'holidays',
+  LeaveRequest: 'leave_requests',
+  LeaveBalance: 'leave_balances',
+  TimeEntry: 'time_entries',
+  ActiveTimer: 'active_timers',
   Notification: 'notifications',
   ActivityLog: 'activity_logs',
   SavedSearch: 'saved_searches',

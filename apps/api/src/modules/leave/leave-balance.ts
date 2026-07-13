@@ -1,7 +1,6 @@
 /**
- * Leave type → balance field mapping + required units. Ported verbatim from the
- * frontend `leave-balance-mapper.ts` / `leave-utils.ts` (the single source of
- * truth), so server-side deduction (D9) matches the client exactly.
+ * Leave type → balance field mapping + required units used for server-side
+ * balance deduction on approval.
  */
 export type LeaveBalanceField = 'paidLeave' | 'unpaidLeave' | 'halfDay' | 'compOff';
 

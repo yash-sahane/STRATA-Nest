@@ -1,14 +1,11 @@
-// Task domain — mapped to existing Django tables (tasks app, A§6.6).
+// Task domain (tasks app).
 //
-// Parity notes:
-// - Soft FKs (sprintId/epicId/functionalRequirementId/parentTaskId) stay scalar
+// Notes:
+// - Soft FKs (sprintId/epicId/functionalRequirementId/parentTaskId) are scalar
 //   id strings; JSON arrays (assigneeIds/assignedTo/watcherIds/labels/blockedBy/
-//   blocks/attachments) stay JSON — Django serializes them as arrays. The
-//   TaskLabel/TaskDependency normalization (M§2) is deferred to a live-DB pass
-//   (ADR-0008); it preserves the wire arrays.
-// - TaskComment and KanbanColumn have NO workspace column in Django, so the base
-//   viewset does NOT scope them (any authenticated user). Reproduced faithfully
-//   (a pre-existing gap, like ActiveTimer/integrations — tighten in a security pass).
+//   blocks/attachments) are stored as JSON to match the wire format.
+// - TaskComment and KanbanColumn have no workspace column of their own; access
+//   is scoped through their parent Task / Project in the services layer.
 
 model Task {
   id                      String    @id

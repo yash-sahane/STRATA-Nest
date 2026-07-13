@@ -1,8 +1,8 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { generateId } from '@lt/common';
-import { WorkspaceEvents } from '@lt/shared';
-import { PrismaService } from '@lt/prisma';
+import { generateId } from '@strata/common';
+import { WorkspaceEvents } from '@strata/shared';
+import { PrismaService } from '@strata/prisma';
 import type { Prisma, User } from '@prisma/client';
 import { Permission } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
@@ -21,9 +21,9 @@ function emit(events: EventEmitter2, name: string, workspaceId: string, payload:
 }
 
 /**
- * Application service (arch §3.1): accepting an email invitation or invite code
+ * Application service: accepting an email invitation or invite code
  * is a cross-aggregate workflow (invitation + membership) — one transaction, one
- * post-commit event. [NEW] server-side behavior (was client-driven, A§6.1).
+ * post-commit event, handled entirely server-side.
  */
 @Injectable()
 export class InvitationAcceptanceService {
@@ -112,8 +112,8 @@ export class InvitationAcceptanceService {
 }
 
 /**
- * Application service (arch §3.1): approving/rejecting a join request spans the
- * request + membership. Approver must hold `join:manage`. [NEW] (was a client PATCH).
+ * Application service: approving/rejecting a join request spans the
+ * request + membership. Approver must hold `join:manage`.
  */
 @Injectable()
 export class JoinRequestApprovalService {

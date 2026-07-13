@@ -1,8 +1,8 @@
 /**
  * Minimal, dependency-free factory helper. Domain factories (User, Workspace, …)
- * are defined with their modules using this — they are NOT here in Phase 0.
+ * are defined alongside their modules using this.
  *
- * Usage (later, in a module's tests):
+ * Usage (in a module's tests):
  *   const userFactory = defineFactory<User>((seq) => ({
  *     id: generateId(), email: `user${seq}@example.test`, name: `User ${seq}`, ...
  *   }));

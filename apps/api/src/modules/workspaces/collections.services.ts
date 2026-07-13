@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
-import { generateId, type ListQuerySpec } from '@lt/common';
-import { PrismaService } from '@lt/prisma';
+import { generateId, type ListQuerySpec } from '@strata/common';
+import { PrismaService } from '@strata/prisma';
 import type {
   EmailInvitation,
   InviteCode,

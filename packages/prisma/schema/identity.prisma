@@ -1,4 +1,4 @@
-// Identity models — mapped to the existing Django tables.
+// Identity models (users, workspaces, memberships).
 
 model User {
   id              String    @id

@@ -7,13 +7,13 @@ import {
   type JoinRequestHandledPayload,
   type SprintLifecyclePayload,
   type WorkspaceMemberAddedPayload,
-} from '@lt/shared';
+} from '@strata/shared';
 import { RealtimeService } from './realtime.service';
 
 /**
- * Bridges business domain events (Phases 2–6) onto realtime channels (ADR-0006).
+ * Bridges business domain events onto realtime channels.
  * Supplementary to the CRUD write hook — gives clients explicit business-event
- * signals for the [NEW] workflows that don't map to a single watched CRUD.
+ * signals for workflows that don't map to a single watched CRUD.
  */
 @Injectable()
 export class RealtimeSubscriber {

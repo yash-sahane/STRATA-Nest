@@ -5,19 +5,16 @@
 - Deciders: Principal Architect, Staff Engineer
 
 ## Context
-Every Django model extends `TimestampedModel` whose PK is a **20-char `secrets.choice` alphanumeric string** generated in the app, not a UUID or auto-increment (A§4.1, A§9.1). These IDs are embedded in: stored soft-FK strings across tables (A§9.2), the frontend's TanStack Query cache keys, collection slugs, and WS per-entity channels (A§7, A§13).
+Every domain model uses a **20-char alphanumeric string primary key** generated in the application, not a UUID or auto-increment. These IDs thread through the whole stack: they are embedded in stored soft-FK strings across tables, the frontend's TanStack Query cache keys, collection slugs, and per-entity WebSocket channels.
 
 ## Decision
-Keep the identity scheme **exactly**: Prisma `id String @id` with an **app-generated 20-char default** whose alphabet and length match the Django `generate_native_id()` byte-for-byte. No switch to UUID/int.
+Use `id String @id` with an **application-generated 20-char alphanumeric default**. No UUID/int.
 
 ## Consequences
-- (+) Existing data migrates verbatim; no rewrite of soft FKs; frontend caches stay valid.
+- (+) One ID shape everywhere — soft-FK strings, frontend cache keys, slugs, and WS channels all key off the same value; nothing needs a parallel numeric key.
 - (+) IDs remain short, opaque, URL-safe.
-- (−) Non-sequential PKs have worse index locality than bigint — accepted; `createdAt` indexes cover ordering (A§9.4).
-- Follow-up: `generateId()` in `packages/common` must have a unit test asserting parity with the Django generator before any data flows.
+- (−) Non-sequential PKs have worse index locality than bigint — accepted; `createdAt` indexes cover ordering.
+- `generateId()` in `packages/common` has a unit test asserting the ID format (alphabet, length, uniqueness).
 
 ## Alternatives considered
-- **UUIDv7 / int IDs:** rejected — breaks every stored soft-FK string and every frontend cache key (A§13), with no contract benefit.
-
-## Traceability
-A§4.1, A§9.1, A§9.2, A§13 · §4, ADR-0003
+- **UUIDv7 / int IDs:** rejected — a different ID shape would ripple through every soft-FK string, cache key, slug, and channel for no contract benefit.

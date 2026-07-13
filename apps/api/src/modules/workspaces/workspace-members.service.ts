@@ -1,9 +1,9 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { generateId, paginate, parseListQuery, type ListQuerySpec } from '@lt/common';
-import type { PaginatedResponse } from '@lt/shared';
-import { WorkspaceEvents } from '@lt/shared';
-import { PrismaService } from '@lt/prisma';
+import { generateId, paginate, parseListQuery, type ListQuerySpec } from '@strata/common';
+import type { PaginatedResponse } from '@strata/shared';
+import { WorkspaceEvents } from '@strata/shared';
+import { PrismaService } from '@strata/prisma';
 import type { Prisma, User, WorkspaceMember } from '@prisma/client';
 import { Permission } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';

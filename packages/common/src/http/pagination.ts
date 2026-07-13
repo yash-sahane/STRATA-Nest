@@ -1,7 +1,7 @@
-import type { PaginatedResponse } from '@lt/shared';
+import type { PaginatedResponse } from '@strata/shared';
 
-export const DEFAULT_PAGE_SIZE = 100; // A§4.4
-export const MAX_PAGE_SIZE = 1000; // A§4.4
+export const DEFAULT_PAGE_SIZE = 100; // used when the client omits pageSize
+export const MAX_PAGE_SIZE = 1000; // upper bound; larger requests are clamped
 
 /** Coerce/clamp raw page + pageSize query values to safe bounds. */
 export function normalizePageParams(rawPage?: unknown, rawPageSize?: unknown): {
@@ -19,7 +19,7 @@ export function normalizePageParams(rawPage?: unknown, rawPageSize?: unknown): {
 }
 
 /**
- * Build the FROZEN Django pagination envelope (CURRENT_SYSTEM_AUDIT.md §4.4; ADR-0003):
+ * Build the versioned pagination envelope:
  *   { items, total, page, pageSize }
  */
 export function paginate<T>(items: T[], total: number, page: number, pageSize: number): PaginatedResponse<T> {

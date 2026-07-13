@@ -1,6 +1,6 @@
-// Workspace/membership test helpers (Phase 2). Shared so downstream modules
+// Workspace/membership test helpers. Shared so downstream modules
 // reuse one implementation instead of reinventing scoped fixtures.
-import { generateId } from '@lt/common';
+import { generateId } from '@strata/common';
 import { defineFactory } from '../factories/factory';
 
 export interface WorkspaceSeed {

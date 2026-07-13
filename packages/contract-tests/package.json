@@ -1,8 +1,8 @@
 {
-  "name": "@lt/contract-tests",
+  "name": "@strata/contract-tests",
   "version": "0.1.0",
   "private": true,
-  "description": "Frozen-contract + characterization harness (ADR-0003, arch §19). Runs against the legacy Django API now, and against NestJS per phase to prove parity.",
+  "description": "Wire-contract regression suite. Runs against the running STRATA API.",
   "scripts": {
     "build": "echo \"(no build)\" && exit 0",
     "typecheck": "tsc -p tsconfig.json --noEmit",

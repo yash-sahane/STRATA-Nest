@@ -1,4 +1,4 @@
-import type { PrismaService } from '@lt/prisma';
+import type { PrismaService } from '@strata/prisma';
 import { SprintCompletedTaskRoller } from './task-roll.subscriber';
 
 function prismaWith(count: number) {

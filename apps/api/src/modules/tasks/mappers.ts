@@ -1,9 +1,9 @@
-import { toDjangoIso } from '@lt/common';
+import { formatApiTimestamp } from '@strata/common';
 import type { KanbanColumn, Label, Task, TaskComment } from '@prisma/client';
 
-const isoOrNull = (d: Date | null): string | null => (d ? toDjangoIso(d) : null);
+const isoOrNull = (d: Date | null): string | null => (d ? formatApiTimestamp(d) : null);
 
-/** Field order mirrors the Django TaskSerializer (createdAt/updatedAt last). */
+/** Field order matches the API's frozen Task contract (createdAt/updatedAt last). */
 export function taskResponse(t: Task) {
   return {
     id: String(t.id),
@@ -35,8 +35,8 @@ export function taskResponse(t: Task) {
     position: t.position,
     blockedBy: t.blockedBy,
     blocks: t.blocks,
-    createdAt: toDjangoIso(t.createdAt),
-    updatedAt: toDjangoIso(t.updatedAt),
+    createdAt: formatApiTimestamp(t.createdAt),
+    updatedAt: formatApiTimestamp(t.updatedAt),
   };
 }
 
@@ -48,8 +48,8 @@ export function taskCommentResponse(c: TaskComment) {
     content: c.content,
     mentions: c.mentions,
     attachments: c.attachments,
-    createdAt: toDjangoIso(c.createdAt),
-    updatedAt: toDjangoIso(c.updatedAt),
+    createdAt: formatApiTimestamp(c.createdAt),
+    updatedAt: formatApiTimestamp(c.updatedAt),
   };
 }
 
@@ -62,8 +62,8 @@ export function kanbanColumnResponse(k: KanbanColumn) {
     wipLimit: k.wipLimit,
     position: k.position,
     color: k.color,
-    createdAt: toDjangoIso(k.createdAt),
-    updatedAt: toDjangoIso(k.updatedAt),
+    createdAt: formatApiTimestamp(k.createdAt),
+    updatedAt: formatApiTimestamp(k.updatedAt),
   };
 }
 
@@ -75,7 +75,7 @@ export function labelResponse(l: Label) {
     name: l.name,
     color: l.color,
     description: l.description,
-    createdAt: toDjangoIso(l.createdAt),
-    updatedAt: toDjangoIso(l.updatedAt),
+    createdAt: formatApiTimestamp(l.createdAt),
+    updatedAt: formatApiTimestamp(l.updatedAt),
   };
 }

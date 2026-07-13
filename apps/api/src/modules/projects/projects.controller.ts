@@ -4,13 +4,17 @@ import type { User } from '@prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Permission } from '../authz/permissions';
 import { RequirePermission } from '../authz/require-permission.decorator';
+import { ProjectDeletionService } from '../deletion/project-deletion.service';
 import { CreateProjectDto, UpdateProjectDto } from './dto';
 import { ProjectsService } from './projects.service';
 
 @ApiTags('projects')
 @Controller('projects')
 export class ProjectsController {
-  constructor(private readonly projects: ProjectsService) {}
+  constructor(
+    private readonly projects: ProjectsService,
+    private readonly deletion: ProjectDeletionService,
+  ) {}
 
   @Get()
   list(@CurrentUser() user: User, @Query() query: Record<string, string | string[] | undefined>) {
@@ -41,6 +45,6 @@ export class ProjectsController {
   @Delete(':id')
   @HttpCode(204)
   remove(@CurrentUser() user: User, @Param('id') id: string) {
-    return this.projects.remove(user, id);
+    return this.deletion.delete(user, id);
   }
 }

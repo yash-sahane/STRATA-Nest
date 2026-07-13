@@ -1,7 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { HrEvents } from '@lt/shared';
-import { PrismaService } from '@lt/prisma';
+import { HrEvents } from '@strata/shared';
+import { PrismaService } from '@strata/prisma';
 import type { LeaveRequest, Prisma, User } from '@prisma/client';
 import { Permission } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
@@ -9,10 +9,9 @@ import { LEAVE_TYPE_TO_BALANCE_FIELD, requiredUnits } from './leave-balance';
 import { leaveRequestResponse } from './mappers';
 
 /**
- * Application service (arch §3.1) — [NEW] server-side leave approval (D9):
- * approve → mark APPROVED + **deduct the mapped LeaveBalance field** in one
- * transaction, then emit `leave.approved`. Self-approval is blocked even for
- * managers. (Was a client-side PATCH with no balance effect, A§6.8.)
+ * Server-side leave approval: approve → mark APPROVED + **deduct the mapped
+ * LeaveBalance field** in one transaction, then emit `leave.approved`.
+ * Self-approval is blocked even for managers.
  */
 @Injectable()
 export class LeaveApprovalService {
@@ -33,7 +32,7 @@ export class LeaveApprovalService {
   async approve(user: User, id: string) {
     const req = await this.load(user, id);
     if (req.userId === user.id) {
-      throw new ForbiddenException('Cannot approve your own leave request'); // self-approval block (D9)
+      throw new ForbiddenException('Cannot approve your own leave request'); // self-approval block
     }
 
     const year = new Date(req.startDate).getUTCFullYear();

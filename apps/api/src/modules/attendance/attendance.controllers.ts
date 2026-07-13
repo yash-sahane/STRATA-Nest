@@ -22,7 +22,7 @@ export class AttendanceController {
   constructor(private readonly svc: AttendanceService) {}
   @Get() list(@CurrentUser() u: User, @Query() q: Q) { return this.svc.list(u, q); }
   @Post() @RequirePermission(Permission.HrWrite) create(@CurrentUser() u: User, @Body() d: CreateAttendanceDto) { return this.svc.create(u, d); }
-  /** [NEW] server-computed check-in/out. */
+  /** Server-computed check-in/out. */
   @Post('check-in') @RequirePermission(Permission.HrWrite) checkIn(@CurrentUser() u: User, @Body() d: CheckInDto) { return this.svc.checkIn(u, d); }
   @Post('check-out') @RequirePermission(Permission.HrWrite) checkOut(@CurrentUser() u: User, @Body() d: CheckOutDto) { return this.svc.checkOut(u, d); }
   @Get(':id') get(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.retrieve(u, id); }

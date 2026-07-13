@@ -1,20 +1,19 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { generateId } from '@lt/common';
-import { PlanningEvents } from '@lt/shared';
-import { PrismaService } from '@lt/prisma';
+import { generateId } from '@strata/common';
+import { PlanningEvents } from '@strata/shared';
+import { PrismaService } from '@strata/prisma';
 import type { Prisma, Sprint, User } from '@prisma/client';
 import { Permission } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { sprintResponse } from './mappers';
 
 /**
- * Application service (arch §3.1) — [NEW] server-side sprint completion:
- * close the sprint + seed an empty retrospective (if none) in one transaction,
- * then emit SprintCompleted after commit.
+ * Server-side sprint completion: close the sprint + seed an empty retrospective
+ * (if none) in one transaction, then emit SprintCompleted after commit.
  *
- * Rolling incomplete tasks to the backlog/next sprint is wired in Phase 6 (a
- * Tasks subscriber to `sprint.completed`) — the Task model does not exist yet.
+ * Rolling incomplete tasks back to the backlog is handled separately by a
+ * Tasks-side subscriber to `sprint.completed`.
  */
 @Injectable()
 export class SprintCompletionService {

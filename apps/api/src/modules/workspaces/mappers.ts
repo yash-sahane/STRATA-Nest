@@ -1,4 +1,4 @@
-import { toDjangoIso } from '@lt/common';
+import { formatApiTimestamp } from '@strata/common';
 import type {
   EmailInvitation,
   InviteCode,
@@ -10,9 +10,9 @@ import type {
   WorkspaceRole,
 } from '@prisma/client';
 
-const isoOrNull = (d: Date | null): string | null => (d ? toDjangoIso(d) : null);
+const isoOrNull = (d: Date | null): string | null => (d ? formatApiTimestamp(d) : null);
 
-/** Field order mirrors the Django serializers (createdAt/updatedAt appended last). */
+/** Field order matches the API's frozen contract (createdAt/updatedAt appended last). */
 
 export function workspaceResponse(w: Workspace, memberIds: string[]) {
   return {
@@ -25,8 +25,8 @@ export function workspaceResponse(w: Workspace, memberIds: string[]) {
     inviteCode: w.inviteCode,
     settings: w.settings,
     memberIds,
-    createdAt: toDjangoIso(w.createdAt),
-    updatedAt: toDjangoIso(w.updatedAt),
+    createdAt: formatApiTimestamp(w.createdAt),
+    updatedAt: formatApiTimestamp(w.updatedAt),
   };
 }
 
@@ -45,9 +45,9 @@ export function memberResponse(
     avatar: user?.avatar ?? '',
     role: m.role,
     status: m.status,
-    joinedAt: toDjangoIso(m.joinedAt),
-    createdAt: toDjangoIso(m.createdAt),
-    updatedAt: toDjangoIso(m.updatedAt),
+    joinedAt: formatApiTimestamp(m.joinedAt),
+    createdAt: formatApiTimestamp(m.createdAt),
+    updatedAt: formatApiTimestamp(m.updatedAt),
   };
 }
 
@@ -57,8 +57,8 @@ export function roleResponse(r: WorkspaceRole) {
     workspaceId: r.workspaceId,
     name: r.name,
     permissions: r.permissions,
-    createdAt: toDjangoIso(r.createdAt),
-    updatedAt: toDjangoIso(r.updatedAt),
+    createdAt: formatApiTimestamp(r.createdAt),
+    updatedAt: formatApiTimestamp(r.updatedAt),
   };
 }
 
@@ -72,8 +72,8 @@ export function inviteCodeResponse(c: InviteCode) {
     usedCount: c.usedCount,
     expiresAt: isoOrNull(c.expiresAt),
     createdBy: c.createdById,
-    createdAt: toDjangoIso(c.createdAt),
-    updatedAt: toDjangoIso(c.updatedAt),
+    createdAt: formatApiTimestamp(c.createdAt),
+    updatedAt: formatApiTimestamp(c.updatedAt),
   };
 }
 
@@ -85,10 +85,10 @@ export function emailInvitationResponse(i: EmailInvitation) {
     role: i.role,
     token: i.token,
     status: i.status,
-    expiresAt: toDjangoIso(i.expiresAt),
+    expiresAt: formatApiTimestamp(i.expiresAt),
     invitedBy: i.invitedById,
-    createdAt: toDjangoIso(i.createdAt),
-    updatedAt: toDjangoIso(i.updatedAt),
+    createdAt: formatApiTimestamp(i.createdAt),
+    updatedAt: formatApiTimestamp(i.updatedAt),
   };
 }
 
@@ -100,8 +100,8 @@ export function joinRequestResponse(j: JoinRequest) {
     message: j.message,
     status: j.status,
     handledBy: j.handledById,
-    createdAt: toDjangoIso(j.createdAt),
-    updatedAt: toDjangoIso(j.updatedAt),
+    createdAt: formatApiTimestamp(j.createdAt),
+    updatedAt: formatApiTimestamp(j.updatedAt),
   };
 }
 
@@ -111,7 +111,7 @@ export function pendingAccessResponse(p: PendingWorkspaceAccess) {
     workspaceId: p.workspaceId,
     userId: p.userId,
     requestedRole: p.requestedRole,
-    createdAt: toDjangoIso(p.createdAt),
-    updatedAt: toDjangoIso(p.updatedAt),
+    createdAt: formatApiTimestamp(p.createdAt),
+    updatedAt: formatApiTimestamp(p.updatedAt),
   };
 }

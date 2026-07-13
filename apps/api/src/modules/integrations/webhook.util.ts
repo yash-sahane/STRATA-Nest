@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import type { GitCommitInput } from '@lt/shared';
+import type { GitCommitInput } from '@strata/shared';
 
 /** Constant-time string compare (avoids length/short-circuit timing leaks). */
 function safeEqual(a: string, b: string): boolean {

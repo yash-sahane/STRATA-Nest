@@ -1,4 +1,4 @@
-import { toDjangoIso } from '@lt/common';
+import { formatApiTimestamp } from '@strata/common';
 import type {
   DiscordIntegration,
   GitCommit,
@@ -9,7 +9,7 @@ import type {
 
 const asJson = (v: Prisma.JsonValue): unknown => v ?? [];
 
-// accessToken is write_only in Django — NEVER serialized back (D4).
+// accessToken is write-only — NEVER serialized back.
 export function githubIntegrationResponse(g: GitHubIntegration) {
   return {
     id: String(g.id),
@@ -19,8 +19,8 @@ export function githubIntegrationResponse(g: GitHubIntegration) {
     webhookSecret: g.webhookSecret,
     autoUpdateStatus: g.autoUpdateStatus,
     enabledEvents: asJson(g.enabledEvents),
-    createdAt: toDjangoIso(g.createdAt),
-    updatedAt: toDjangoIso(g.updatedAt),
+    createdAt: formatApiTimestamp(g.createdAt),
+    updatedAt: formatApiTimestamp(g.updatedAt),
   };
 }
 
@@ -32,8 +32,8 @@ export function gitlabIntegrationResponse(g: GitLabIntegration) {
     webhookSecret: g.webhookSecret,
     autoUpdateStatus: g.autoUpdateStatus,
     enabledEvents: asJson(g.enabledEvents),
-    createdAt: toDjangoIso(g.createdAt),
-    updatedAt: toDjangoIso(g.updatedAt),
+    createdAt: formatApiTimestamp(g.createdAt),
+    updatedAt: formatApiTimestamp(g.updatedAt),
   };
 }
 
@@ -43,8 +43,8 @@ export function discordIntegrationResponse(d: DiscordIntegration) {
     projectId: d.projectId,
     webhookUrl: d.webhookUrl,
     enabledEvents: asJson(d.enabledEvents),
-    createdAt: toDjangoIso(d.createdAt),
-    updatedAt: toDjangoIso(d.updatedAt),
+    createdAt: formatApiTimestamp(d.createdAt),
+    updatedAt: formatApiTimestamp(d.updatedAt),
   };
 }
 
@@ -57,10 +57,10 @@ export function gitCommitResponse(c: GitCommit) {
     message: c.message,
     author: c.author,
     authorEmail: c.authorEmail,
-    timestamp: toDjangoIso(c.timestamp),
+    timestamp: formatApiTimestamp(c.timestamp),
     linkedTaskIds: asJson(c.linkedTaskIds),
     url: c.url,
-    createdAt: toDjangoIso(c.createdAt),
-    updatedAt: toDjangoIso(c.updatedAt),
+    createdAt: formatApiTimestamp(c.createdAt),
+    updatedAt: formatApiTimestamp(c.updatedAt),
   };
 }

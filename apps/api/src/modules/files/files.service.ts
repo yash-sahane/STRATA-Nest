@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { generateId, paginate, parseListQuery, type ListQuerySpec } from '@lt/common';
-import type { PaginatedResponse } from '@lt/shared';
-import { PrismaService } from '@lt/prisma';
+import { generateId, paginate, parseListQuery, type ListQuerySpec } from '@strata/common';
+import type { PaginatedResponse } from '@strata/shared';
+import { PrismaService } from '@strata/prisma';
 import type { UploadedFile, User } from '@prisma/client';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { StorageService } from '../storage/storage.service';
@@ -27,9 +27,9 @@ const SPEC: ListQuerySpec = {
 };
 
 /**
- * Files (A§6.13). Membership-scoped like Django's viewset — a member sees files
- * in their ACTIVE workspaces PLUS global files (empty workspaceId). Blobs go
- * through StorageService; the row only holds the storage key + metadata.
+ * Files. Membership-scoped — a member sees files in their ACTIVE workspaces
+ * PLUS global files (empty workspaceId). Blobs go through StorageService; the
+ * row only holds the storage key + metadata.
  */
 @Injectable()
 export class FilesService {
@@ -45,7 +45,7 @@ export class FilesService {
     return uploadedFileResponse(f, this.storage.url(f.filePath));
   }
 
-  /** Django get_queryset: workspace_id in memberships + "" (global); admin = all. */
+  /** Scope: workspace_id in memberships + "" (global); admin sees all. */
   private async scope(user: User): Promise<Record<string, unknown>> {
     const ids = await this.access.accessibleWorkspaceIds(user);
     if (ids === null) return {};
@@ -114,7 +114,7 @@ export class FilesService {
     try {
       await this.storage.remove(row.filePath);
     } catch (err) {
-      // Django parity: a blob-delete failure is logged, not fatal.
+      // A blob-delete failure is logged, not fatal — the metadata row is still removed below.
       this.logger.warn(`blob deletion failed for ${id}: ${(err as Error).message}`);
     }
     await this.prisma.uploadedFile.delete({ where: { id } });

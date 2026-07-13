@@ -5,6 +5,6 @@ module.exports = {
   rootDir: 'src',
   testRegex: '.*\\.spec\\.ts$',
   moduleNameMapper: {
-    '^@lt/shared$': '<rootDir>/../../shared/src/index.ts',
+    '^@strata/shared$': '<rootDir>/../../shared/src/index.ts',
   },
 };

@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { DeletionModule } from '../deletion/deletion.module';
 import { SprintCompletedTaskRoller } from './task-roll.subscriber';
 import {
   KanbanColumnsController,
@@ -10,6 +11,7 @@ import { LabelsService, TasksService } from './tasks.services';
 import { KanbanColumnsService, TaskCommentsService } from './unscoped.services';
 
 @Module({
+  imports: [DeletionModule],
   controllers: [TasksController, LabelsController, TaskCommentsController, KanbanColumnsController],
   providers: [
     TasksService,

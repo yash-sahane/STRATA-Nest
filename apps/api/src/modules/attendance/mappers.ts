@@ -1,8 +1,8 @@
-import { toDjangoIso } from '@lt/common';
+import { formatApiTimestamp } from '@strata/common';
 import type { Attendance, Holiday } from '@prisma/client';
 
 const dateOnly = (d: Date): string => d.toISOString().slice(0, 10);
-const isoOrNull = (d: Date | null): string | null => (d ? toDjangoIso(d) : null);
+const isoOrNull = (d: Date | null): string | null => (d ? formatApiTimestamp(d) : null);
 
 export function attendanceResponse(a: Attendance) {
   return {
@@ -10,7 +10,7 @@ export function attendanceResponse(a: Attendance) {
     workspaceId: a.workspaceId,
     userId: a.userId,
     date: dateOnly(a.date),
-    checkInTime: toDjangoIso(a.checkInTime),
+    checkInTime: formatApiTimestamp(a.checkInTime),
     checkOutTime: isoOrNull(a.checkOutTime),
     workHours: a.workHours,
     status: a.status,
@@ -21,8 +21,8 @@ export function attendanceResponse(a: Attendance) {
     isHoliday: a.isHoliday,
     createdBy: a.createdById,
     createdByName: a.createdByName,
-    createdAt: toDjangoIso(a.createdAt),
-    updatedAt: toDjangoIso(a.updatedAt),
+    createdAt: formatApiTimestamp(a.createdAt),
+    updatedAt: formatApiTimestamp(a.updatedAt),
   };
 }
 
@@ -34,7 +34,7 @@ export function holidayResponse(h: Holiday) {
     date: dateOnly(h.date),
     isOptional: h.isOptional,
     description: h.description,
-    createdAt: toDjangoIso(h.createdAt),
-    updatedAt: toDjangoIso(h.updatedAt),
+    createdAt: formatApiTimestamp(h.createdAt),
+    updatedAt: formatApiTimestamp(h.updatedAt),
   };
 }

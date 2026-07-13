@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
 
 /**
- * Structured authentication audit log (Phase 1A observability). Every event
+ * Structured authentication audit log. Every event
  * carries the request correlation id automatically (pino stores the per-request
  * logger in AsyncLocalStorage), so an audit line ties back to its HTTP request
  * log (ip, url, status). Failures log at WARN so they're easy to alert on.

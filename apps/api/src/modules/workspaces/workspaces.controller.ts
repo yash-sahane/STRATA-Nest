@@ -2,6 +2,7 @@ import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Put, Query
 import { ApiTags } from '@nestjs/swagger';
 import type { User } from '@prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { WorkspaceDeletionService } from '../deletion/workspace-deletion.service';
 import { AcceptInvitationDto, CreateWorkspaceDto, UpdateWorkspaceDto } from './dto';
 import { InvitationAcceptanceService } from './workflows.services';
 import { WorkspacesService } from './workspaces.service';
@@ -12,6 +13,7 @@ export class WorkspacesController {
   constructor(
     private readonly workspaces: WorkspacesService,
     private readonly invitations: InvitationAcceptanceService,
+    private readonly deletion: WorkspaceDeletionService,
   ) {}
 
   @Get()
@@ -24,7 +26,7 @@ export class WorkspacesController {
     return this.workspaces.create(user, dto);
   }
 
-  /** [NEW] Accept an email invitation (token) or invite code — transactional workflow. */
+  /** Accept an email invitation (token) or invite code — transactional workflow. */
   @Post('accept-invitation')
   acceptInvitation(@CurrentUser() user: User, @Body() dto: AcceptInvitationDto) {
     return this.invitations.accept(user, dto);
@@ -45,9 +47,10 @@ export class WorkspacesController {
     return this.workspaces.update(user, id, dto);
   }
 
+  /** Aggregate-root delete — orchestrated cascade (DeletionModule), not a bare row delete. */
   @Delete(':id')
   @HttpCode(204)
   remove(@CurrentUser() user: User, @Param('id') id: string) {
-    return this.workspaces.remove(user, id);
+    return this.deletion.delete(user, id);
   }
 }

@@ -1,12 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { EmailKind } from '@lt/shared';
+import { EmailKind } from '@strata/shared';
 import { EmailService } from '../email/email.service';
 
 /**
- * Transactional mail (Phases 1/2). Phase 10 moves these OFF inline sends onto
- * the BullMQ email queue (D7) via EmailService — the method contract callers
- * use is unchanged. Idempotency keys keep retries/double-submits from sending
+ * Transactional mail. Delivery goes through the BullMQ email queue via
+ * EmailService. Idempotency keys keep retries/double-submits from sending
  * twice. The worker renders + delivers (Resend, else logs).
  */
 @Injectable()

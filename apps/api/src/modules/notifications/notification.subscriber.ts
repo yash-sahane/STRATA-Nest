@@ -10,15 +10,15 @@ import {
   type TimeEntryDecisionPayload,
   type WorkspaceMemberAddedPayload,
   type WorkspaceMemberRoleChangedPayload,
-} from '@lt/shared';
+} from '@strata/shared';
 import { NotificationsService, type NotificationInput } from './notifications.service';
 
 /**
- * [NEW, D9] Server-guaranteed notifications. Listens to the business events
- * emitted by Phases 2–8 and creates a per-user Notification (+ in_app delivery)
- * for each — the frontend no longer has to POST its own. Runs AFTER commit
- * (events are emitted post-commit, arch §4) and never throws back into the
- * originating request: a delivery failure is logged, not propagated.
+ * Server-guaranteed notifications. Listens to the business events emitted across
+ * the app and creates a per-user Notification (+ in_app delivery) for each, so
+ * clients don't have to create their own. Runs AFTER commit (events are emitted
+ * post-commit) and never throws back into the originating request: a delivery
+ * failure is logged, not propagated.
  */
 @Injectable()
 export class NotificationSubscriber {

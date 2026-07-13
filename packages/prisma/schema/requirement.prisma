@@ -1,13 +1,10 @@
-// Requirements — mapped to existing Django tables (requirements app, A§6.3).
+// Requirements (requirements app).
 //
-// Parity notes:
-// - Soft FKs (epicId/sprintId/clientRequirementId) stay scalar strings for now:
-//   Epic/Sprint models land Phase 5, and relation promotion + `""`→null backfill
-//   (ADR-0008) is a dedicated data-quality pass against the live DB. Wire emits
-//   the id strings, matching Django.
-// - `tags`/`linkedProjectIds` are Django TextField (CSV) serialized AS STRINGS —
-//   kept as String here to preserve the frozen wire contract (ADR-0003). The
-//   array normalization (M§2) is deferred; it would be a v2 contract change.
+// Notes:
+// - Soft FKs (epicId/sprintId/clientRequirementId) are scalar id strings; the
+//   wire emits raw ids.
+// - `tags`/`linkedProjectIds` are CSV-serialized AS STRINGS to match the wire
+//   contract; array normalization would be a v2 contract change.
 
 model ClientRequirement {
   id            String   @id

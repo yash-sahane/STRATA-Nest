@@ -11,7 +11,7 @@ const base = {
 };
 
 describe('clientRequirementResponse', () => {
-  it('preserves the Django field order + microsecond timestamps', () => {
+  it('preserves the fixed field order + microsecond timestamps', () => {
     const r = clientRequirementResponse({
       id: 'cr1',
       title: 'T',
@@ -53,7 +53,7 @@ describe('functionalRequirementResponse', () => {
       linkedProjectIds: 'p2,p3',
       ...base,
     } as FunctionalRequirement);
-    expect(r.tags).toBe('a,b,c'); // string, not array (wire parity)
+    expect(r.tags).toBe('a,b,c'); // string, not array (fixed wire contract)
     expect(r.linkedProjectIds).toBe('p2,p3');
     expect(r.createdBy).toBe('u1');
     expect(Object.keys(r)).toEqual([

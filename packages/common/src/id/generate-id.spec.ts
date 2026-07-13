@@ -1,17 +1,17 @@
 import { generateId, isNativeId, ID_ALPHABET, ID_LENGTH } from './generate-id';
 
 /**
- * Parity guard for ADR-0002: these IDs must remain indistinguishable from the
- * Django generator so existing data and frontend cache keys keep working.
+ * Guard: these IDs must remain in the application's permanent
+ * format so existing data and frontend cache keys keep working.
  */
-describe('generateId — Django parity', () => {
+describe('generateId — permanent ID format', () => {
   it('produces ids of exactly 20 characters', () => {
     for (let i = 0; i < 100; i += 1) {
       expect(generateId()).toHaveLength(ID_LENGTH);
     }
   });
 
-  it('uses only the Django alphabet [a-zA-Z0-9]', () => {
+  it('uses only the permanent alphabet [a-zA-Z0-9]', () => {
     const blob = Array.from({ length: 5000 }, () => generateId()).join('');
     expect(/^[A-Za-z0-9]+$/.test(blob)).toBe(true);
   });

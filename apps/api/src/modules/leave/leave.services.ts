@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { type ListQuerySpec } from '@lt/common';
-import { PrismaService } from '@lt/prisma';
+import { type ListQuerySpec } from '@strata/common';
+import { PrismaService } from '@strata/prisma';
 import type { LeaveBalance, LeaveRequest, User } from '@prisma/client';
 import { Permission, type PermissionKey } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
@@ -37,7 +37,7 @@ export class LeaveRequestsService extends ScopedCrudService<
     return leaveRequestResponse(row);
   }
   create(user: User, dto: CreateLeaveRequestDto) {
-    // Django perform_create: user + created_by = caller.
+    // user + createdById are stamped from the caller.
     return this.createIn(user, dto.workspaceId, {
       workspaceId: dto.workspaceId,
       userId: user.id,

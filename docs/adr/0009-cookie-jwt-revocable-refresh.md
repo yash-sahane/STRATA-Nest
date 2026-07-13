@@ -5,20 +5,18 @@
 - Deciders: Principal Architect, Security
 
 ## Context
-Auth is cookie-based SimpleJWT: `lt_access` (15 min) / `lt_refresh` (7 d), httpOnly (A§5.2). But the custom refresh view **manually rotates jti/exp and never blacklists the old token** — SimpleJWT's rotation/blacklist settings never take effect, so refresh tokens are effectively **non-revocable for 7 days** (A§5.3, D1). The frontend relies on a single silent refresh-on-401 (A§13).
+Auth is cookie-based JWT: `strata_access` (15 min) / `strata_refresh` (7 d), httpOnly. A refresh flow that rotates the jti/exp **without revoking the old token** leaves refresh tokens effectively **non-revocable for their 7-day lifetime**. The frontend relies on a single silent refresh-on-401.
 
 ## Decision
-Keep the cookie-JWT model and names (ADR-0003), implemented with Passport + a cookie extractor. Make refresh tokens **server-tracked and revocable**: each carries a `jti` recorded in a Redis store (TTL = refresh lifetime); **rotation revokes the old jti**; logout deletes it. This finally realizes the rotation/blacklist intent.
+Keep the cookie-JWT model and names (ADR-0003), implemented with Passport + a cookie extractor. Make refresh tokens **server-tracked and revocable**: each carries a `jti` recorded in a Redis store (TTL = refresh lifetime); **rotation revokes the old jti**; logout deletes it.
 
 ## Consequences
-- (+) Stolen/old refresh tokens can be invalidated immediately (closes D1).
+- (+) Stolen/old refresh tokens can be invalidated immediately.
 - (+) Enables "log out everywhere" later.
 - (−) Refresh now requires a Redis read/write — negligible, Redis is already present.
-- Follow-up: coordinate the cutover with the frontend `tryRefresh()` flow so behavior stays seamless.
+- The frontend `tryRefresh()` flow relies on this rotation staying seamless.
 
 ## Alternatives considered
-- **Stateless refresh (no store):** rejected — cannot revoke; reproduces D1.
+- **Stateless refresh (no store):** rejected — cannot revoke a stolen refresh token.
 - **DB-backed token table:** viable but Redis TTL is simpler and matches token lifetimes.
 
-## Traceability
-A§5.2, A§5.3, A§13, D1 · §6, §15, M§8

@@ -1,10 +1,10 @@
-import { toDjangoIso } from '@lt/common';
+import { formatApiTimestamp } from '@strata/common';
 import type { Project } from '@prisma/client';
 
-/** Django DateField → date-only "YYYY-MM-DD" on the wire (A§6.2). */
+/** Date fields serialize as date-only "YYYY-MM-DD" on the wire. */
 const dateOnly = (d: Date | null): string | null => (d ? d.toISOString().slice(0, 10) : null);
 
-/** Field order mirrors the Django ProjectSerializer (createdAt/updatedAt last). */
+/** Field order matches the API's frozen Project contract (createdAt/updatedAt last). */
 export function projectResponse(p: Project) {
   return {
     id: String(p.id),
@@ -25,7 +25,7 @@ export function projectResponse(p: Project) {
     createdByName: p.createdByName,
     memberIds: p.memberIds,
     settings: p.projectSettings,
-    createdAt: toDjangoIso(p.createdAt),
-    updatedAt: toDjangoIso(p.updatedAt),
+    createdAt: formatApiTimestamp(p.createdAt),
+    updatedAt: formatApiTimestamp(p.updatedAt),
   };
 }

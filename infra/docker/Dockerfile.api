@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
-# L-T-Connect API image (NestJS HTTP + WS). Multi-stage, pnpm workspace.
+# STRATA API image (NestJS HTTP + WS). Multi-stage, pnpm workspace.
 FROM node:20-alpine AS base
-RUN corepack enable
+# tini = PID 1 init for correct SIGTERM propagation → graceful shutdown.
+RUN corepack enable && apk add --no-cache tini
 WORKDIR /repo
 
 # --- deps: install with only manifests for better layer caching ---
@@ -17,16 +18,21 @@ RUN pnpm install
 # --- build ---
 FROM deps AS build
 COPY . .
-RUN pnpm --filter @lt/prisma run generate || echo "prisma generate skipped (no models yet)"
-# turbo builds @lt/api's workspace deps (shared, config, common, prisma) first (^build).
-RUN pnpm exec turbo run build --filter=@lt/api
+RUN pnpm --filter @strata/prisma run generate || echo "prisma generate skipped (no models yet)"
+# Build the api and its workspace dependencies (shared, config, common, prisma)
+# in dependency order. The "..." suffix includes the package's dependencies.
+RUN pnpm --filter "@strata/api..." run build
 
-# --- runtime ---
+# --- runtime (non-root) ---
 FROM base AS runtime
 ENV NODE_ENV=production
 COPY --from=build /repo /repo
 WORKDIR /repo/apps/api
+# Local storage dir must be writable by the non-root user (prod normally uses S3).
+RUN mkdir -p .storage && chown -R node:node .storage
+USER node
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
   CMD wget -qO- http://localhost:8000/api/v1/health || exit 1
+ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "dist/main.js"]

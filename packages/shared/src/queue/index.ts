@@ -1,6 +1,6 @@
 /**
  * BullMQ queue contracts shared between the API producers and the worker
- * consumers (ADR-0007). Names and job payloads live here so both sides stay in
+ * consumers. Names and job payloads live here so both sides stay in
  * lockstep — the worker must never guess a queue name or job shape.
  */
 
@@ -11,7 +11,7 @@ export const Queues = {
 } as const;
 export type QueueName = (typeof Queues)[keyof typeof Queues];
 
-/** The kinds of transactional email the system sends (Phases 1/2/9). */
+/** The kinds of transactional email the system sends. */
 export const EmailKind = {
   PasswordReset: 'password_reset',
   Welcome: 'welcome',
@@ -30,7 +30,7 @@ export const EMAIL_JOB = 'send-email';
  */
 export interface EmailJob {
   kind: EmailKind;
-  /** One recipient, or many (Resend accepts an array; parity with Django). */
+  /** One recipient, or many (Resend accepts an array). */
   to: string | string[];
   subject: string;
   /** Pre-rendered text body (kept simple; templating can grow later). */
@@ -57,7 +57,7 @@ export interface GitCommitInput {
 }
 
 /**
- * Git webhook job (Phase 11). The API webhook controllers verify the provider
+ * Git webhook job. The API webhook controllers verify the provider
  * signature, normalize the payload to `commits`, and enqueue this; the worker's
  * git processor records commits idempotently, links tasks, and (when the
  * integration opts in) auto-updates task status. `deliveryId` → jobId dedupes

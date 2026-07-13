@@ -17,8 +17,8 @@ import { IntegrationAccess } from './integration-access.service';
 import { TokenCipher } from './token-cipher';
 
 /**
- * Phase 11 — integrations. CRUD for the 4 collections (tokens encrypted at rest
- * + write-only), project→workspace scoping (D5), and [NEW] public webhook
+ * Integrations. CRUD for the 4 collections (tokens encrypted at rest
+ * + write-only), project→workspace scoping, and public webhook
  * receivers that verify signatures and enqueue to the `git` queue.
  */
 @Module({
@@ -38,5 +38,6 @@ import { TokenCipher } from './token-cipher';
     TokenCipher,
     GitQueueService,
   ],
+  exports: [IntegrationAccess, GitQueueService], // used by DeletionModule (Zone-2 cleanup + integration delete)
 })
 export class IntegrationsModule {}

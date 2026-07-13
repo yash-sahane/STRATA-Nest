@@ -1,12 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
-import { PlanningEvents, type SprintLifecyclePayload } from '@lt/shared';
-import { PrismaService } from '@lt/prisma';
+import { PlanningEvents, type SprintLifecyclePayload } from '@strata/shared';
+import { PrismaService } from '@strata/prisma';
 
 /**
- * Phase 5→6 loop: when a sprint completes, roll its incomplete (status != DONE)
- * tasks off the sprint (back to the backlog). This is the Tasks-side reaction to
- * `sprint.completed` — SprintCompletionService emits it after commit (arch §4/§11).
+ * When a sprint completes, roll its incomplete (status != DONE) tasks off the
+ * sprint (back to the backlog). This is the Tasks-side reaction to
+ * `sprint.completed`, which SprintCompletionService emits after commit.
  */
 @Injectable()
 export class SprintCompletedTaskRoller {

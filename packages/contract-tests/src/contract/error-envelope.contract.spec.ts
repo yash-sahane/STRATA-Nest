@@ -1,11 +1,10 @@
 import { BASE, call, isReachable } from '../support/api-contract';
 
 /**
- * Locks the FROZEN error envelope (CURRENT_SYSTEM_AUDIT.md §4.5; ADR-0003):
+ * Locks the versioned error envelope:
  *   { "error": { "message": ..., "code": <status>, "type": <string> } }
  *
- * Run against Django now; re-run with CONTRACT_BASE_URL=<nest> to prove parity
- * when the auth module is ported (Migration Order Matrix M§9, phase 1).
+ * Point at the running API with CONTRACT_BASE_URL to enforce it.
  */
 describe('Contract — error envelope', () => {
   let available = false;
@@ -16,7 +15,7 @@ describe('Contract — error envelope', () => {
       // eslint-disable-next-line no-console
       console.warn(
         `[contract] ${BASE} is unreachable — error-envelope checks are no-ops. ` +
-          `Start the target API (Django now, NestJS later) to enforce them.`,
+          `Start the NestJS API (CONTRACT_BASE_URL) to enforce them.`,
       );
     }
   });

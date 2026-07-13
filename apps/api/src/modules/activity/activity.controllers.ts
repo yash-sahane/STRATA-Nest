@@ -11,7 +11,7 @@ type Q = Record<string, string | string[] | undefined>;
 
 /**
  * ActivityLog — append-only: list/create/retrieve only. No PATCH/PUT/DELETE
- * routes are exposed, so the audit trail is immutable via the API (D9).
+ * routes are exposed, so the audit trail is immutable via the API.
  */
 @ApiTags('activity_logs')
 @Controller('activity_logs')

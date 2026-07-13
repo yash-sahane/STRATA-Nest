@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { generateId, type ListQuerySpec } from '@lt/common';
-import { PrismaService } from '@lt/prisma';
+import { generateId, type ListQuerySpec } from '@strata/common';
+import { PrismaService } from '@strata/prisma';
 import type { Notification, User } from '@prisma/client';
 import { Permission, type PermissionKey } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
@@ -46,8 +46,8 @@ export class NotificationsService extends ScopedCrudService<
   }
 
   create(user: User, dto: CreateNotificationDto) {
-    // Django Notification viewset does not stamp user — the target userId comes
-    // from the payload (a notification is addressed to someone).
+    // Notification creation does not stamp user from the caller — the target
+    // userId comes from the payload (a notification is addressed to someone).
     return this.createIn(user, dto.workspaceId, {
       workspaceId: dto.workspaceId,
       userId: dto.userId,
@@ -84,10 +84,11 @@ export class NotificationsService extends ScopedCrudService<
   }
 
   /**
-   * [NEW, D9] Server-guaranteed creation used by NotificationSubscriber. Writes
-   * the in-app Notification the frontend reads AND its `in_app` delivery row
-   * (the Notification→NotificationDelivery split; email/push land in Phase 10).
-   * Best-effort: a subscriber must never fail the originating transaction.
+   * Server-guaranteed creation used by NotificationSubscriber. Writes the in-app
+   * Notification the frontend reads AND its `in_app` delivery row (the
+   * Notification→NotificationDelivery split; email/push delivery is handled
+   * separately). Best-effort: a subscriber must never fail the originating
+   * transaction.
    */
   async deliver(input: NotificationInput): Promise<void> {
     const notification = await this.prisma.notification.create({

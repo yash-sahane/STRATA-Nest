@@ -26,13 +26,13 @@ export class JoinRequestsController {
     return this.svc.create(u, d); // self-service (non-member requests to join)
   }
 
-  /** [NEW] Approve → creates membership + marks request, transactionally. */
+  /** Approve → creates membership + marks request, transactionally. */
   @Post(':id/approve')
   approve(@CurrentUser() u: User, @Param('id') id: string) {
     return this.approvals.approve(u, id);
   }
 
-  /** [NEW] Reject → marks request rejected. */
+  /** Reject → marks request rejected. */
   @Post(':id/reject')
   reject(@CurrentUser() u: User, @Param('id') id: string) {
     return this.approvals.reject(u, id);

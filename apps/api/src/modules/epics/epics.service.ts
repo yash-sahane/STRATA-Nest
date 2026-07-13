@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { type ListQuerySpec } from '@lt/common';
-import { PrismaService } from '@lt/prisma';
+import { type ListQuerySpec } from '@strata/common';
+import { PrismaService } from '@strata/prisma';
 import type { Epic, User } from '@prisma/client';
 import { Permission, type PermissionKey } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';

@@ -28,14 +28,14 @@ function project(over: Partial<Project> = {}): Project {
 }
 
 describe('projectResponse', () => {
-  it('formats DateFields as YYYY-MM-DD and datetimes as Django microsecond ISO', () => {
+  it('formats DateFields as YYYY-MM-DD and datetimes as microsecond ISO', () => {
     const r = projectResponse(project());
     expect(r.startDate).toBe('2026-01-15');
     expect(r.endDate).toBeNull();
     expect(r.createdAt).toBe('2026-06-30T12:34:56.789000Z');
   });
 
-  it('maps createdBy/settings and preserves the Django field order', () => {
+  it('maps createdBy/settings and preserves the fixed field order', () => {
     const r = projectResponse(project());
     expect(r.createdBy).toBe('u1');
     expect(r.settings).toEqual({ a: 1 });

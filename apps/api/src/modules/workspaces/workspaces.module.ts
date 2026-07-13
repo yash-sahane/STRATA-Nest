@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { DeletionModule } from '../deletion/deletion.module';
 import {
   EmailInvitationsController,
   InviteCodesController,
@@ -20,6 +21,7 @@ import { WorkspacesService } from './workspaces.service';
 import { InvitationAcceptanceService, JoinRequestApprovalService } from './workflows.services';
 
 @Module({
+  imports: [DeletionModule],
   controllers: [
     WorkspacesController,
     WorkspaceMembersController,

@@ -18,7 +18,7 @@ import {
 import { ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import type { User } from '@prisma/client';
-import { PrismaService } from '@lt/prisma';
+import { PrismaService } from '@strata/prisma';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
 import {

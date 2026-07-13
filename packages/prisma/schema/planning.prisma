@@ -1,6 +1,5 @@
-// Planning entities — mapped to existing Django tables (epics + sprints apps, A§6.4-6.5).
-// `requirementId` (Epic) stays a scalar id string for now (soft FK); relation
-// promotion + backfill (ADR-0008) is a later live-DB pass. Wire emits the id.
+// Planning entities (epics + sprints). `requirementId` (Epic) is a scalar id
+// string (soft FK); the wire emits the raw id.
 
 model Epic {
   id            String    @id

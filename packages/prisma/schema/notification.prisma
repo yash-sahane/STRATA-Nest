@@ -1,6 +1,6 @@
-// Notifications — the in-app record the frontend reads (`notifications_notification`,
-// A§6.10). Phase 9 makes creation SERVER-guaranteed via NotificationSubscriber
-// (D9), while still accepting client POSTs during the transition window.
+// Notifications - the in-app record the frontend reads
+// (`notifications_notification`). Creation is server-guaranteed via
+// NotificationSubscriber; direct client POSTs are also accepted.
 
 model Notification {
   id                String   @id
@@ -21,9 +21,9 @@ model Notification {
   @@map("notifications_notification")
 }
 
-// [NEW] Notification → delivery split (arch review #, ADR-0011). Additive table:
-// one row per channel a notification is fanned out to. Phase 9 writes the
-// `in_app` delivery inline; the email/push channels are Phase 10 (email queue).
+// Notification -> delivery split: one row per channel a notification is fanned
+// out to. The `in_app` delivery is written inline; email/push channels go
+// through the email queue.
 model NotificationDelivery {
   id             String    @id
   createdAt      DateTime  @default(now()) @map("created_at")

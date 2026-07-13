@@ -1,11 +1,11 @@
 import { COOKIE, call } from '../support/api-contract';
 
 /**
- * Locks the FROZEN pagination envelope (CURRENT_SYSTEM_AUDIT.md §4.4; ADR-0003):
+ * Locks the versioned pagination envelope:
  *   { items: [...], total, page, pageSize }
  *
  * Requires an authenticated session, so it is opt-in: set CONTRACT_COOKIE to a
- * valid "lt_access=<jwt>" string to enable. Without it the test is skipped.
+ * valid "strata_access=<jwt>" string to enable. Without it the test is skipped.
  */
 const authed = COOKIE ? it : it.skip;
 

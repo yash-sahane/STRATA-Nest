@@ -8,7 +8,7 @@ export type WriteAction = 'create' | 'update' | 'delete';
 export type WriteHook = (model: string, action: WriteAction, result: unknown) => void;
 
 /**
- * Thin Nest wrapper over PrismaClient — the single DB access point (arch §4).
+ * Thin Nest wrapper over PrismaClient — the single DB access point.
  * Connection lifecycle is tied to the Nest module lifecycle so the health
  * check and graceful shutdown work in both api and worker processes.
  */
@@ -17,8 +17,8 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   private readonly logger = new Logger(PrismaService.name);
   private writeHook?: WriteHook;
 
-  /** Register a post-write hook (RealtimeModule wires this — replaces the Django
-   *  post_save/post_delete signal with an explicit, decoupled callback). */
+  /** Register a post-write hook (RealtimeModule wires this to broadcast realtime
+   *  events via an explicit, decoupled callback). */
   setWriteHook(hook: WriteHook): void {
     this.writeHook = hook;
   }

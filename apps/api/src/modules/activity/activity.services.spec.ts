@@ -1,6 +1,6 @@
 import { ForbiddenException } from '@nestjs/common';
-import type { PrismaService } from '@lt/prisma';
-import { HrEvents, type DomainEvent, type LeaveDecisionPayload } from '@lt/shared';
+import type { PrismaService } from '@strata/prisma';
+import { HrEvents, type DomainEvent, type LeaveDecisionPayload } from '@strata/shared';
 import { ActivityLogsService } from './activity.services';
 import { AuditSubscriber } from './audit.subscriber';
 

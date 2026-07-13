@@ -22,8 +22,8 @@ type Q = Record<string, string | string[] | undefined>;
 
 /**
  * Files: multipart upload + CRUD + streaming (preview/view = inline,
- * download = attachment). Auth + membership scoping only, matching Django's
- * viewset (no role gate); blob IO is delegated to StorageService.
+ * download = attachment). Auth + membership scoping only (no role gate);
+ * blob IO is delegated to StorageService.
  */
 @ApiTags('files')
 @Controller('files')

@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { IncomingMessage } from 'node:http';
-import { PrismaService } from '@lt/prisma';
+import { PrismaService } from '@strata/prisma';
 import type { User } from '@prisma/client';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { TokenService } from '../auth/services/token.service';
@@ -12,7 +12,7 @@ export interface AuthedSocket {
   workspaceIds: Set<string> | null;
 }
 
-/** Authenticates a WebSocket upgrade using the `lt_access` cookie (A§7 — no `?token=`). */
+/** Authenticates a WebSocket upgrade using the `strata_access` cookie (no `?token=`). */
 @Injectable()
 export class RealtimeAuthService {
   constructor(
@@ -23,7 +23,7 @@ export class RealtimeAuthService {
   ) {}
 
   async authenticate(request: IncomingMessage): Promise<AuthedSocket | null> {
-    const cookieName = this.config.get<string>('JWT_ACCESS_COOKIE_NAME', 'lt_access');
+    const cookieName = this.config.get<string>('JWT_ACCESS_COOKIE_NAME', 'strata_access');
     const token = this.readCookie(request, cookieName);
     if (!token) return null;
 

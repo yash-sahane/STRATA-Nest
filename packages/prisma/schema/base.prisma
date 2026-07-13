@@ -1,11 +1,8 @@
-// L-T-Connect Prisma schema (split-folder layout — arch §5).
+// STRATA Prisma schema.
 //
-// Models are mapped to the EXISTING Django tables (@@map/@map) so the NestJS
-// stack reads/writes the same database during the strangler migration (ADR-0010).
-// Identity stays a 20-char string PK (ADR-0002) — never regenerated.
-//
-// Phase 1 introduces identity.prisma (User + minimal Workspace/WorkspaceMember
-// that auth reads). Later phases add their models per the Migration Order Matrix.
+// Domain models are organized across multiple schema files. Explicit @@map/@map
+// annotations define the canonical physical table and column names.
+// Application identifiers are 20-character string primary keys.
 
 datasource db {
   provider = "postgresql"

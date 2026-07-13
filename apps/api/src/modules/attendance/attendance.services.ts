@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { generateId, type ListQuerySpec } from '@lt/common';
-import { PrismaService } from '@lt/prisma';
+import { generateId, type ListQuerySpec } from '@strata/common';
+import { PrismaService } from '@strata/prisma';
 import type { Attendance, Holiday, User } from '@prisma/client';
 import { Permission, type PermissionKey } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
@@ -80,7 +80,7 @@ export class AttendanceService extends ScopedCrudService<
     return this.update(user, id, data);
   }
 
-  /** [NEW] Server-computed check-in (lateMinutes + status, D9). */
+  /** Server-computed check-in (lateMinutes + status). */
   async checkIn(user: User, dto: CheckInDto) {
     await this.access.assertPermission(user, dto.workspaceId, Permission.HrWrite);
     const date = todayUtc();
@@ -108,7 +108,7 @@ export class AttendanceService extends ScopedCrudService<
     return attendanceResponse(record);
   }
 
-  /** [NEW] Server-computed check-out (workHours + status, D9). */
+  /** Server-computed check-out (workHours + status). */
   async checkOut(user: User, dto: CheckOutDto) {
     await this.access.assertPermission(user, dto.workspaceId, Permission.HrWrite);
     const date = todayUtc();

@@ -1,9 +1,9 @@
 /**
- * Workspace-domain permissions + the default role→permission map (ADR-0005).
+ * Workspace-domain permissions + the default role→permission map.
  *
- * Phase 2 resolves permissions from THIS map (built-in roles) plus a workspace's
- * custom `WorkspaceRole.permissions` JSON (legacy path). The normalized authz.*
- * tables are the documented end-state, enabled later by a migration + seed.
+ * Permissions resolve from THIS map (built-in roles) plus a workspace's
+ * custom `WorkspaceRole.permissions` JSON. The normalized authz.* tables are
+ * the documented end-state, enabled later by a database migration + seed.
  */
 export const Permission = {
   WorkspaceRead: 'workspace:read',
@@ -16,39 +16,39 @@ export const Permission = {
   RoleManage: 'role:manage',
   InviteManage: 'invite:manage',
   JoinManage: 'join:manage',
-  // Phase 3 — projects
+  // Projects
   ProjectRead: 'project:read',
   ProjectCreate: 'project:create',
   ProjectUpdate: 'project:update',
   ProjectDelete: 'project:delete',
-  // Phase 4 — requirements (client + functional)
+  // Requirements (client + functional)
   RequirementRead: 'requirement:read',
   RequirementWrite: 'requirement:write',
-  // Phase 5 — planning (epics, sprints, retrospectives)
+  // Planning (epics, sprints, retrospectives)
   PlanningRead: 'planning:read',
   PlanningWrite: 'planning:write',
-  // Phase 6 — tasks (task + labels; comments/kanban are unscoped, see task.prisma)
+  // Tasks (task + labels; comments/kanban are unscoped, see task.prisma)
   TaskRead: 'task:read',
   TaskWrite: 'task:write',
-  // Phase 8 — HR (attendance, leave, time). Members submit their own records
+  // HR (attendance, leave, time). Members submit their own records
   // (HrWrite is in the baseline); only managers approve (Leave/Time Approve).
   HrRead: 'hr:read',
   HrWrite: 'hr:write',
   LeaveApprove: 'leave:approve',
   TimeApprove: 'time:approve',
-  // Phase 9 — notifications + activity. Members manage their own notifications
+  // Notifications + activity. Members manage their own notifications
   // and saved searches, and read the workspace activity trail (all baseline).
   NotificationRead: 'notification:read',
   NotificationWrite: 'notification:write',
   ActivityRead: 'activity:read',
   ActivityWrite: 'activity:write',
-  // Phase 10 — files. Django gated file upload/delete on authenticated
-  // membership only (no role check), so both are in the member baseline.
+  // Files. Upload/delete require only authenticated membership (no
+  // extra role check), so both are in the member baseline.
   FileRead: 'file:read',
   FileWrite: 'file:write',
-  // Phase 11 — integrations. Django did not workspace-scope these at all (D5);
-  // the Nest version scopes by project→workspace membership. Reads are baseline;
-  // writes (which hold access tokens) require the integration:write permission.
+  // Integrations, scoped by project→workspace membership. Reads are
+  // baseline; writes (which hold access tokens) require the integration:write
+  // permission.
   IntegrationRead: 'integration:read',
   IntegrationWrite: 'integration:write',
 } as const;
@@ -77,8 +77,8 @@ const READ_ONLY: PermissionKey[] = [
   // enforced RBAC only managers manage integrations (membership floor when off).
 ];
 
-/** Default permissions for the 7 built-in roles (A§5.1). Tunable; seeded into
- *  the normalized tables at cut-over. */
+/** Default permissions for the 7 built-in roles. Tunable; seeded into
+ *  the normalized tables when those are enabled. */
 export const ROLE_PERMISSIONS: Record<string, PermissionKey[]> = {
   MANAGER: ALL,
   ASSISTANT_MANAGER: ALL.filter((p) => p !== Permission.WorkspaceDelete),

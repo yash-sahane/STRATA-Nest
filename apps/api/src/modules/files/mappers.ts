@@ -1,9 +1,9 @@
-import { toDjangoIso } from '@lt/common';
+import { formatApiTimestamp } from '@strata/common';
 import type { UploadedFile } from '@prisma/client';
 
 /**
- * Django UploadedFileSerializer order. `size` is a BigInt in Prisma → Number
- * for the JSON int. `url` is supplied by StorageService (file.url parity).
+ * The API's UploadedFile field order. `size` is a BigInt in Prisma → Number
+ * for the JSON int. `url` is supplied by StorageService as the `file.url` value.
  * createdAt/updatedAt serialize last (NativeModelSerializer pop-and-re-add).
  */
 export function uploadedFileResponse(f: UploadedFile, url: string) {
@@ -17,7 +17,7 @@ export function uploadedFileResponse(f: UploadedFile, url: string) {
     uploadedBy: f.uploadedById ?? null,
     bucketId: f.bucket,
     url,
-    createdAt: toDjangoIso(f.createdAt),
-    updatedAt: toDjangoIso(f.updatedAt),
+    createdAt: formatApiTimestamp(f.createdAt),
+    updatedAt: formatApiTimestamp(f.updatedAt),
   };
 }

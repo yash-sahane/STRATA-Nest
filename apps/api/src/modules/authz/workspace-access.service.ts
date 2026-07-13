@@ -1,16 +1,16 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { PrismaService } from '@lt/prisma';
+import { PrismaService } from '@strata/prisma';
 import type { User, WorkspaceMember } from '@prisma/client';
 import { permissionsForRole, type PermissionKey } from './permissions';
 
-const DENY_MESSAGE = 'You do not have permission to perform this action.'; // DRF parity
+const DENY_MESSAGE = 'You do not have permission to perform this action.'; // frozen error string — clients match on this exact text
 
 /**
  * The reusable workspace authorization layer every domain module depends on.
- * Reproduces the Django base viewset's membership scoping (A§4.6) and adds
- * policy-based RBAC (ADR-0005). `RBAC_ENFORCED=false` keeps a membership-only
- * floor (dark-launch parity); `true` enforces per-permission checks on writes.
+ * Provides membership scoping plus policy-based RBAC.
+ * `RBAC_ENFORCED=false` keeps a membership-only floor; `true` enforces
+ * per-permission checks on writes.
  */
 @Injectable()
 export class WorkspaceAccessService {

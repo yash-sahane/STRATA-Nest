@@ -1,10 +1,9 @@
-import { toDjangoIso } from '@lt/common';
+import { formatApiTimestamp } from '@strata/common';
 import type { Notification } from '@prisma/client';
 
 /**
- * Django NotificationSerializer field order. NativeModelSerializer pops
- * created_at/updated_at and re-adds them → they serialize LAST (A§core), so
- * createdAt/updatedAt are appended after isRead here to match byte-for-byte.
+ * The API's Notification field order. createdAt/updatedAt must serialize LAST in
+ * the JSON, so they are appended after isRead here to match the frozen contract.
  */
 export function notificationResponse(n: Notification) {
   return {
@@ -18,7 +17,7 @@ export function notificationResponse(n: Notification) {
     relatedEntityId: n.relatedEntityId,
     relatedEntityType: n.relatedEntityType,
     isRead: n.isRead,
-    createdAt: toDjangoIso(n.createdAt),
-    updatedAt: toDjangoIso(n.updatedAt),
+    createdAt: formatApiTimestamp(n.createdAt),
+    updatedAt: formatApiTimestamp(n.updatedAt),
   };
 }

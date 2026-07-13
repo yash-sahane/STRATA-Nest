@@ -6,9 +6,9 @@ module.exports = {
   testRegex: '.*\\.spec\\.ts$',
   setupFiles: ['reflect-metadata'],
   moduleNameMapper: {
-    '^@lt/common$': '<rootDir>/../../../packages/common/src/index.ts',
-    '^@lt/shared$': '<rootDir>/../../../packages/shared/src/index.ts',
-    '^@lt/config$': '<rootDir>/../../../packages/config/src/index.ts',
-    '^@lt/prisma$': '<rootDir>/../../../packages/prisma/src/index.ts',
+    '^@strata/common$': '<rootDir>/../../../packages/common/src/index.ts',
+    '^@strata/shared$': '<rootDir>/../../../packages/shared/src/index.ts',
+    '^@strata/config$': '<rootDir>/../../../packages/config/src/index.ts',
+    '^@strata/prisma$': '<rootDir>/../../../packages/prisma/src/index.ts',
   },
 };

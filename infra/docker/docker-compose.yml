@@ -1,9 +1,6 @@
-# L-T-Connect NestJS stack (arch §13). Run from repo root:
+# STRATA stack. Run from repo root:
 #   docker compose -f infra/docker/docker-compose.yml up --build
-#
-# During the strangler phase this Postgres can be the SAME instance the Django
-# app uses (ADR-0010); point DATABASE_URL accordingly.
-name: lt-connect
+name: strata
 
 services:
   postgres:
@@ -11,13 +8,13 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: ltconnect
+      POSTGRES_DB: strata
     ports:
-      - '5432:5432'
+      - '5433:5432'
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U postgres -d ltconnect']
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d strata']
       interval: 10s
       timeout: 5s
       retries: 5
@@ -39,7 +36,7 @@ services:
     env_file:
       - ../../.env
     environment:
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ltconnect?schema=public
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/strata?schema=public
       REDIS_HOST: redis
       API_PORT: '8000'
     depends_on:
@@ -57,7 +54,7 @@ services:
     env_file:
       - ../../.env
     environment:
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ltconnect?schema=public
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/strata?schema=public
       REDIS_HOST: redis
     depends_on:
       redis:

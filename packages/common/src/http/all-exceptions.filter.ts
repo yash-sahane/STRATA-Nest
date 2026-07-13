@@ -7,15 +7,14 @@ import {
   Logger,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import type { ApiErrorEnvelope } from '@lt/shared';
+import type { ApiErrorEnvelope } from '@strata/shared';
 
 /**
- * Maps HTTP status → the DRF exception class name Django emits in the `type`
- * field, so the error envelope's `type` matches Django for the common cases
- * (CURRENT_SYSTEM_AUDIT.md §4.5). 401 defaults to `NotAuthenticated`; endpoints
- * that mean `AuthenticationFailed`/`InvalidToken` set it explicitly.
+ * Maps HTTP status → the exception-class-style name used in the versioned error
+ * envelope's `type` field. 401 defaults to `NotAuthenticated`;
+ * endpoints that mean `AuthenticationFailed`/`InvalidToken` set it explicitly.
  */
-const DRF_TYPE_BY_STATUS: Record<number, string> = {
+const ERROR_TYPE_BY_STATUS: Record<number, string> = {
   400: 'ValidationError',
   401: 'NotAuthenticated',
   403: 'PermissionDenied',
@@ -28,10 +27,31 @@ const DRF_TYPE_BY_STATUS: Record<number, string> = {
 };
 
 /**
- * Global exception filter reproducing the FROZEN Django error envelope
- * (CURRENT_SYSTEM_AUDIT.md §4.5; ADR-0003):
+ * Prisma known-request error codes worth mapping to a 4xx instead of a raw 500:
+ * a unique-constraint violation (e.g. a duplicate create) is a client input
+ * error, not a server fault, and must not leak a bare "Internal server error"
+ * 500. Message text is intentionally generic; only the status class (4xx, not
+ * 500) and "don't leak DB column/table names" are guaranteed here.
+ */
+const PRISMA_ERROR_STATUS: Record<string, { status: number; message: string }> = {
+  P2002: { status: 400, message: 'A record with these values already exists.' },
+  P2003: { status: 400, message: 'Invalid reference to a related record.' },
+  P2025: { status: 404, message: 'Not found.' },
+};
+
+function isPrismaKnownRequestError(exception: unknown): exception is { code: string } {
+  return (
+    typeof exception === 'object' &&
+    exception !== null &&
+    (exception as { constructor?: { name?: string } }).constructor?.name === 'PrismaClientKnownRequestError' &&
+    typeof (exception as { code?: unknown }).code === 'string'
+  );
+}
+
+/**
+ * Global exception filter enforcing the versioned error envelope:
  *
- *   { "error": { "message": <string|list|dict>, "code": <httpStatus>, "type": <DRFExceptionName> } }
+ *   { "error": { "message": <string|list|dict>, "code": <httpStatus>, "type": <string> } }
  *
  * The frontend `rest-client.ts` unwraps `data.error.message`, so the shape must
  * not change under /api/v1.
@@ -55,17 +75,22 @@ export class AllExceptionsFilter implements ExceptionFilter {
       } else {
         const b = body as Record<string, unknown>;
         message = (b.message ?? b.detail ?? b) as typeof message;
-        // Allow a caller to pin an exact DRF type via the exception payload.
+        // Allow a caller to pin an exact error 'type' via the exception payload.
         if (typeof b.type === 'string') type = b.type;
       }
-      // Default the type to the DRF name for this status (parity), unless pinned above.
+      // Default the type to the canonical name for this status, unless pinned above.
       if (type === exception.constructor.name || type === 'Error') {
-        type = DRF_TYPE_BY_STATUS[status] ?? exception.constructor.name;
+        type = ERROR_TYPE_BY_STATUS[status] ?? exception.constructor.name;
       }
+    } else if (isPrismaKnownRequestError(exception) && PRISMA_ERROR_STATUS[exception.code]) {
+      const mapped = PRISMA_ERROR_STATUS[exception.code];
+      status = mapped.status;
+      message = mapped.message;
+      type = ERROR_TYPE_BY_STATUS[status] ?? 'ValidationError';
     } else {
       // Unknown/unexpected error — log the stack, never leak internals to the client.
       this.logger.error(exception);
-      type = DRF_TYPE_BY_STATUS[status] ?? type;
+      type = ERROR_TYPE_BY_STATUS[status] ?? type;
     }
 
     const envelope: ApiErrorEnvelope = {

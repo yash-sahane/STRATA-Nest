@@ -1,5 +1,5 @@
 import type { ConfigService } from '@nestjs/config';
-import { EmailKind, type EmailJob } from '@lt/shared';
+import { EmailKind, type EmailJob } from '@strata/shared';
 import { EmailProcessor } from './email.processor';
 
 const cfg = (values: Record<string, unknown>): ConfigService =>

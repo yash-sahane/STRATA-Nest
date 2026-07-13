@@ -6,7 +6,7 @@ module.exports = {
   testRegex: '.*\\.spec\\.ts$',
   setupFiles: ['reflect-metadata'],
   moduleNameMapper: {
-    '^@lt/shared$': '<rootDir>/../../../packages/shared/src/index.ts',
-    '^@lt/config$': '<rootDir>/../../../packages/config/src/index.ts',
+    '^@strata/shared$': '<rootDir>/../../../packages/shared/src/index.ts',
+    '^@strata/config$': '<rootDir>/../../../packages/config/src/index.ts',
   },
 };

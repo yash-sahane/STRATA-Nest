@@ -10,7 +10,7 @@ function fakeConfig(secret = 'test-secret'): ConfigService {
   } as unknown as ConfigService;
 }
 
-describe('TokenService — SimpleJWT-compatible claims', () => {
+describe('TokenService — frozen claim layout', () => {
   const svc = new TokenService(new JwtService({}), fakeConfig());
 
   it('signs an access token with user_id / token_type / jti and verifies it', () => {
@@ -30,7 +30,7 @@ describe('TokenService — SimpleJWT-compatible claims', () => {
     expect(claims.user_id).toBe('user-2');
   });
 
-  it('rejects a token signed with a different key (dual-run relies on a shared key)', () => {
+  it('rejects a token signed with a different key', () => {
     const other = new TokenService(new JwtService({}), fakeConfig('different-secret'));
     const foreign = other.signAccess('user-3');
     expect(() => svc.verify(foreign)).toThrow();

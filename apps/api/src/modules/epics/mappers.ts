@@ -1,9 +1,9 @@
-import { toDjangoIso } from '@lt/common';
+import { formatApiTimestamp } from '@strata/common';
 import type { Epic } from '@prisma/client';
 
 const dateOnly = (d: Date | null): string | null => (d ? d.toISOString().slice(0, 10) : null);
 
-/** Field order mirrors the Django EpicSerializer (createdAt/updatedAt last). */
+/** Field order matches the API's frozen Epic contract (createdAt/updatedAt last). */
 export function epicResponse(e: Epic) {
   return {
     id: String(e.id),
@@ -21,7 +21,7 @@ export function epicResponse(e: Epic) {
     assignedTeam: e.assignedTeam,
     createdBy: e.createdById,
     createdByName: e.createdByName,
-    createdAt: toDjangoIso(e.createdAt),
-    updatedAt: toDjangoIso(e.updatedAt),
+    createdAt: formatApiTimestamp(e.createdAt),
+    updatedAt: formatApiTimestamp(e.updatedAt),
   };
 }

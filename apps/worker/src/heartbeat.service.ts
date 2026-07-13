@@ -3,10 +3,9 @@ import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 
 /**
- * Phase 0 worker liveness: connects to the BullMQ logical Redis DB (ADR-0007)
- * and heartbeats. There are NO domain processors yet — queues + processors
- * (email, notification, git, …) are added in later phases (M§6.2). The interval
- * keeps the standalone process alive until real BullMQ Workers exist.
+ * Worker liveness: connects to the BullMQ logical Redis DB and pings it on an
+ * interval, logging reachability. The interval also keeps the standalone
+ * process alive.
  */
 @Injectable()
 export class HeartbeatService implements OnModuleInit, OnModuleDestroy {

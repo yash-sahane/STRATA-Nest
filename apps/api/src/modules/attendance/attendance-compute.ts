@@ -1,8 +1,7 @@
 /**
- * Server-side attendance computation — ported faithfully from the frontend
- * `attendance-utils.ts` (D9: rules move server-side). Reconciliation caveat:
- * the frontend used the browser's local timezone for the 08:30 comparison; the
- * server uses its own TZ. Align WORK_TZ before flipping the source of truth.
+ * Server-side attendance computation (late minutes, work hours, status).
+ * Timezone caveat: the 08:30 start-time comparison uses the server's local
+ * timezone, so keep WORK_TZ aligned with the workspace's working timezone.
  */
 export const WORK_SCHEDULE = {
   START_MINUTES: 8 * 60 + 30, // 08:30

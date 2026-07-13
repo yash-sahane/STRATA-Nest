@@ -1,15 +1,15 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Worker, type Job } from 'bullmq';
-import { GIT_JOB, Queues, type GitCommitInput, type GitJob } from '@lt/shared';
-import { PrismaService } from '@lt/prisma';
+import { GIT_JOB, Queues, type GitCommitInput, type GitJob } from '@strata/shared';
+import { PrismaService } from '@strata/prisma';
 
 const CLOSE_INTENT = /\b(fix(e[sd])?|close[sd]?|resolve[sd]?)\b/i;
 // Task references in a commit message: `#ABC-12`, `#123`, or bare `ABC-123`.
 const TASK_REF = /#([A-Za-z][\w-]*)|\b([A-Z][A-Z0-9]+-\d+)\b/g;
 
 /**
- * Git CONSUMER (Phase 11). Records webhook commits idempotently (unique
+ * Git CONSUMER. Records webhook commits idempotently (unique
  * project+sha), links referenced tasks parsed from messages, and — when the
  * integration opts in and the message signals a close — advances those tasks to
  * DONE. Then dispatches to Discord if configured. Idempotent + best-effort per
@@ -139,7 +139,7 @@ export class GitProcessor implements OnModuleInit, OnModuleDestroy {
   }
 }
 
-/** 20-char id (matches the app's PK style) without importing @lt/common into the worker. */
+/** 20-char id (matches the app's PK style) without importing @strata/common into the worker. */
 function cryptoRandomId(): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let out = '';

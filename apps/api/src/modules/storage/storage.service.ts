@@ -5,7 +5,7 @@ import { LocalStorageDriver } from './local-storage.driver';
 import type { StorageDriver } from './storage.types';
 
 /**
- * StorageService (arch §13) — the single seam domain modules use for blobs.
+ * StorageService — the single seam domain modules use for blobs.
  * Driver is chosen by STORAGE_DRIVER (local | s3). The `local` driver is fully
  * implemented; `s3` is lazily loaded so the AWS SDK is only required when
  * actually selected (prod), keeping dev builds dependency-free.
@@ -27,8 +27,8 @@ export class StorageService implements StorageDriver {
   }
 
   /**
-   * Django `_upload_path`: `uploads/{workspace|_none}/{id}/{filename}`. Kept
-   * identical so the storage key layout — and the resulting url — matches.
+   * Fixed upload path layout: `uploads/{workspace|_none}/{id}/{filename}`. Kept
+   * stable so the storage key layout — and the resulting url — never changes.
    */
   static key(workspaceId: string, id: string, filename: string): string {
     const ws = workspaceId || '_none';

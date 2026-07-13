@@ -1,9 +1,9 @@
-import { toDjangoIso } from '@lt/common';
+import { formatApiTimestamp } from '@strata/common';
 import type { Retrospective, Sprint } from '@prisma/client';
 
 const dateOnly = (d: Date | null): string | null => (d ? d.toISOString().slice(0, 10) : null);
 
-/** Field order mirrors the Django SprintSerializer (createdAt/updatedAt last). */
+/** Field order matches the API's frozen Sprint contract (createdAt/updatedAt last). */
 export function sprintResponse(s: Sprint) {
   return {
     id: String(s.id),
@@ -17,8 +17,8 @@ export function sprintResponse(s: Sprint) {
     retrospectiveNotes: s.retrospectiveNotes,
     createdBy: s.createdById,
     createdByName: s.createdByName,
-    createdAt: toDjangoIso(s.createdAt),
-    updatedAt: toDjangoIso(s.updatedAt),
+    createdAt: formatApiTimestamp(s.createdAt),
+    updatedAt: formatApiTimestamp(s.updatedAt),
   };
 }
 
@@ -33,7 +33,7 @@ export function retrospectiveResponse(r: Retrospective) {
     needsImprovement: r.needsImprovement,
     actionItems: r.actionItems,
     createdBy: r.createdById,
-    createdAt: toDjangoIso(r.createdAt),
-    updatedAt: toDjangoIso(r.updatedAt),
+    createdAt: formatApiTimestamp(r.createdAt),
+    updatedAt: formatApiTimestamp(r.updatedAt),
   };
 }

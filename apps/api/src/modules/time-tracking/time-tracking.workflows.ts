@@ -1,15 +1,15 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { generateId } from '@lt/common';
-import { HrEvents } from '@lt/shared';
-import { PrismaService } from '@lt/prisma';
+import { generateId } from '@strata/common';
+import { HrEvents } from '@strata/shared';
+import { PrismaService } from '@strata/prisma';
 import type { ActiveTimer, Prisma, TimeEntry, User } from '@prisma/client';
 import { Permission } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import type { StartTimerDto, StopTimerDto } from './dto';
 import { activeTimerResponse, timeEntryResponse } from './mappers';
 
-/** [NEW] server-side timer lifecycle + duration computation (D9). */
+/** Server-side timer lifecycle + duration computation. */
 @Injectable()
 export class TimerService {
   constructor(
@@ -109,7 +109,7 @@ export class TimerService {
   }
 }
 
-/** [NEW] time-entry approval (manager-only, self-approval blocked). */
+/** Time-entry approval (manager-only, self-approval blocked). */
 @Injectable()
 export class TimeApprovalService {
   constructor(
@@ -138,7 +138,7 @@ export class TimeApprovalService {
   async approve(user: User, id: string) {
     const entry = await this.load(user, id);
     if (entry.userId === user.id) {
-      throw new ForbiddenException('Cannot approve your own time entry'); // D9
+      throw new ForbiddenException('Cannot approve your own time entry'); // self-approval block
     }
     const updated = await this.prisma.timeEntry.update({
       where: { id },

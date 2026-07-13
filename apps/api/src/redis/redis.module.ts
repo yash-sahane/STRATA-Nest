@@ -2,9 +2,11 @@ import { Global, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 import { REDIS_CLIENT } from './redis.constants';
+import { RedisLifecycleService } from './redis-lifecycle.service';
 
-/** Shared ioredis client on the cache logical DB (ADR-0007). Used by the
- *  refresh-token store and future cache/rate-limit needs. */
+/** Shared ioredis client on the cache logical DB. Used by the
+ *  refresh-token store, throttler storage, and future cache needs.
+ *  RedisLifecycleService closes it on shutdown for graceful shutdown. */
 @Global()
 @Module({
   providers: [
@@ -19,6 +21,7 @@ import { REDIS_CLIENT } from './redis.constants';
           maxRetriesPerRequest: 2,
         }),
     },
+    RedisLifecycleService,
   ],
   exports: [REDIS_CLIENT],
 })

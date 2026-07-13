@@ -4,8 +4,8 @@ import type Redis from 'ioredis';
 import { REDIS_CLIENT } from '../../../redis/redis.constants';
 
 /**
- * Redis allowlist of active refresh-token `jti`s per user (PHASE_1_AUTH_PLAN §7).
- * This is what makes refresh tokens REVOCABLE — the fix for D1: rotation stores a
+ * Redis allowlist of active refresh-token `jti`s per user.
+ * This is what makes refresh tokens REVOCABLE: rotation stores a
  * new jti and revokes the old one; logout revokes it.
  */
 @Injectable()

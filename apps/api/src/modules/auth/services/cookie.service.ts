@@ -2,16 +2,16 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { CookieOptions, Response } from 'express';
 
-/** Sets/clears the JWT cookies with the exact Django attributes (A§5.3, §5). */
+/** Sets/clears the JWT cookies per the auth cookie contract. */
 @Injectable()
 export class CookieService {
   constructor(private readonly config: ConfigService) {}
 
   private accessName(): string {
-    return this.config.get<string>('JWT_ACCESS_COOKIE_NAME', 'lt_access');
+    return this.config.get<string>('JWT_ACCESS_COOKIE_NAME', 'strata_access');
   }
   private refreshName(): string {
-    return this.config.get<string>('JWT_REFRESH_COOKIE_NAME', 'lt_refresh');
+    return this.config.get<string>('JWT_REFRESH_COOKIE_NAME', 'strata_refresh');
   }
 
   private base(): CookieOptions {

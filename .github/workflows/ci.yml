@@ -1,0 +1,120 @@
+name: CI
+
+# Fail-fast gate: typecheck → lint → test → build → security audit → docker build.
+# Runs on every PR and on main.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Typecheck · Lint · Test · Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Live services so future integration/e2e/contract jobs can run here too.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: strata
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d strata"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      - name: Prisma generate
+        run: pnpm --filter @strata/prisma run generate
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      # ESLint is not yet installed/configured — the `lint` script exists but
+      # `eslint` is not a dependency, so this step is non-blocking for now.
+      - name: Lint (non-blocking until ESLint is configured)
+        continue-on-error: true
+        run: pnpm run lint
+
+      - name: Unit tests
+        run: pnpm run test
+
+      - name: Build (frontend + api + worker + packages)
+        run: pnpm run build
+
+      # e2e + contract-regression jobs are gated on the live stack. The DB/Redis
+      # services above are provisioned so these can be enabled once DATABASE_URL is
+      # pointed at a live schema.
+      - name: E2E (skipped until schema is provisioned)
+        if: ${{ false }}
+        run: pnpm --filter @strata/api run test:e2e
+
+  security:
+    name: Security audit · Dependency review
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: pnpm }
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: pnpm audit (high+)
+        run: pnpm audit --audit-level high
+      - name: Dependency review (PRs only)
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+
+  docker:
+    name: Docker build (api + worker)
+    runs-on: ubuntu-latest
+    needs: [verify]
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/docker/Dockerfile.api
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Build Worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/docker/Dockerfile.worker
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

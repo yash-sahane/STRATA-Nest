@@ -1,14 +1,13 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { PrismaService } from '@lt/prisma';
+import { PrismaService } from '@strata/prisma';
 import type { User } from '@prisma/client';
 import { Permission, type PermissionKey } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 
 /**
- * Scopes the integration collections by the project→workspace relation (the
- * Django tables have no workspace column, so the base viewset never scoped them
- * — the D5 gap). Here, a user only sees integrations/commits for projects in
- * their ACTIVE workspaces; admins see all.
+ * Scopes the integration collections by the project→workspace relation (these
+ * tables have no workspace column of their own). A user only sees
+ * integrations/commits for projects in their ACTIVE workspaces; admins see all.
  */
 @Injectable()
 export class IntegrationAccess {

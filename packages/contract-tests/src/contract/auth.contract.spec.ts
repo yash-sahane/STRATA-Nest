@@ -1,9 +1,9 @@
 import { BASE, call, isReachable } from '../support/api-contract';
 
 /**
- * Phase-1 auth contract checks that need no seeded data (unauthenticated paths).
+ * Auth contract checks that need no seeded data (unauthenticated paths).
  * Seeded happy-path flows (login → me → refresh → logout, refresh-reuse rejection)
- * run in the e2e suite against a database — see PHASE_1_AUTH_PLAN §9.
+ * run in the e2e suite against a database.
  */
 describe('Contract — auth (unauthenticated behaviors)', () => {
   let available = false;

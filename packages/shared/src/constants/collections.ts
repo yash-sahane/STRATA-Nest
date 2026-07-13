@@ -1,7 +1,7 @@
 /**
- * Canonical collection slugs — the FROZEN REST URL segments + realtime channel
- * names the frontend uses (mirrors frontend/src/lib/api/collection-slugs.ts;
- * CURRENT_SYSTEM_AUDIT.md §7, ADR-0003). Routing and realtime rooms key off these.
+ * Canonical collection slugs — the versioned REST URL segments + realtime channel
+ * names the frontend uses (mirrors frontend/src/lib/api/collection-slugs.ts).
+ * Routing and realtime rooms key off these.
  */
 export const COLLECTION_SLUGS = {
   workspaces: 'workspaces',

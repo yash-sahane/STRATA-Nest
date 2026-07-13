@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
-import { PrismaService } from '@lt/prisma';
+import { PrismaService } from '@strata/prisma';
 
 export interface HealthReport {
   status: 'ok' | 'degraded';

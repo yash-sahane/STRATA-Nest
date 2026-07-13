@@ -1,6 +1,6 @@
 import { IsArray, IsOptional, IsString, MaxLength } from 'class-validator';
 
-// --- Sprint --- (startDate/endDate required in Django)
+// --- Sprint --- (startDate/endDate are required)
 export class CreateSprintDto {
   @IsString() workspaceId!: string;
   @IsString() projectId!: string;

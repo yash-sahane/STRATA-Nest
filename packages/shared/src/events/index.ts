@@ -1,21 +1,19 @@
 /**
- * Base domain-event contract (ADR-0006, ADR-0012). Events carry BUSINESS
- * meaning — there is no generic `*Updated` (review #5). Concrete events (e.g.
- * `TaskAssigned`, `LeaveApproved`) are defined alongside their owning module
- * and re-exported here as the migration progresses (arch §11). Phase 0 ships
- * only the base contract — no domain events yet.
+ * Base domain-event contract. Events carry BUSINESS meaning — there is no
+ * generic `*Updated`. Concrete events (e.g. `TaskAssigned`, `LeaveApproved`)
+ * are defined alongside their owning module and re-exported here.
  */
 export interface DomainEvent<TPayload = unknown> {
   /** Stable business event name, e.g. "task.assigned". */
   readonly name: string;
-  /** Owning workspace, used to route to authorized realtime rooms (ADR-0006). */
+  /** Owning workspace, used to route to authorized realtime rooms. */
   readonly workspaceId?: string;
   readonly payload: TPayload;
-  /** ISO-8601 timestamp, emitted AFTER commit (arch §4 side-effect rule). */
+  /** ISO-8601 timestamp, emitted AFTER the owning transaction commits. */
   readonly occurredAt: string;
 }
 
-// --- Phase 2: Workspace domain events (business-meaningful, ADR-0006) --------
+// --- Workspace domain events (business-meaningful) ---------------------------
 export const WorkspaceEvents = {
   MemberAdded: 'workspace.member.added',
   MemberRoleChanged: 'workspace.member.role_changed',
@@ -43,7 +41,7 @@ export interface JoinRequestHandledPayload {
   requestId: string;
 }
 
-// --- Phase 5: Planning domain events -----------------------------------------
+// --- Planning domain events --------------------------------------------------
 export const PlanningEvents = {
   SprintStarted: 'sprint.started',
   SprintCompleted: 'sprint.completed',
@@ -55,7 +53,7 @@ export interface SprintLifecyclePayload {
   sprintId: string;
 }
 
-// --- Phase 8: HR domain events -----------------------------------------------
+// --- HR domain events --------------------------------------------------------
 export const HrEvents = {
   LeaveApproved: 'leave.approved',
   LeaveRejected: 'leave.rejected',
@@ -76,13 +74,12 @@ export interface TimeEntryDecisionPayload {
   timeEntryId: string;
 }
 
-// --- Phase 9: Notification / Activity engines --------------------------------
-// Phase 9 does not introduce NEW domain events — its subscribers (Notification +
-// Audit) consume the business events already emitted by Phases 2–8 above and
-// fan them out to per-user notifications + an append-only audit log (ADR-0011).
-// A notification's `type` is derived from the source event name; NotifiableEvent
-// is the set of events that currently produce a per-user notification (all carry
-// a `userId` recipient). More join the set as later phases emit events.
+// --- Notification / Activity engines -----------------------------------------
+// The Notification and Audit subscribers introduce no NEW domain events — they
+// consume the business events emitted above and fan them out to per-user
+// notifications + an append-only audit log. A notification's `type` is derived
+// from the source event name; NotifiableEvent is the set of events that produce
+// a per-user notification (all carry a `userId` recipient).
 export const NotifiableEvent = {
   [WorkspaceEvents.MemberAdded]: 'workspace_member_added',
   [WorkspaceEvents.MemberRoleChanged]: 'workspace_role_changed',

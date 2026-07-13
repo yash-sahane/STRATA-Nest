@@ -1,8 +1,7 @@
-// Integrations (A§6.12). One integration per provider per project (OneToOne →
-// unique projectId). `accessToken` is stored ENCRYPTED at rest (D4) and is
-// write-only on the wire (never serialized back). Commits are unique per
-// (project, sha). These tables have no workspace column — scoping is via the
-// project→workspace relation (closes D5 without a schema change).
+// Integrations. One integration per provider per project (unique projectId).
+// `accessToken` is stored ENCRYPTED at rest and is write-only on the wire (never
+// serialized back). Commits are unique per (project, sha). These tables have no
+// workspace column - access is scoped via the project->workspace relation.
 
 model GitHubIntegration {
   id               String   @id

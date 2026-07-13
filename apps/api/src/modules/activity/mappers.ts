@@ -1,9 +1,9 @@
-import { toDjangoIso } from '@lt/common';
+import { formatApiTimestamp } from '@strata/common';
 import type { ActivityLog, Prisma, SavedSearch } from '@prisma/client';
 
 const asJson = (v: Prisma.JsonValue): unknown => v ?? {};
 
-/** Django ActivityLogSerializer order (createdAt/updatedAt appended last). */
+/** The API's ActivityLog field order (createdAt/updatedAt appended last). */
 export function activityLogResponse(a: ActivityLog) {
   return {
     id: String(a.id),
@@ -14,12 +14,12 @@ export function activityLogResponse(a: ActivityLog) {
     entityId: a.entityId,
     changes: asJson(a.changes),
     metadata: asJson(a.metadata),
-    createdAt: toDjangoIso(a.createdAt),
-    updatedAt: toDjangoIso(a.updatedAt),
+    createdAt: formatApiTimestamp(a.createdAt),
+    updatedAt: formatApiTimestamp(a.updatedAt),
   };
 }
 
-/** Django SavedSearchSerializer order (createdAt/updatedAt appended last). */
+/** The API's SavedSearch field order (createdAt/updatedAt appended last). */
 export function savedSearchResponse(s: SavedSearch) {
   return {
     id: String(s.id),
@@ -28,7 +28,7 @@ export function savedSearchResponse(s: SavedSearch) {
     name: s.name,
     query: s.query,
     filters: asJson(s.filters),
-    createdAt: toDjangoIso(s.createdAt),
-    updatedAt: toDjangoIso(s.updatedAt),
+    createdAt: formatApiTimestamp(s.createdAt),
+    updatedAt: formatApiTimestamp(s.updatedAt),
   };
 }

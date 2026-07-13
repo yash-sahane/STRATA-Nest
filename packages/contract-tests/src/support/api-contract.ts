@@ -1,19 +1,18 @@
 /**
- * Tiny client for contract/characterization tests (ADR-0003, arch §19).
+ * Tiny client for contract/regression tests.
  *
- * Target is chosen by env so the SAME suite runs against either backend:
- *   - CONTRACT_BASE_URL  (explicit; use this to point at NestJS later)
- *   - DJANGO_API_URL     (default — the legacy API we lock the contract from)
+ * Locks the versioned wire contract (error envelope, pagination envelope, auth)
+ * against the running NestJS API. Point it with CONTRACT_BASE_URL; the suite
+ * no-ops when the target is unreachable (see isReachable).
  *
  * Uses Node's global fetch (Node >= 18). No runtime deps.
  */
 export const BASE = (
   process.env.CONTRACT_BASE_URL ||
-  process.env.DJANGO_API_URL ||
   'http://localhost:8000'
 ).replace(/\/$/, '');
 
-/** Optional auth cookie ("lt_access=...") to exercise authenticated contracts. */
+/** Optional auth cookie ("strata_access=...") to exercise authenticated contracts. */
 export const COOKIE = process.env.CONTRACT_COOKIE || '';
 
 export interface ApiResult {

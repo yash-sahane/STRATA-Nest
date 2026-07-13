@@ -1,6 +1,6 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
-import { generateId, type ListQuerySpec } from '@lt/common';
-import { PrismaService } from '@lt/prisma';
+import { generateId, type ListQuerySpec } from '@strata/common';
+import { PrismaService } from '@strata/prisma';
 import type { ActivityLog, Prisma, SavedSearch, User } from '@prisma/client';
 import { Permission, type PermissionKey } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
@@ -20,10 +20,9 @@ export interface AuditInput {
 }
 
 /**
- * ActivityLog — **append-only** audit trail (D9). Django exposed full CRUD;
- * Phase 9 keeps list/create/retrieve but rejects UPDATE and DELETE so history
- * is immutable. Server-written via AuditSubscriber; client POSTs still accepted
- * during transition.
+ * ActivityLog — **append-only** audit trail. Supports list/create/retrieve but
+ * rejects UPDATE and DELETE so history stays immutable. Server-written via
+ * AuditSubscriber; client POSTs are also accepted directly.
  */
 @Injectable()
 export class ActivityLogsService extends ScopedCrudService<
@@ -51,7 +50,7 @@ export class ActivityLogsService extends ScopedCrudService<
   }
 
   create(user: User, dto: CreateActivityLogDto) {
-    // Django perform_create stamps user = caller.
+    // userId is stamped from the caller.
     return this.createIn(user, dto.workspaceId, {
       workspaceId: dto.workspaceId,
       userId: user.id,
@@ -71,7 +70,7 @@ export class ActivityLogsService extends ScopedCrudService<
     throw new ForbiddenException('Activity log is append-only');
   }
 
-  /** [NEW, D9] Server-side audit append used by AuditSubscriber. */
+  /** Server-side audit append used by AuditSubscriber. */
   async record(input: AuditInput): Promise<void> {
     await this.prisma.activityLog.create({
       data: {

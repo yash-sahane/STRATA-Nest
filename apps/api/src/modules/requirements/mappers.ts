@@ -1,7 +1,7 @@
-import { toDjangoIso } from '@lt/common';
+import { formatApiTimestamp } from '@strata/common';
 import type { ClientRequirement, FunctionalRequirement } from '@prisma/client';
 
-/** Field order mirrors the Django serializers (createdAt/updatedAt appended last). */
+/** Field order matches the API's frozen contract (createdAt/updatedAt appended last). */
 
 export function clientRequirementResponse(r: ClientRequirement) {
   return {
@@ -16,8 +16,8 @@ export function clientRequirementResponse(r: ClientRequirement) {
     attachments: r.attachments,
     createdBy: r.createdById,
     createdByName: r.createdByName,
-    createdAt: toDjangoIso(r.createdAt),
-    updatedAt: toDjangoIso(r.updatedAt),
+    createdAt: formatApiTimestamp(r.createdAt),
+    updatedAt: formatApiTimestamp(r.updatedAt),
   };
 }
 
@@ -39,12 +39,12 @@ export function functionalRequirementResponse(r: FunctionalRequirement) {
     reusable: r.reusable,
     assignedTo: r.assignedTo,
     assignedToNames: r.assignedToNames,
-    // Django serializes these TextFields AS STRINGS (CSV) — wire parity (ADR-0003).
+    // These fields are serialized as CSV strings on the wire (frozen contract).
     tags: r.tags,
     linkedProjectIds: r.linkedProjectIds,
     createdBy: r.createdById,
     createdByName: r.createdByName,
-    createdAt: toDjangoIso(r.createdAt),
-    updatedAt: toDjangoIso(r.updatedAt),
+    createdAt: formatApiTimestamp(r.createdAt),
+    updatedAt: formatApiTimestamp(r.updatedAt),
   };
 }

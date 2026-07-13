@@ -1,12 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import { toDjangoIso } from '@lt/common';
-import { PrismaService } from '@lt/prisma';
+import { formatApiTimestamp } from '@strata/common';
+import { PrismaService } from '@strata/prisma';
 import type { User } from '@prisma/client';
 
 /**
- * The frozen `<User>` wire shape (A§5.1 UserSerializer). Key ORDER mirrors the
- * Django serializer output (createdAt/updatedAt appended last by the base
- * serializer's pop). `isAdmin` = is_admin_flag (NOT superuser) per UserSerializer.
+ * The public `<User>` wire shape. Key ORDER matters: createdAt/updatedAt
+ * are appended last. `isAdmin` = is_admin_flag (NOT superuser).
  */
 export interface UserResponse {
   id: string;
@@ -48,7 +47,7 @@ export class UserMapper {
     return users.map((u) => this.build(u, byUser.get(u.id) ?? []));
   }
 
-  /** workspaceIds for the User serializer — filters status=ACTIVE (A§5.1). */
+  /** workspaceIds for the User serializer — filters status=ACTIVE. */
   async activeWorkspaceIds(userId: string): Promise<string[]> {
     const rows = await this.prisma.workspaceMember.findMany({
       where: { userId, status: 'ACTIVE' },
@@ -72,8 +71,8 @@ export class UserMapper {
       status: user.status,
       hasTempPassword: user.hasTempPassword,
       isAdmin: user.isAdminFlag,
-      createdAt: toDjangoIso(user.createdAt),
-      updatedAt: toDjangoIso(user.updatedAt),
+      createdAt: formatApiTimestamp(user.createdAt),
+      updatedAt: formatApiTimestamp(user.updatedAt),
     };
   }
 }

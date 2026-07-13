@@ -25,7 +25,7 @@ function epic(over: Partial<Epic> = {}): Epic {
 }
 
 describe('epicResponse', () => {
-  it('formats DateFields date-only and preserves Django field order', () => {
+  it('formats DateFields date-only and preserves the fixed field order', () => {
     const r = epicResponse(epic());
     expect(r.startDate).toBe('2026-02-01');
     expect(r.endDate).toBeNull();

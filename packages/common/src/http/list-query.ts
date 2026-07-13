@@ -1,13 +1,11 @@
 /**
- * Allowlisted list-query parser — the secured reproduction of Django's generic
- * `CamelCaseQueryFilter` (CURRENT_SYSTEM_AUDIT.md §4.3) that closes D11.
+ * Allowlisted list-query parser: parses the versioned list-query request
+ * shape the frontend sends — camelCase keys, `__<op>` suffixes,
+ * comma lists, and `ordering=field,-field` — into a Prisma `where`/`orderBy`.
+ * A field is only honored if it appears in the per-resource ALLOWLIST `spec`,
+ * never an arbitrary model field.
  *
- * Same request shape the frontend already sends (ADR-0003): camelCase keys,
- * `__<op>` suffixes, comma lists, and `ordering=field,-field`. The difference:
- * a field is only honored if it appears in the per-resource ALLOWLIST `spec`,
- * instead of any arbitrary model field. Output is a Prisma `where`/`orderBy`.
- *
- * Operators (parity with A§4.3):
+ * Operators:
  *   (none)=eq | __ne | __lt | __lte | __gt | __gte
  *   __icontains | __istartswith | __iendswith | __isnull | __not_in
  *   multi-value or comma-joined (no suffix) => `in`
@@ -55,7 +53,7 @@ function coerce(type: FieldType | undefined, value: string): unknown {
 function asArray(v: string | string[] | undefined): string[] {
   if (v === undefined) return [];
   const arr = Array.isArray(v) ? v : [v];
-  // A single "a,b,c" expands to a list (matches the Django comma behavior).
+  // A single "a,b,c" expands to a list (the versioned comma-list contract).
   if (arr.length === 1 && arr[0].includes(',')) return arr[0].split(',').filter(Boolean);
   return arr.filter((x) => x !== '');
 }
@@ -107,7 +105,7 @@ export function parseListQuery(
     if (RESERVED.has(rawKey)) continue;
     const [apiKey, suffix] = rawKey.split('__', 2);
     const fieldSpec = spec.filterable[apiKey];
-    if (!fieldSpec) continue; // ALLOWLIST — silently ignore unknown fields (D11)
+    if (!fieldSpec) continue; // ALLOWLIST — silently ignore unknown fields
 
     const values = asArray(rawVal);
     if (values.length === 0 && suffix !== 'isnull') continue;
@@ -124,7 +122,7 @@ export function parseListQuery(
     }
   }
 
-  // ordering=field,-field  (A§4.3)
+  // ordering=field,-field
   let orderBy = spec.defaultOrderBy ?? { createdAt: 'desc' as const };
   const ordering = query.ordering;
   if (typeof ordering === 'string' && ordering.trim()) {

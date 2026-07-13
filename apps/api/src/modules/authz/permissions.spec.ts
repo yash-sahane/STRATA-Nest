@@ -36,9 +36,9 @@ describe('permissionsForRole', () => {
     );
     expect(set.has(Permission.ProjectCreate)).toBe(false);
     expect(set.has(Permission.TaskWrite)).toBe(false);
-    expect(set.has(Permission.LeaveApprove)).toBe(false); // members can't approve leave (D9)
+    expect(set.has(Permission.LeaveApprove)).toBe(false); // members can't approve leave
     expect(set.has(Permission.TimeApprove)).toBe(false);
-    expect(set.has(Permission.IntegrationWrite)).toBe(false); // integrations hold tokens (D4)
+    expect(set.has(Permission.IntegrationWrite)).toBe(false); // integrations hold tokens
   });
 
   it('MANAGER can approve leave and time; ASSISTANT_MANAGER too', () => {

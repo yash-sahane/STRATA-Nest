@@ -1,6 +1,6 @@
 import type { ConfigService } from '@nestjs/config';
-import type { PrismaService } from '@lt/prisma';
-import type { GitJob } from '@lt/shared';
+import type { PrismaService } from '@strata/prisma';
+import type { GitJob } from '@strata/shared';
 import { GitProcessor } from './git.processor';
 
 describe('GitProcessor.parseTaskRefs', () => {

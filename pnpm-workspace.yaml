@@ -1,7 +1,4 @@
-# NestJS monorepo workspace.
-# NOTE: `frontend/` is intentionally excluded — it keeps its own npm/Next.js
-# toolchain untouched during the strangler migration (ADR-0010). Likewise the
-# legacy Django `backend/` is not a workspace package.
+# Monorepo workspace: Next.js frontend + NestJS API/worker + shared packages.
 packages:
   - "apps/*"
   - "packages/*"

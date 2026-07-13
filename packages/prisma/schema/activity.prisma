@@ -1,6 +1,6 @@
-// Activity + saved searches (A§6.11). ActivityLog is the audit trail; Phase 9
-// makes it APPEND-ONLY (no update/delete surface — D9) and server-written via
-// AuditSubscriber. SavedSearch stays user-owned CRUD.
+// Activity + saved searches. ActivityLog is an APPEND-ONLY audit trail (no
+// update/delete surface), written server-side via AuditSubscriber. SavedSearch
+// is user-owned CRUD.
 
 model ActivityLog {
   id         String   @id

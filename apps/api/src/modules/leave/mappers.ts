@@ -1,8 +1,8 @@
-import { toDjangoIso } from '@lt/common';
+import { formatApiTimestamp } from '@strata/common';
 import type { LeaveBalance, LeaveRequest } from '@prisma/client';
 
 const dateOnly = (d: Date): string => d.toISOString().slice(0, 10);
-const isoOrNull = (d: Date | null): string | null => (d ? toDjangoIso(d) : null);
+const isoOrNull = (d: Date | null): string | null => (d ? formatApiTimestamp(d) : null);
 
 export function leaveRequestResponse(r: LeaveRequest) {
   return {
@@ -20,8 +20,8 @@ export function leaveRequestResponse(r: LeaveRequest) {
     approvedAt: isoOrNull(r.approvedAt),
     rejectionReason: r.rejectionReason,
     daysCount: r.daysCount,
-    createdAt: toDjangoIso(r.createdAt),
-    updatedAt: toDjangoIso(r.updatedAt),
+    createdAt: formatApiTimestamp(r.createdAt),
+    updatedAt: formatApiTimestamp(r.updatedAt),
   };
 }
 
@@ -35,7 +35,7 @@ export function leaveBalanceResponse(b: LeaveBalance) {
     unpaidLeave: b.unpaidLeave,
     halfDay: b.halfDay,
     compOff: b.compOff,
-    createdAt: toDjangoIso(b.createdAt),
-    updatedAt: toDjangoIso(b.updatedAt),
+    createdAt: formatApiTimestamp(b.createdAt),
+    updatedAt: formatApiTimestamp(b.updatedAt),
   };
 }

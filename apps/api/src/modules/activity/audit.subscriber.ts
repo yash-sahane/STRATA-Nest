@@ -9,12 +9,12 @@ import {
   type TimeEntryDecisionPayload,
   type WorkspaceMemberAddedPayload,
   type WorkspaceMemberRoleChangedPayload,
-} from '@lt/shared';
+} from '@strata/shared';
 import { ActivityLogsService, type AuditInput } from './activity.services';
 
 /**
- * [NEW, D9] Append-only audit. Writes an ActivityLog row for each business
- * event (post-commit). Best-effort — a failed audit is logged, never propagated
+ * Append-only audit. Writes an ActivityLog row for each business event
+ * (post-commit). Best-effort — a failed audit is logged, never propagated
  * back into the originating request. `action` is the event name; the actor is
  * the event's subject `userId` until events carry an explicit actorId.
  */

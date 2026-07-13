@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { generateId, paginate, parseListQuery, type ListQuerySpec } from '@lt/common';
-import type { PaginatedResponse } from '@lt/shared';
-import { PrismaService } from '@lt/prisma';
+import { generateId, paginate, parseListQuery, type ListQuerySpec } from '@strata/common';
+import type { PaginatedResponse } from '@strata/shared';
+import { PrismaService } from '@strata/prisma';
 import type { Prisma, Project, User } from '@prisma/client';
 import { Permission } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
@@ -77,7 +77,7 @@ export class ProjectsService {
         archived: dto.archived ?? false,
         startDate: dto.startDate ? new Date(dto.startDate) : null,
         endDate: dto.endDate ? new Date(dto.endDate) : null,
-        ownerId: user.id, // Django perform_create: owner + createdBy = caller
+        ownerId: user.id, // owner + createdBy stamped from the caller
         createdById: user.id,
         createdByName: user.name ?? '',
         memberIds: (dto.memberIds ?? []) as Prisma.InputJsonValue,

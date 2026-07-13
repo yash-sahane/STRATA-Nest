@@ -1,6 +1,6 @@
-import type { PrismaService } from '@lt/prisma';
+import type { PrismaService } from '@strata/prisma';
 import type { User } from '@prisma/client';
-import { HrEvents, WorkspaceEvents, type DomainEvent, type LeaveDecisionPayload } from '@lt/shared';
+import { HrEvents, WorkspaceEvents, type DomainEvent, type LeaveDecisionPayload } from '@strata/shared';
 import { NotificationSubscriber } from './notification.subscriber';
 import { NotificationsService } from './notifications.service';
 

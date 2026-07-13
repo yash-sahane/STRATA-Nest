@@ -1,6 +1,5 @@
-// Time tracking — mapped to existing Django tables (A§6.9).
-// ActiveTimer has NO workspace column in Django (D5). Reproduced as-is (unscoped,
-// one per user); adding workspaceId + scoping is a later migration (documented).
+// Time tracking. ActiveTimer has no workspace column; it is tied to a single
+// user (user_id is unique) and every read/write is scoped to that user.
 
 model TimeEntry {
   id              String    @id

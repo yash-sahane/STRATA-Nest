@@ -1,8 +1,9 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { generateId, paginate, parseListQuery, type ListQuerySpec } from '@lt/common';
-import type { PaginatedResponse } from '@lt/shared';
-import { PrismaService } from '@lt/prisma';
+import { generateId, paginate, parseListQuery, type ListQuerySpec } from '@strata/common';
+import type { PaginatedResponse } from '@strata/shared';
+import { PrismaService } from '@strata/prisma';
 import type { KanbanColumn, Prisma, TaskComment, User } from '@prisma/client';
+import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import type {
   CreateKanbanColumnDto,
   CreateTaskCommentDto,
@@ -12,9 +13,11 @@ import type {
 import { kanbanColumnResponse, taskCommentResponse } from './mappers';
 
 /**
- * TaskComment / KanbanColumn have NO workspace column in Django, so the base
- * viewset does NOT workspace-scope them — any authenticated user. Reproduced
- * faithfully (pre-existing gap; the frontend always filters by taskId/projectId).
+ * TaskComment / KanbanColumn have no workspace column of their own; they are
+ * scoped through their parent (Task / Project respectively). Every read/write
+ * of a single record verifies the caller is a member of the parent's
+ * workspace, so no one can read, edit, or delete another workspace's comment
+ * or column by guessing its id.
  */
 @Injectable()
 export class TaskCommentsService {
@@ -23,11 +26,21 @@ export class TaskCommentsService {
     sortable: { createdAt: 'createdAt' },
     defaultOrderBy: { createdAt: 'desc' },
   };
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly access: WorkspaceAccessService,
+  ) {}
 
   async list(
+    user: User,
     query: Record<string, string | string[] | undefined>,
   ): Promise<PaginatedResponse<ReturnType<typeof taskCommentResponse>>> {
+    // Scoped read path: a caller must name the parent task and be a member of
+    // its workspace. (An unfiltered cross-workspace listing is intentionally
+    // not offered here.)
+    const taskId = typeof query.taskId === 'string' ? query.taskId : undefined;
+    if (!taskId) throw new NotFoundException('Not found.');
+    await this.assertTaskAccess(user, taskId);
     const parsed = parseListQuery(query, this.spec);
     const where = parsed.where as Prisma.TaskCommentWhereInput;
     const [items, total] = await this.prisma.$transaction([
@@ -42,18 +55,20 @@ export class TaskCommentsService {
     return paginate(items.map(taskCommentResponse), total, parsed.page, parsed.pageSize);
   }
 
-  async retrieve(id: string) {
+  async retrieve(user: User, id: string) {
     const c = await this.prisma.taskComment.findUnique({ where: { id } });
     if (!c) throw new NotFoundException('Not found.');
+    await this.assertTaskAccess(user, c.taskId);
     return taskCommentResponse(c);
   }
 
   async create(user: User, dto: CreateTaskCommentDto) {
+    await this.assertTaskAccess(user, dto.taskId);
     const c = await this.prisma.taskComment.create({
       data: {
         id: generateId(),
         taskId: dto.taskId,
-        userId: user.id, // Django perform_create sets user = caller
+        userId: user.id, // stamped from the caller
         content: dto.content,
         mentions: (dto.mentions ?? []) as Prisma.InputJsonValue,
         attachments: (dto.attachments ?? []) as Prisma.InputJsonValue,
@@ -62,22 +77,38 @@ export class TaskCommentsService {
     return taskCommentResponse(c);
   }
 
-  async update(id: string, dto: UpdateTaskCommentDto) {
-    await this.ensure(id);
+  async update(user: User, id: string, dto: UpdateTaskCommentDto) {
+    const c = await this.ensureAccess(user, id);
     const data: Prisma.TaskCommentUpdateInput = {};
     if (dto.content !== undefined) data.content = dto.content;
     if (dto.mentions !== undefined) data.mentions = dto.mentions as Prisma.InputJsonValue;
     if (dto.attachments !== undefined) data.attachments = dto.attachments as Prisma.InputJsonValue;
-    return taskCommentResponse(await this.prisma.taskComment.update({ where: { id }, data }));
+    return taskCommentResponse(await this.prisma.taskComment.update({ where: { id: c.id }, data }));
   }
 
-  async remove(id: string): Promise<void> {
-    await this.ensure(id);
-    await this.prisma.taskComment.delete({ where: { id } });
+  async remove(user: User, id: string): Promise<void> {
+    const c = await this.ensureAccess(user, id);
+    await this.prisma.taskComment.delete({ where: { id: c.id } });
   }
 
-  private async ensure(id: string): Promise<void> {
-    if (!(await this.prisma.taskComment.findUnique({ where: { id }, select: { id: true } }))) {
+  private async ensureAccess(user: User, id: string): Promise<{ id: string; taskId: string }> {
+    const c = await this.prisma.taskComment.findUnique({
+      where: { id },
+      select: { id: true, taskId: true },
+    });
+    if (!c) throw new NotFoundException('Not found.');
+    await this.assertTaskAccess(user, c.taskId);
+    return c;
+  }
+
+  /** Resolve the task's workspace and require the caller to be a member (else 404). */
+  private async assertTaskAccess(user: User, taskId: string): Promise<void> {
+    if (this.access.isPlatformAdmin(user)) return;
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId },
+      select: { workspaceId: true },
+    });
+    if (!task || !(await this.access.activeMembership(user.id, task.workspaceId))) {
       throw new NotFoundException('Not found.');
     }
   }
@@ -90,11 +121,18 @@ export class KanbanColumnsService {
     sortable: { createdAt: 'createdAt', position: 'position' },
     defaultOrderBy: { position: 'asc' },
   };
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly access: WorkspaceAccessService,
+  ) {}
 
   async list(
+    user: User,
     query: Record<string, string | string[] | undefined>,
   ): Promise<PaginatedResponse<ReturnType<typeof kanbanColumnResponse>>> {
+    const projectId = typeof query.projectId === 'string' ? query.projectId : undefined;
+    if (!projectId) throw new NotFoundException('Not found.');
+    await this.assertProjectAccess(user, projectId);
     const parsed = parseListQuery(query, this.spec);
     const where = parsed.where as Prisma.KanbanColumnWhereInput;
     const [items, total] = await this.prisma.$transaction([
@@ -109,13 +147,15 @@ export class KanbanColumnsService {
     return paginate(items.map(kanbanColumnResponse), total, parsed.page, parsed.pageSize);
   }
 
-  async retrieve(id: string) {
+  async retrieve(user: User, id: string) {
     const k = await this.prisma.kanbanColumn.findUnique({ where: { id } });
     if (!k) throw new NotFoundException('Not found.');
+    await this.assertProjectAccess(user, k.projectId);
     return kanbanColumnResponse(k);
   }
 
-  async create(dto: CreateKanbanColumnDto) {
+  async create(user: User, dto: CreateKanbanColumnDto) {
+    await this.assertProjectAccess(user, dto.projectId);
     const k = await this.prisma.kanbanColumn.create({
       data: {
         id: generateId(),
@@ -130,24 +170,40 @@ export class KanbanColumnsService {
     return kanbanColumnResponse(k);
   }
 
-  async update(id: string, dto: UpdateKanbanColumnDto) {
-    await this.ensure(id);
+  async update(user: User, id: string, dto: UpdateKanbanColumnDto) {
+    const k = await this.ensureAccess(user, id);
     const data: Prisma.KanbanColumnUpdateInput = {};
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.status !== undefined) data.status = dto.status;
     if (dto.wipLimit !== undefined) data.wipLimit = dto.wipLimit;
     if (dto.position !== undefined) data.position = dto.position;
     if (dto.color !== undefined) data.color = dto.color;
-    return kanbanColumnResponse(await this.prisma.kanbanColumn.update({ where: { id }, data }));
+    return kanbanColumnResponse(await this.prisma.kanbanColumn.update({ where: { id: k.id }, data }));
   }
 
-  async remove(id: string): Promise<void> {
-    await this.ensure(id);
-    await this.prisma.kanbanColumn.delete({ where: { id } });
+  async remove(user: User, id: string): Promise<void> {
+    const k = await this.ensureAccess(user, id);
+    await this.prisma.kanbanColumn.delete({ where: { id: k.id } });
   }
 
-  private async ensure(id: string): Promise<void> {
-    if (!(await this.prisma.kanbanColumn.findUnique({ where: { id }, select: { id: true } }))) {
+  private async ensureAccess(user: User, id: string): Promise<{ id: string; projectId: string }> {
+    const k = await this.prisma.kanbanColumn.findUnique({
+      where: { id },
+      select: { id: true, projectId: true },
+    });
+    if (!k) throw new NotFoundException('Not found.');
+    await this.assertProjectAccess(user, k.projectId);
+    return k;
+  }
+
+  /** Resolve the project's workspace and require the caller to be a member (else 404). */
+  private async assertProjectAccess(user: User, projectId: string): Promise<void> {
+    if (this.access.isPlatformAdmin(user)) return;
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: { workspaceId: true },
+    });
+    if (!project || !(await this.access.activeMembership(user.id, project.workspaceId))) {
       throw new NotFoundException('Not found.');
     }
   }

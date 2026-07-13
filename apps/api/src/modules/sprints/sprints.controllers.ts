@@ -10,6 +10,7 @@ import {
   UpdateRetrospectiveDto,
   UpdateSprintDto,
 } from './dto';
+import { SprintDeletionService } from '../deletion/sprint-deletion.service';
 import { SprintCompletionService } from './sprint-completion.service';
 import { RetrospectivesService, SprintsService } from './sprints.services';
 
@@ -21,15 +22,17 @@ export class SprintsController {
   constructor(
     private readonly svc: SprintsService,
     private readonly completion: SprintCompletionService,
+    private readonly deletion: SprintDeletionService,
   ) {}
   @Get() list(@CurrentUser() u: User, @Query() q: Q) { return this.svc.list(u, q); }
   @Post() @RequirePermission(Permission.PlanningWrite) create(@CurrentUser() u: User, @Body() d: CreateSprintDto) { return this.svc.create(u, d); }
-  /** [NEW] Complete a sprint (close + seed retrospective, transactional). */
+  /** Complete a sprint (close + seed retrospective, transactional). */
   @Post(':id/complete') complete(@CurrentUser() u: User, @Param('id') id: string) { return this.completion.complete(u, id); }
   @Get(':id') get(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.retrieve(u, id); }
   @Patch(':id') patch(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateSprintDto) { return this.svc.patch(u, id, d); }
   @Put(':id') put(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateSprintDto) { return this.svc.patch(u, id, d); }
-  @Delete(':id') @HttpCode(204) remove(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.remove(u, id); }
+  /** Sprint aggregate delete → cascades Retrospectives (DeletionModule). */
+  @Delete(':id') @HttpCode(204) remove(@CurrentUser() u: User, @Param('id') id: string) { return this.deletion.delete(u, id); }
 }
 
 @ApiTags('retrospectives')

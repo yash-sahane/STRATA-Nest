@@ -26,13 +26,14 @@ export class AuthController {
   ) {}
 
   private refreshCookie(req: Request): string | undefined {
-    const name = this.config.get<string>('JWT_REFRESH_COOKIE_NAME', 'lt_refresh');
+    const name = this.config.get<string>('JWT_REFRESH_COOKIE_NAME', 'strata_refresh');
     return req.cookies?.[name] as string | undefined;
   }
 
   @Public()
   @Throttle({ default: THROTTLE.login })
   @Post('login')
+  @HttpCode(200) // The frozen API contract requires 200 here, not Nest's POST default 201 (RC live-verified)
   async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
     const { user, sessionId, tokens } = await this.auth.login(dto.email, dto.password);
     this.auth.cookies.setAuth(res, tokens.access, tokens.refresh);
@@ -59,6 +60,7 @@ export class AuthController {
   @Public()
   @Throttle({ default: THROTTLE.refresh })
   @Post('refresh')
+  @HttpCode(200) // The frozen API contract requires 200 here; softError paths still set their own status below
   async refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const result = await this.auth.refresh(this.refreshCookie(req));
     if ('softError' in result) {
@@ -75,6 +77,7 @@ export class AuthController {
   }
 
   @Post('change-password')
+  @HttpCode(200) // The frozen API contract requires 200 here; softError paths still set their own status below
   async changePassword(
     @CurrentUser() user: User,
     @Body() dto: ChangePasswordDto,
@@ -96,12 +99,14 @@ export class AuthController {
   @Public()
   @Throttle({ default: THROTTLE.reset })
   @Post('password-reset')
+  @HttpCode(200) // The frozen API contract requires 200 here
   requestPasswordReset(@Body() dto: PasswordResetRequestDto) {
     return this.auth.requestPasswordReset(dto.email);
   }
 
   @Public()
   @Post('password-reset/confirm')
+  @HttpCode(200) // The frozen API contract requires 200 here; softError paths still set their own status below
   async confirmPasswordReset(
     @Body() dto: PasswordResetConfirmDto,
     @Res({ passthrough: true }) res: Response,

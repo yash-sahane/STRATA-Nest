@@ -37,17 +37,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# Python / Django
-.venv/
-venv/
-backend/venv/
-__pycache__/
-*.py[cod]
-.ruff_cache/
-*.egg-info/
-backend/.venv/
-backend/db.sqlite3
-
 # IDE
 .vscode
 .idea
@@ -69,3 +58,7 @@ dist/
 packages/prisma/generated/
 # allow committing the env template (overrides the .env.example ignore above)
 !.env.example
+
+# Graphify skill artifacts (generated locally, not project source)
+.graphify_*
+graphify-out/

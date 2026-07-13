@@ -1,12 +1,12 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Worker, type Job } from 'bullmq';
-import { Queues, type EmailJob } from '@lt/shared';
+import { Queues, type EmailJob } from '@strata/shared';
 
 /**
- * Email CONSUMER (ADR-0007). A BullMQ Worker on the `email` queue that renders
+ * Email CONSUMER. A BullMQ Worker on the `email` queue that renders
  * + sends each job. Transport: Resend when RESEND_API_KEY is set AND the SDK is
- * installed; otherwise it logs (dev / Django-mail-fallback intent). A thrown
+ * installed; otherwise it logs (dev fallback). A thrown
  * error triggers BullMQ's configured retries/backoff; a permanent condition
  * (no key / no SDK) resolves as a log so the job doesn't retry forever.
  */

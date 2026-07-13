@@ -1,10 +1,10 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { randomBytes } from 'node:crypto';
-import { generateId, paginate, parseListQuery, type ListQuerySpec } from '@lt/common';
-import type { PaginatedResponse } from '@lt/shared';
-import { WorkspaceEvents, type WorkspaceMemberAddedPayload } from '@lt/shared';
-import { PrismaService } from '@lt/prisma';
+import { generateId, paginate, parseListQuery, type ListQuerySpec } from '@strata/common';
+import type { PaginatedResponse } from '@strata/shared';
+import { WorkspaceEvents, type WorkspaceMemberAddedPayload } from '@strata/shared';
+import { PrismaService } from '@strata/prisma';
 import type { Prisma, User } from '@prisma/client';
 import { Permission } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
@@ -84,7 +84,7 @@ export class WorkspacesService {
   }
 
   /** Any authenticated user may create a workspace; the creator becomes the
-   *  owner and an ACTIVE MANAGER member (Django perform_create), transactionally. */
+   *  owner and an ACTIVE MANAGER member, transactionally. */
   async create(user: User, dto: CreateWorkspaceDto) {
     const workspaceId = generateId();
     const [ws] = await this.prisma.$transaction([
@@ -110,7 +110,7 @@ export class WorkspacesService {
         },
       }),
     ]);
-    // Post-commit side effect (arch §4): membership event.
+    // Post-commit side effect: membership event.
     this.emitMemberAdded({ workspaceId, userId: user.id, role: 'MANAGER', via: 'direct' });
     return workspaceResponse(ws, [user.id]);
   }

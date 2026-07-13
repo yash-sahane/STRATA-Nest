@@ -1,4 +1,4 @@
-import type { PrismaService } from '@lt/prisma';
+import type { PrismaService } from '@strata/prisma';
 import type Redis from 'ioredis';
 import { MODEL_COLLECTION } from './realtime.constants';
 import { RealtimeService } from './realtime.service';
@@ -23,7 +23,7 @@ describe('RealtimeService.canReceive (D2 workspace boundary)', () => {
     expect(RealtimeService.canReceive({ workspaceIds: null }, 'anything')).toBe(true);
   });
 
-  it('unscoped events (no workspaceId) reach everyone (Django parity for comments/kanban)', () => {
+  it('unscoped events (no workspaceId) reach everyone (comments/kanban are never workspace-scoped)', () => {
     expect(RealtimeService.canReceive({ workspaceIds: new Set() }, undefined)).toBe(true);
   });
 });
@@ -62,7 +62,7 @@ describe('RealtimeService.emit — broadcast filtering', () => {
     );
 
     expect(s1.sent).toHaveLength(1); // right workspace + subscribed
-    expect(s2.sent).toHaveLength(0); // wrong workspace (D2)
+    expect(s2.sent).toHaveLength(0); // wrong workspace
     expect(s3.sent).toHaveLength(0); // not subscribed to the channel
     expect(redis.publish).toHaveBeenCalledTimes(1);
   });

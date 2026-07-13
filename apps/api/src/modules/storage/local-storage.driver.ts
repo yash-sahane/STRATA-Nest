@@ -5,8 +5,8 @@ import type { StorageDriver } from './storage.types';
 
 /**
  * Filesystem driver. Keys are stored under `root` (STORAGE_LOCAL_ROOT); the
- * public URL mirrors Django `MEDIA_URL + key` (= `media/<key>`) so the `url`
- * field is byte-identical. Keys are confined to `root` (path-traversal guard).
+ * public URL is a fixed `media/<key>` prefix so the `url` field stays stable.
+ * Keys are confined to `root` (path-traversal guard).
  */
 export class LocalStorageDriver implements StorageDriver {
   private readonly root: string;

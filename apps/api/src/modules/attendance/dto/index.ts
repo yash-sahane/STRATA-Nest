@@ -25,7 +25,7 @@ export class UpdateAttendanceDto {
   @IsOptional() @IsBoolean() isHoliday?: boolean;
 }
 
-// [NEW] server-computed check-in/out
+// Server-computed check-in/out
 export class CheckInDto {
   @IsString() workspaceId!: string;
   @IsOptional() @IsString() location?: string;

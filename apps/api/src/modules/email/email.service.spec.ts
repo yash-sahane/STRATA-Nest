@@ -1,5 +1,5 @@
 import type { ConfigService } from '@nestjs/config';
-import { EmailKind, type EmailJob } from '@lt/shared';
+import { EmailKind, type EmailJob } from '@strata/shared';
 import { EmailService } from './email.service';
 
 const cfg = (transport: string): ConfigService =>
@@ -32,11 +32,28 @@ describe('EmailService', () => {
       'send-email',
       job,
       expect.objectContaining({
-        jobId: 'welcome:a@b.com',
+        jobId: 'welcome_a@b.com', // ':' sanitized — BullMQ forbids it in a custom id
         attempts: 5,
         backoff: { type: 'exponential', delay: 2000 },
       }),
     );
+  });
+
+  it('sanitizes ":" out of the job id (BullMQ rejects it) for colon-heavy keys', async () => {
+    const svc = new EmailService(cfg('queue'));
+    const add = jest.fn().mockResolvedValue(undefined);
+    (svc as unknown as { queue: { add: jest.Mock } }).queue = { add };
+    const resetJob: EmailJob = {
+      kind: EmailKind.PasswordReset,
+      to: 'u@x.com',
+      subject: 'Reset',
+      text: 'link',
+      idempotencyKey: 'reset:u@x.com:http://localhost:3000/reset?token=abc',
+    };
+    await svc.enqueue(resetJob);
+    const opts = add.mock.calls[0][2] as { jobId: string };
+    expect(opts.jobId).not.toContain(':');
+    expect(opts.jobId).toBe('reset_u@x.com_http_//localhost_3000/reset?token=abc');
   });
 
   it('falls back to logging if the queue add throws (never breaks the request)', async () => {

@@ -1,0 +1,11 @@
+// Idempotency keys - back retry-safe bulk-save: the first request stores its
+// response under the client key; a retry with the same key returns it verbatim
+// instead of rebuilding the tree.
+
+model IdempotencyKey {
+  key       String   @id
+  response  Json
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("core_idempotencykey")
+}

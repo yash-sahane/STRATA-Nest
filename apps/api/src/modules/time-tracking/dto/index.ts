@@ -48,7 +48,7 @@ export class UpdateActiveTimerDto {
   @IsOptional() @IsObject() pomodoroSettings?: Record<string, unknown>;
 }
 
-// [NEW] timer lifecycle
+// Timer lifecycle
 export class StartTimerDto {
   @IsOptional() @IsString() taskId?: string;
   @IsOptional() @IsString() taskTitle?: string;

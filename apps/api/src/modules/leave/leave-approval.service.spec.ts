@@ -1,4 +1,4 @@
-import type { PrismaService } from '@lt/prisma';
+import type { PrismaService } from '@strata/prisma';
 import type { User } from '@prisma/client';
 import { LeaveApprovalService } from './leave-approval.service';
 import { LEAVE_TYPE_TO_BALANCE_FIELD, requiredUnits } from './leave-balance';

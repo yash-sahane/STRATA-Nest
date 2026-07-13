@@ -4,8 +4,8 @@ import { CookieService } from './cookie.service';
 
 function fakeConfig(overrides: Record<string, unknown> = {}): ConfigService {
   const values: Record<string, unknown> = {
-    JWT_ACCESS_COOKIE_NAME: 'lt_access',
-    JWT_REFRESH_COOKIE_NAME: 'lt_refresh',
+    JWT_ACCESS_COOKIE_NAME: 'strata_access',
+    JWT_REFRESH_COOKIE_NAME: 'strata_refresh',
     JWT_COOKIE_SAMESITE: 'Lax',
     JWT_COOKIE_SECURE: false,
     JWT_COOKIE_DOMAIN: '',
@@ -32,14 +32,14 @@ function fakeRes() {
   return { res, set, cleared };
 }
 
-describe('CookieService — Django cookie attribute parity (A§5.3)', () => {
+describe('CookieService — cookie attribute contract', () => {
   it('sets both auth cookies with the exact attributes', () => {
     const svc = new CookieService(fakeConfig());
     const { res, set } = fakeRes();
     svc.setAuth(res, 'ACCESS', 'REFRESH');
 
-    const access = set.find((c) => c.name === 'lt_access')!;
-    const refresh = set.find((c) => c.name === 'lt_refresh')!;
+    const access = set.find((c) => c.name === 'strata_access')!;
+    const refresh = set.find((c) => c.name === 'strata_refresh')!;
     expect(access.value).toBe('ACCESS');
     expect(refresh.value).toBe('REFRESH');
     expect(access.opts).toMatchObject({
@@ -64,7 +64,7 @@ describe('CookieService — Django cookie attribute parity (A§5.3)', () => {
     const svc = new CookieService(fakeConfig());
     const { res, cleared } = fakeRes();
     svc.clearAuth(res);
-    expect(cleared.map((c) => c.name).sort()).toEqual(['lt_access', 'lt_refresh']);
+    expect(cleared.map((c) => c.name).sort()).toEqual(['strata_access', 'strata_refresh']);
     expect(cleared[0].opts).toMatchObject({ path: '/' });
   });
 });

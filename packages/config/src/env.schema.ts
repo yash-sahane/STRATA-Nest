@@ -1,9 +1,23 @@
 import { z } from 'zod';
 
 /**
+ * Robust boolean env parser. `z.coerce.boolean()` uses `Boolean(str)`, so the
+ * string "false" (and "0", "no") coerce to TRUE — a dangerous footgun for flags
+ * like RBAC_ENFORCED / JWT_COOKIE_SECURE. This maps common truthy/falsey strings
+ * explicitly and falls back to `def` when unset.
+ */
+const boolEnv = (def: boolean) =>
+  z.preprocess((v) => {
+    if (typeof v === 'boolean') return v;
+    if (v === undefined || v === null) return def;
+    const s = String(v).trim().toLowerCase();
+    if (['true', '1', 'yes', 'on'].includes(s)) return true;
+    if (['false', '0', 'no', 'off', ''].includes(s)) return false;
+    return v; // anything else → let z.boolean() reject it
+  }, z.boolean());
+
+/**
  * Single source of truth for environment configuration, validated at boot.
- * Mirrors the Django settings surface (CURRENT_SYSTEM_AUDIT.md §3) and the new
- * async/realtime/security knobs (TARGET_ARCHITECTURE_NESTJS.md, ADR-0007/0009).
  *
  * Validation is fail-fast: a missing/invalid var aborts startup with a clear
  * message instead of failing deep inside a request.
@@ -23,38 +37,38 @@ export const envSchema = z.object({
   // Database
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
 
-  // Redis (partitioned by logical DB — ADR-0007)
+  // Redis (partitioned by logical DB)
   REDIS_HOST: z.string().default('localhost'),
   REDIS_PORT: z.coerce.number().int().positive().default(6379),
   REDIS_CACHE_DB: z.coerce.number().int().min(0).default(0),
   REDIS_QUEUE_DB: z.coerce.number().int().min(0).default(1),
   REDIS_SOCKET_DB: z.coerce.number().int().min(0).default(2),
 
-  // Auth / JWT (cookie-based — ADR-0009)
+  // Auth / JWT (cookie-based)
   JWT_ACCESS_SECRET: z.string().min(1, 'JWT_ACCESS_SECRET is required'),
   JWT_REFRESH_SECRET: z.string().min(1, 'JWT_REFRESH_SECRET is required'),
   JWT_ACCESS_TTL: z.coerce.number().int().positive().default(900),
   JWT_REFRESH_TTL: z.coerce.number().int().positive().default(604800),
-  JWT_ACCESS_COOKIE_NAME: z.string().default('lt_access'),
-  JWT_REFRESH_COOKIE_NAME: z.string().default('lt_refresh'),
+  JWT_ACCESS_COOKIE_NAME: z.string().default('strata_access'),
+  JWT_REFRESH_COOKIE_NAME: z.string().default('strata_refresh'),
   JWT_COOKIE_DOMAIN: z.string().optional(),
-  JWT_COOKIE_SECURE: z.coerce.boolean().default(false),
+  JWT_COOKIE_SECURE: boolEnv(false),
   JWT_COOKIE_SAMESITE: z.enum(['Lax', 'Strict', 'None']).default('Lax'),
-  // Refresh-token migration (PHASE_1_AUTH_PLAN §7): false = compatibility mode
-  // (accept signature-valid Django tokens); true = strict (jti must be in Redis).
-  AUTH_STRICT_REFRESH: z.coerce.boolean().default(false),
-  // RBAC (ADR-0005 / PHASE_2): false = membership-only floor (matches Django during
-  // dark-launch); true = enforce per-permission role checks on writes.
-  RBAC_ENFORCED: z.coerce.boolean().default(false),
+  // AUTH_STRICT_REFRESH: false = compatibility mode (accept any signature-valid
+  // refresh token); true = strict (jti must be tracked in Redis).
+  AUTH_STRICT_REFRESH: boolEnv(false),
+  // RBAC_ENFORCED: false = membership-only floor; true = enforce
+  // per-permission role checks on writes.
+  RBAC_ENFORCED: boolEnv(false),
 
-  // Email (Resend; queued — ADR-0007). EMAIL_TRANSPORT: 'queue' enqueues to
-  // BullMQ (worker sends); 'inline' logs synchronously (the retained fallback
-  // for when the worker is unavailable, Phase 10 rollback strategy).
+  // Email (Resend; queued). EMAIL_TRANSPORT: 'queue' enqueues to BullMQ (the
+  // worker sends); 'inline' logs synchronously (fallback when the worker is
+  // unavailable).
   RESEND_API_KEY: z.string().default(''),
   EMAIL_FROM: z.string().default('noreply@example.com'),
   EMAIL_TRANSPORT: z.enum(['queue', 'inline']).default('queue'),
 
-  // Storage (StorageService — arch §13)
+  // Storage (StorageService)
   STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
   STORAGE_LOCAL_ROOT: z.string().default('./.storage'),
   AWS_ACCESS_KEY_ID: z.string().optional(),
@@ -63,15 +77,20 @@ export const envSchema = z.object({
   AWS_S3_REGION_NAME: z.string().default('us-east-1'),
   AWS_S3_ENDPOINT_URL: z.string().optional(),
 
-  // Integration token encryption (closes D4)
+  // Integration token encryption
   INTEGRATION_TOKEN_ENC_KEY: z.string().optional(),
 
   // Observability
   LOG_LEVEL: z
     .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
     .default('info'),
+  // Swagger/OpenAPI UI. Off unless explicitly enabled; forced off in production
+  // unless SWAGGER_ENABLED=true — the schema is not exposed publicly by default.
+  SWAGGER_ENABLED: boolEnv(false),
+  // Prometheus /metrics endpoint. Off by default; scrape target only.
+  METRICS_ENABLED: boolEnv(false),
 
-  // Rate limiting (AUTH_SECURITY_CHECKLIST) — TTLs in seconds, limits in requests/TTL.
+  // Rate limiting — TTLs in seconds, limits in requests/TTL.
   THROTTLE_DEFAULT_LIMIT: z.coerce.number().int().positive().default(120),
   THROTTLE_DEFAULT_TTL: z.coerce.number().int().positive().default(60),
   THROTTLE_LOGIN_LIMIT: z.coerce.number().int().positive().default(5),
@@ -82,10 +101,36 @@ export const envSchema = z.object({
   THROTTLE_REGISTER_TTL: z.coerce.number().int().positive().default(3600),
   THROTTLE_RESET_LIMIT: z.coerce.number().int().positive().default(3),
   THROTTLE_RESET_TTL: z.coerce.number().int().positive().default(3600),
-
-  // Characterization / contract tests (ADR-0003, arch §19)
-  DJANGO_API_URL: z.string().default('http://localhost:8000'),
-});
+})
+  /**
+   * Production-only hard gates. In `production` we refuse to boot with
+   * unsafe defaults instead of degrading silently: weak/short signing keys, a
+   * missing token-encryption key, or non-Secure auth cookies. Non-prod keeps the
+   * relaxed defaults for local/dev/test ergonomics.
+   */
+  .superRefine((env, ctx) => {
+    if (env.NODE_ENV !== 'production') return;
+    const requireLen = (field: keyof typeof env, min: number, why: string) => {
+      const val = (env[field] as string | undefined) ?? '';
+      if (val.length < min) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [field as string],
+          message: `${String(field)} must be ≥ ${min} chars in production (${why}).`,
+        });
+      }
+    };
+    requireLen('JWT_ACCESS_SECRET', 32, 'weak signing key');
+    requireLen('JWT_REFRESH_SECRET', 32, 'weak signing key');
+    requireLen('INTEGRATION_TOKEN_ENC_KEY', 32, 'token encryption at rest');
+    if (!env.JWT_COOKIE_SECURE) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['JWT_COOKIE_SECURE'],
+        message: 'JWT_COOKIE_SECURE must be true in production (auth cookies over HTTPS only).',
+      });
+    }
+  });
 
 export type Env = z.infer<typeof envSchema>;
 

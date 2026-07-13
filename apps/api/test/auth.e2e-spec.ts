@@ -1,19 +1,20 @@
-// Strict refresh so the reuse-rejection test proves the D1 fix.
+// Enable strict refresh so the reuse-rejection test verifies a rotated token is rejected.
 process.env.AUTH_STRICT_REFRESH = 'true';
 
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import cookieParser from 'cookie-parser';
 import request from 'supertest';
-import { AllExceptionsFilter, generateId } from '@lt/common';
-import { PrismaService } from '@lt/prisma';
-import { parseSetCookies } from '@lt/testing';
+import { AllExceptionsFilter, generateId } from '@strata/common';
+import { PrismaService } from '@strata/prisma';
+import { parseSetCookies } from '@strata/testing';
 import { AppModule } from '../src/app.module';
+import { NormalizedWsAdapter } from '../src/modules/realtime/normalized-ws-adapter';
 import { PasswordService } from '../src/modules/auth/services/password.service';
 
 /**
- * Phase-1A Nest-side evidence. REQUIRES a live Postgres (Django schema) + Redis.
- * Run: `pnpm --filter @lt/api test:e2e` with DATABASE_URL/REDIS_* pointing at them.
+ * Live end-to-end auth flow evidence. REQUIRES a live Postgres + Redis.
+ * Run: `pnpm --filter @strata/api test:e2e` with DATABASE_URL/REDIS_* pointing at them.
  */
 describe('Auth (e2e)', () => {
   let app: INestApplication;
@@ -25,6 +26,7 @@ describe('Auth (e2e)', () => {
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleRef.createNestApplication();
+    app.useWebSocketAdapter(new NormalizedWsAdapter(app)); // matches main.ts — AppModule has a WS gateway
     app.setGlobalPrefix('api/v1');
     app.use(cookieParser());
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
@@ -62,10 +64,10 @@ describe('Auth (e2e)', () => {
     expect(res.body.user.email).toBe(email);
     expect(res.body.sessionId).toEqual(expect.any(String));
     const cookies = parseSetCookies(res.headers['set-cookie'] as unknown as string[]);
-    expect(cookies.lt_access).toBeDefined();
-    expect(cookies.lt_refresh).toBeDefined();
-    expect(cookies.lt_access.attrs).toMatchObject({ path: '/', samesite: 'Lax' });
-    expect('httponly' in cookies.lt_access.attrs).toBe(true);
+    expect(cookies.strata_access).toBeDefined();
+    expect(cookies.strata_refresh).toBeDefined();
+    expect(cookies.strata_access.attrs).toMatchObject({ path: '/', samesite: 'Lax' });
+    expect('httponly' in cookies.strata_access.attrs).toBe(true);
   });
 
   it('me returns the profile with the access cookie; 401 without it', async () => {
@@ -127,6 +129,6 @@ describe('Auth (e2e)', () => {
       .set('Cookie', l.headers['set-cookie'] as unknown as string[]);
     expect(res.status).toBe(204);
     const cleared = parseSetCookies(res.headers['set-cookie'] as unknown as string[]);
-    expect(cleared.lt_access?.value).toBe('');
+    expect(cleared.strata_access?.value).toBe('');
   });
 });

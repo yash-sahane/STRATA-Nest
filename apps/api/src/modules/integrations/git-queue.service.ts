@@ -1,10 +1,10 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Queue } from 'bullmq';
-import { GIT_JOB, Queues, type GitJob } from '@lt/shared';
+import { GIT_JOB, Queues, type GitJob } from '@strata/shared';
 
 /**
- * Producer for the `git` queue (Phase 11). The webhook controllers enqueue a
+ * Producer for the `git` queue. The webhook controllers enqueue a
  * normalized {@link GitJob}; the worker's git processor records commits + runs
  * side effects. `deliveryId` → jobId dedupes provider re-deliveries.
  */
@@ -35,6 +35,28 @@ export class GitQueueService implements OnModuleInit, OnModuleDestroy {
       removeOnComplete: true,
       removeOnFail: false,
     });
+  }
+
+  /**
+   * Best-effort removal of pending git jobs referencing deleted projects
+   * (delete-semantics Zone 2). Scans waiting + delayed jobs and removes those
+   * whose payload targets one of `projectIds`. Active/completed jobs are left
+   * alone. Returns the number removed.
+   */
+  async purgeByProjectIds(projectIds: string[]): Promise<number> {
+    if (!this.queue || projectIds.length === 0) return 0;
+    const set = new Set(projectIds);
+    const jobs = await this.queue.getJobs(['waiting', 'delayed', 'paused']);
+    let removed = 0;
+    for (const job of jobs) {
+      const pid = (job?.data as GitJob | undefined)?.projectId;
+      if (pid && set.has(pid)) {
+        await job.remove().catch(() => undefined);
+        removed += 1;
+      }
+    }
+    if (removed) this.logger.log(`purged ${removed} git job(s) for deleted project(s)`);
+    return removed;
   }
 
   async onModuleDestroy(): Promise<void> {

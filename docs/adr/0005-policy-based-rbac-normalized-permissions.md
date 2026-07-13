@@ -5,20 +5,17 @@
 - Deciders: Principal Architect, Security
 
 ## Context
-Today authorization is **membership-only** (A§5.5): any active `WorkspaceMember` can CRUD any in-scope resource, including approving their own leave/time (A§10, D3, D9). A `role` enum, `WorkspaceMember.role` (free string), and `WorkspaceRole.permissions` (JSON) exist as **data but are never enforced**. Ad-hoc `if role==`/`is_admin_flag` checks are scattered (invite, bulk-save, self-update).
+Membership-only authorization is not enough on its own: if any active `WorkspaceMember` could CRUD any in-scope resource, a user could approve their own leave or time entries. Roles and permissions must be first-class and actually enforced — not stored as an unenforced JSON list read by ad-hoc `if role==`/`is_admin_flag` checks scattered across handlers (invite, bulk-save, self-update).
 
 ## Decision
-Introduce **three composable, server-enforced layers**: authentication guard → workspace-scope guard (preserving current membership scoping + superuser/`is_admin_flag` bypass) → **policy/permission guard**. Permissions resolve through **normalized tables** `Permission` / `RolePermission` / `UserPermission` (replacing the JSON list), seeded with a default role→permission map for the 7 built-in roles and extensible via custom `WorkspaceRole`s. No hardcoded role checks in handlers.
+Enforce **three composable, server-enforced layers**: authentication guard → workspace-scope guard (membership scoping + superuser/`is_admin_flag` bypass) → **policy/permission guard**. Permissions resolve through **normalized tables** `Permission` / `RolePermission` / `UserPermission` rather than a JSON blob, seeded with a default role→permission map for the 7 built-in roles and extensible via custom `WorkspaceRole`s. No hardcoded role checks in handlers.
 
 ## Consequences
-- (+) Closes the self-approval / unrestricted-write hole (D3, D9); custom roles finally do something.
-- (+) Central, testable policy registry replaces scattered `if`s.
-- (−) New surface to seed/maintain; migration must read legacy JSON then cut over.
-- Follow-up: preserve existing bypasses *deliberately* with explicit tests before tightening (§19).
+- (+) Prevents self-approval and unrestricted writes; custom roles carry real, enforced permissions.
+- (+) A central, testable policy registry instead of scattered `if` checks.
+- (−) New surface to seed and maintain (the permission tables and the default role map).
+- Follow-up: cover the intended bypasses (superuser/admin) with explicit tests before tightening rules.
 
 ## Alternatives considered
-- **Keep JSON permissions:** rejected — hard to query/index/validate (review #13).
-- **Hardcoded role checks:** rejected — the current ad-hoc approach that caused the gaps.
-
-## Traceability
-A§5.1, A§5.5, A§6.1, D3, D9 · §7, M§2 (authz)
+- **JSON permission lists:** rejected — hard to query, index, and validate.
+- **Hardcoded role checks in handlers:** rejected — ad-hoc and easy to make inconsistent.

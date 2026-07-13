@@ -1,7 +1,7 @@
 import { NotFoundException } from '@nestjs/common';
-import { generateId, paginate, parseListQuery, type ListQuerySpec } from '@lt/common';
-import type { PaginatedResponse } from '@lt/shared';
-import { PrismaService } from '@lt/prisma';
+import { generateId, paginate, parseListQuery, type ListQuerySpec } from '@strata/common';
+import type { PaginatedResponse } from '@strata/shared';
+import { PrismaService } from '@strata/prisma';
 import type { User } from '@prisma/client';
 import type { PermissionKey } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
@@ -16,8 +16,8 @@ interface Delegate {
 }
 
 /**
- * Workspace-scoped CRUD base for the thin collections. Reproduces Django's
- * membership-scoped reads (out-of-scope detail → 404) and enforces the write
+ * Workspace-scoped CRUD base for the thin collections. Enforces
+ * membership-scoped reads (out-of-scope detail → 404) and the write
  * permission via WorkspaceAccessService (RBAC flag aware). Concrete services
  * supply the Prisma model name, list spec, write permission, and row mapper.
  */

@@ -1,8 +1,8 @@
-import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type Redis from 'ioredis';
-import type { RealtimeFrame } from '@lt/shared';
-import { PrismaService, type WriteAction } from '@lt/prisma';
+import type { RealtimeFrame } from '@strata/shared';
+import { PrismaService, type WriteAction } from '@strata/prisma';
 import { REDIS_CLIENT } from '../../redis/redis.constants';
 import { MODEL_COLLECTION } from './realtime.constants';
 import { SocketRegistry, type SocketInfo } from './socket-registry';
@@ -17,14 +17,14 @@ interface BroadcastMessage {
 }
 
 /**
- * Delivers resource/domain events to authorized WebSocket rooms (ADR-0006).
- * - CRUD events come from the Prisma write hook (replaces the Django signal, A§7).
- * - The **D2 fix**: broadcastLocal filters every socket by workspace membership,
- *   so subscribing to a collection channel never leaks other workspaces' data.
- * - Cross-instance fan-out via Redis pub/sub (replaces channels-redis).
+ * Delivers resource/domain events to authorized WebSocket rooms.
+ * - CRUD events come from the Prisma write hook, which fires after every persisted change.
+ * - broadcastLocal filters every socket by workspace membership, so subscribing
+ *   to a collection channel never leaks other workspaces' data.
+ * - Cross-instance fan-out via Redis pub/sub.
  */
 @Injectable()
-export class RealtimeService implements OnModuleInit {
+export class RealtimeService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger('Realtime');
   private readonly instanceId = randomUUID();
   private subscriber?: Redis;
@@ -54,6 +54,16 @@ export class RealtimeService implements OnModuleInit {
     });
   }
 
+  /**
+   * RC finding: the duplicated Redis subscriber was never closed on shutdown,
+   * so `app.close()` (SIGTERM) never actually terminated the process — it kept
+   * reconnecting/holding the event loop open (live-verified via a hanging e2e
+   * teardown). Close it here so graceful shutdown is actually graceful.
+   */
+  async onModuleDestroy(): Promise<void> {
+    await this.subscriber?.quit().catch(() => undefined);
+  }
+
   /** Post-write CRUD event → `<collection>.<create|update|delete>` frame. */
   private onWrite(model: string, action: WriteAction, result: unknown): void {
     const collection = MODEL_COLLECTION[model];
@@ -62,7 +72,7 @@ export class RealtimeService implements OnModuleInit {
     if (!row.id) return;
     const frame: RealtimeFrame = {
       event: `${collection}.${action}`,
-      // Minimal/best-effort payload (frontend refetches on the channel, A§7.1).
+      // Minimal/best-effort payload (frontend refetches on the channel).
       payload: action === 'delete' ? { id: String(row.id) } : row,
       channels: [collection, `${collection}.${row.id}`],
       timestamp: nowIso(),
@@ -104,9 +114,9 @@ export class RealtimeService implements OnModuleInit {
     }
   }
 
-  /** Workspace-membership authorization for a broadcast (the D2 boundary). */
+  /** Workspace-membership authorization for a broadcast. */
   static canReceive(info: Pick<SocketInfo, 'workspaceIds'>, workspaceId?: string): boolean {
-    if (workspaceId === undefined) return true; // unscoped resource (comments/kanban) — Django parity
+    if (workspaceId === undefined) return true; // unscoped resource (comments/kanban) — broadcasts to every connected socket
     if (info.workspaceIds === null) return true; // platform admin
     return info.workspaceIds.has(workspaceId);
   }

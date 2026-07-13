@@ -2,7 +2,7 @@ export * from './env.schema';
 
 import type { Env } from './env.schema';
 
-/** Build a redis connection URL for a specific logical DB (ADR-0007). */
+/** Build a redis connection URL for a specific logical DB. */
 export function redisUrl(env: Env, db: number): string {
   return `redis://${env.REDIS_HOST}:${env.REDIS_PORT}/${db}`;
 }

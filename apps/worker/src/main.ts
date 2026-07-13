@@ -1,12 +1,12 @@
 import 'reflect-metadata';
 import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { validateEnv } from '@lt/config';
+import { validateEnv } from '@strata/config';
 import { WorkerModule } from './worker.module';
 
 /**
- * The worker is a standalone application context — it NEVER serves HTTP
- * (arch §1, §12). It hosts BullMQ consumers (added in later phases).
+ * The worker is a standalone application context — it NEVER serves HTTP.
+ * It hosts the BullMQ consumers (email, git).
  */
 async function bootstrap(): Promise<void> {
   const env = validateEnv(process.env as Record<string, unknown>);

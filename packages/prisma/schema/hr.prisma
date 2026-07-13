@@ -1,4 +1,4 @@
-// HR — Attendance + Leave, mapped to existing Django tables (A§6.7-6.8).
+// HR — Attendance + Leave.
 
 model Attendance {
   id            String    @id
