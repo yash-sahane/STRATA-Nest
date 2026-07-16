@@ -22,6 +22,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { EmptyState } from '@/components/ui/empty-state';
+import { ErrorState } from '@/components/ui/error-state';
 import { PageHeader } from '@/components/layout/page-header';
 import {
   DropdownMenu,
@@ -85,7 +86,12 @@ export default function ProjectsPage() {
   const { user } = useAuth();
   const router = useRouter();
   const { currentWorkspace, isLoading: workspacesLoading } = useCurrentWorkspace();
-  const { data: projects, isLoading: projectsLoading } = useProjects(currentWorkspace?.id);
+  const {
+    data: projects,
+    isLoading: projectsLoading,
+    isError: projectsError,
+    refetch: refetchProjects,
+  } = useProjects(currentWorkspace?.id);
   const { data: allTasks } = useWorkspaceTasks(currentWorkspace?.id);
   const deleteProject = useDeleteProject();
   const updateProject = useUpdateProject();
@@ -176,6 +182,19 @@ export default function ProjectsPage() {
 
   if (workspacesLoading || projectsLoading) {
     return <PageLoader message="Loading projects..." />;
+  }
+
+  if (projectsError) {
+    return (
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
+        <PageHeader
+          icon={FolderKanban}
+          title="Projects"
+          description="We couldn't load your projects."
+        />
+        <ErrorState onRetry={() => refetchProjects()} />
+      </div>
+    );
   }
 
   if (!currentWorkspace) {
