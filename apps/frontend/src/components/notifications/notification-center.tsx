@@ -14,6 +14,7 @@ import {
   useDeleteNotification,
   useDeleteAllNotifications,
 } from '@/hooks/use-notification';
+import { useConfirm } from '@/components/providers/confirm-provider';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -153,6 +154,7 @@ export function NotificationCenter() {
   const markAllAsRead = useMarkAllNotificationsAsRead();
   const deleteNotification = useDeleteNotification();
   const deleteAllNotifications = useDeleteAllNotifications();
+  const confirm = useConfirm();
 
   const [open, setOpen] = React.useState(false);
 
@@ -208,6 +210,13 @@ export function NotificationCenter() {
 
   const handleDeleteAll = async () => {
     if (!user || !allNotifications || allNotifications.length === 0) return;
+    const confirmed = await confirm({
+      title: 'Clear all notifications?',
+      description: `This permanently deletes all ${allNotifications.length} notifications and can't be undone.`,
+      confirmText: 'Clear all',
+      destructive: true,
+    });
+    if (!confirmed) return;
     const allIds = allNotifications.map((n) => n.id);
     await deleteAllNotifications.mutateAsync({ userId: user.id, notificationIds: allIds });
   };

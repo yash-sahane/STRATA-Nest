@@ -21,6 +21,7 @@ import { Plus, Calendar, Target, PlayCircle, CheckCircle2, Users, Pencil, Trash2
 import { formatDate } from '@/lib/utils';
 import { CreateSprintDialog } from '@/components/sprints/create-sprint-dialog';
 import { PageHeader } from '@/components/layout/page-header';
+import { useConfirm } from '@/components/providers/confirm-provider';
 import { useRouter } from 'next/navigation';
 
 export default function SprintsPage() {
@@ -39,6 +40,7 @@ export default function SprintsPage() {
   const createSprint = useCreateSprint();
   const updateSprint = useUpdateSprint();
   const deleteSprint = useDeleteSprint();
+  const confirm = useConfirm();
   const startSprint = useStartSprint();
   const completeSprint = useCompleteSprint();
 
@@ -120,9 +122,13 @@ export default function SprintsPage() {
   };
 
   const handleDeleteSprint = async (sprintId: string) => {
-    if (!confirm('Are you sure you want to delete this sprint? This action cannot be undone.')) {
-      return;
-    }
+    const confirmed = await confirm({
+      title: 'Delete sprint?',
+      description: 'This permanently deletes the sprint. This action cannot be undone.',
+      confirmText: 'Delete',
+      destructive: true,
+    });
+    if (!confirmed) return;
 
     await deleteSprint.mutateAsync({
       sprintId,

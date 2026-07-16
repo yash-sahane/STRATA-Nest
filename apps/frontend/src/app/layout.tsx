@@ -3,6 +3,7 @@ import { Inter } from 'next/font/google';
 import { ThemeProvider } from '@/components/providers/theme-provider';
 import { QueryProvider } from '@/components/providers/query-provider';
 import { AuthProvider } from '@/components/providers/auth-provider';
+import { ConfirmProvider } from '@/components/providers/confirm-provider';
 import { Toaster } from 'sonner';
 import '../styles/globals.css';
 
@@ -33,7 +34,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         >
           <QueryProvider>
             <AuthProvider>
-              {children}
+              <ConfirmProvider>{children}</ConfirmProvider>
               <Toaster position="top-right" richColors />
             </AuthProvider>
           </QueryProvider>
