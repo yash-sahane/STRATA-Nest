@@ -31,6 +31,7 @@ import type { RequirementStatus, RequirementPriority } from '@/types';
 import { CreateClientRequirementDialog } from '@/components/requirements/create-client-requirement-dialog';
 import { ClientRequirementDetailDialog } from '@/components/requirements/client-requirement-detail-dialog';
 import { PageHeader } from '@/components/layout/page-header';
+import { ErrorState } from '@/components/ui/error-state';
 import { AIGenerateDialog } from '@/components/ai/ai-generate-dialog';
 import type { GeneratedHierarchy } from '@/lib/ai-generator';
 import { useIsAdmin, useHasPermission } from '@/hooks/use-permissions';
@@ -113,7 +114,12 @@ export default function RequirementsPage() {
     localStorage.setItem('selected-project-id', projectId);
   }, []);
 
-  const { data: requirements = [], isLoading } = useClientRequirements(selectedProjectId);
+  const {
+    data: requirements = [],
+    isLoading,
+    isError,
+    refetch,
+  } = useClientRequirements(selectedProjectId);
 
   // Open FR detail dialog if frId is in URL (from notification click)
   React.useEffect(() => {
@@ -342,6 +348,8 @@ export default function RequirementsPage() {
             <CardContent>
               {isLoading ? (
                 <div className="text-center py-8 text-muted-foreground">Loading...</div>
+              ) : isError ? (
+                <ErrorState onRetry={() => refetch()} />
               ) : filteredRequirements.length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground">
                   {requirements.length === 0 ? (

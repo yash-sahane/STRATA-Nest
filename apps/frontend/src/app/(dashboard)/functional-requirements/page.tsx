@@ -1,6 +1,7 @@
 'use client';
 
 import { PageHeader } from '@/components/layout/page-header';
+import { ErrorState } from '@/components/ui/error-state';
 
 import * as React from 'react';
 import { useAuth } from '@/components/providers/auth-provider';
@@ -89,7 +90,12 @@ export default function FunctionalRequirementsPage() {
     localStorage.setItem('selected-project-id', projectId);
   }, []);
 
-  const { data: requirements = [], isLoading } = useFunctionalRequirements(selectedProjectId);
+  const {
+    data: requirements = [],
+    isLoading,
+    isError,
+    refetch,
+  } = useFunctionalRequirements(selectedProjectId);
   const { data: clientRequirements = [] } = useClientRequirements(selectedProjectId);
   const { data: epics = [] } = useEpics(selectedProjectId);
   const { data: tasks = [] } = useTasks(selectedProjectId);
@@ -358,6 +364,8 @@ export default function FunctionalRequirementsPage() {
                 <div className="text-center py-8 text-muted-foreground">
                   Loading requirements...
                 </div>
+              ) : isError ? (
+                <ErrorState onRetry={() => refetch()} />
               ) : filteredRequirements.length === 0 ? (
                 <div className="text-center py-12">
                   <FileText className="mx-auto h-12 w-12 text-muted-foreground opacity-50 mb-4" />

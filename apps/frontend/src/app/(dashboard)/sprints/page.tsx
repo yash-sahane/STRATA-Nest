@@ -22,6 +22,7 @@ import { formatDate } from '@/lib/utils';
 import { CreateSprintDialog } from '@/components/sprints/create-sprint-dialog';
 import { PageHeader } from '@/components/layout/page-header';
 import { useConfirm } from '@/components/providers/confirm-provider';
+import { ErrorState } from '@/components/ui/error-state';
 import { useRouter } from 'next/navigation';
 
 export default function SprintsPage() {
@@ -34,7 +35,12 @@ export default function SprintsPage() {
   const [editingSprint, setEditingSprint] = React.useState<any>(null);
 
   const { data: projects, isLoading: projectsLoading } = useProjects(currentWorkspace?.id);
-  const { data: sprints, isLoading: sprintsLoading } = useSprints(selectedProjectId);
+  const {
+    data: sprints,
+    isLoading: sprintsLoading,
+    isError: sprintsError,
+    refetch: refetchSprints,
+  } = useSprints(selectedProjectId);
   const { data: tasks } = useTasks(selectedProjectId);
 
   const createSprint = useCreateSprint();
@@ -244,6 +250,8 @@ export default function SprintsPage() {
         <div className="flex items-center justify-center h-[50vh]">
           <p className="text-muted-foreground">Loading sprints...</p>
         </div>
+      ) : sprintsError ? (
+        <ErrorState onRetry={() => refetchSprints()} />
       ) : sprints && sprints.length > 0 ? (
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
           {sprints.map((sprint) => {
