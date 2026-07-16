@@ -3,21 +3,18 @@
  * Validates and parses CSV files containing user data
  */
 
+import { ROLE_HIERARCHY } from '@/lib/permissions';
+
 export interface ParsedUser {
   name: string;
   email: string;
   role: string;
 }
 
-const VALID_ROLES = [
-  'MANAGER', // Admin level
-  'ASSISTANT_MANAGER',
-  'SOFTWARE_DEVELOPER',
-  'SOFTWARE_DEVELOPER_INTERN',
-  'TESTER',
-  'CONTENT_ENGINEER',
-  'MEMBER',
-];
+// Derived from the single source of truth (ROLE_HIERARCHY in lib/permissions)
+// so bulk-import role validation can never drift from the roles the permission
+// system actually defines. Add a role there and CSV import accepts it too.
+const VALID_ROLES = Object.keys(ROLE_HIERARCHY);
 
 /**
  * Parse CSV file and extract user data
