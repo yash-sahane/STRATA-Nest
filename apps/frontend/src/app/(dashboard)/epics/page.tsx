@@ -24,6 +24,7 @@ import type { Epic } from '@/types';
 import { CreateEpicDialog } from '@/components/epic/create-epic-dialog';
 import { EpicDetailDialog } from '@/components/epic/epic-detail-dialog';
 import { PageHeader } from '@/components/layout/page-header';
+import { ErrorState } from '@/components/ui/error-state';
 import { useIsAdmin, useHasPermission } from '@/hooks/use-permissions';
 import { Permission } from '@/lib/permissions';
 
@@ -54,7 +55,7 @@ export default function EpicsPage() {
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
   const [selectedEpic, setSelectedEpic] = React.useState<Epic | null>(null);
 
-  const { data: epics = [], isLoading } = useEpics(selectedProjectId);
+  const { data: epics = [], isLoading, isError, refetch } = useEpics(selectedProjectId);
   const { data: tasks = [] } = useTasks(selectedProjectId);
 
   // Restore project selection from URL or localStorage
@@ -222,6 +223,10 @@ export default function EpicsPage() {
             {isLoading ? (
               <div className="col-span-full text-center py-8 text-muted-foreground">
                 Loading epics...
+              </div>
+            ) : isError ? (
+              <div className="col-span-full">
+                <ErrorState onRetry={() => refetch()} />
               </div>
             ) : epics.length === 0 ? (
               <div className="col-span-full text-center py-12">

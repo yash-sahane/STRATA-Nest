@@ -15,6 +15,7 @@ import { CreateTaskDialog } from '@/components/tasks/create-task-dialog';
 import { TaskDetailsDialog } from '@/components/tasks/task-details-dialog';
 import { EditTaskDialog } from '@/components/tasks/edit-task-dialog';
 import { PageHeader } from '@/components/layout/page-header';
+import { ErrorState } from '@/components/ui/error-state';
 import {
   useTasks,
   useCreateTask,
@@ -82,7 +83,12 @@ export default function TasksPage() {
   >([{ field: 'priority', direction: 'desc' }]);
 
   const { data: projects } = useProjects(currentWorkspace?.id);
-  const { data: tasks = [], isLoading: isLoadingTasks } = useTasks(selectedProjectId || undefined);
+  const {
+    data: tasks = [],
+    isLoading: isLoadingTasks,
+    isError: isErrorTasks,
+    refetch: refetchTasks,
+  } = useTasks(selectedProjectId || undefined);
   const { data: epics = [] } = useEpics(selectedProjectId || undefined);
   const { data: functionalRequirements = [] } = useFunctionalRequirements(
     selectedProjectId || undefined
@@ -781,6 +787,8 @@ export default function TasksPage() {
               <p className="text-muted-foreground">Loading tasks...</p>
             </div>
           </div>
+        ) : isErrorTasks ? (
+          <ErrorState onRetry={() => refetchTasks()} />
         ) : (
           <TaskBoard
             tasks={filteredTasks}
