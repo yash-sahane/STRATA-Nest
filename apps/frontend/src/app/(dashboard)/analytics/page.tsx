@@ -1,5 +1,7 @@
 'use client';
 
+import { PageHeader } from '@/components/layout/page-header';
+
 import * as React from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
@@ -94,17 +96,11 @@ export default function AnalyticsPage() {
   return (
     <div className="container mx-auto py-6 space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2">
-            <BarChart3 className="h-8 w-8" />
-            Analytics & Reports
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            Comprehensive insights and performance metrics
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        icon={BarChart3}
+        title="Analytics & Reports"
+        description="Comprehensive insights and performance metrics"
+      />
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
         <TabsList className="grid w-full grid-cols-3 lg:w-[600px]">

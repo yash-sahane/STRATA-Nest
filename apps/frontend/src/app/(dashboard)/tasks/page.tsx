@@ -14,6 +14,7 @@ import { TaskBoard } from '@/components/tasks/task-board';
 import { CreateTaskDialog } from '@/components/tasks/create-task-dialog';
 import { TaskDetailsDialog } from '@/components/tasks/task-details-dialog';
 import { EditTaskDialog } from '@/components/tasks/edit-task-dialog';
+import { PageHeader } from '@/components/layout/page-header';
 import {
   useTasks,
   useCreateTask,
@@ -489,10 +490,7 @@ export default function TasksPage() {
   if (!currentWorkspace) {
     return (
       <div className="space-y-6">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Tasks</h1>
-          <p className="text-muted-foreground">Create a workspace first to manage tasks</p>
-        </div>
+        <PageHeader title="Tasks" description="Create a workspace first to manage tasks" />
         <Card>
           <CardHeader>
             <CardTitle>No Workspace</CardTitle>
@@ -511,12 +509,10 @@ export default function TasksPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">My Tasks</h1>
-        <p className="text-muted-foreground">
-          Tasks assigned to you or created by you ({myTasks.length} total)
-        </p>
-      </div>
+      <PageHeader
+        title="My Tasks"
+        description={`Tasks assigned to you or created by you (${myTasks.length} total)`}
+      />
 
       {/* Filters and Actions */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">

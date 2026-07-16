@@ -1,5 +1,7 @@
 'use client';
 
+import { PageHeader } from '@/components/layout/page-header';
+
 import * as React from 'react';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
@@ -70,34 +72,28 @@ export default function ActivityPage() {
   return (
     <div className="container mx-auto py-6 space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2">
-            <Activity className="h-8 w-8" />
-            Activity Feed
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            Track what&apos;s happening across your projects in real-time
-          </p>
-        </div>
-
-        {/* Project Selector */}
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-muted-foreground">Project:</span>
-          <Select value={selectedProjectId} onValueChange={setSelectedProjectId}>
-            <SelectTrigger className="w-[250px]">
-              <SelectValue placeholder="Select a project" />
-            </SelectTrigger>
-            <SelectContent>
-              {projects.map((project) => (
-                <SelectItem key={project.id} value={project.id}>
-                  {project.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
+      <PageHeader
+        icon={Activity}
+        title="Activity Feed"
+        description="Track what's happening across your projects in real-time"
+        actions={
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">Project:</span>
+            <Select value={selectedProjectId} onValueChange={setSelectedProjectId}>
+              <SelectTrigger className="w-[250px]">
+                <SelectValue placeholder="Select a project" />
+              </SelectTrigger>
+              <SelectContent>
+                {projects.map((project) => (
+                  <SelectItem key={project.id} value={project.id}>
+                    {project.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        }
+      />
 
       {/* Activity Feed */}
       {selectedProjectId && (

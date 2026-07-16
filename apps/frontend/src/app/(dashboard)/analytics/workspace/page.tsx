@@ -1,5 +1,7 @@
 'use client';
 
+import { PageHeader } from '@/components/layout/page-header';
+
 import Link from 'next/link';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useWorkspaceAnalytics } from '@/hooks/use-analytics';
@@ -56,31 +58,27 @@ export default function WorkspaceAnalyticsPage() {
   return (
     <div className="container mx-auto py-6 space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2">
-            <BarChart3 className="h-8 w-8" />
-            Workspace Overview
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            High-level metrics and insights across all projects
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <Button asChild variant="outline">
-            <Link href="/analytics">
-              <BarChart3 className="h-4 w-4 mr-2" />
-              Project Analytics
-            </Link>
-          </Button>
-          <Button asChild variant="outline">
-            <Link href="/analytics/team">
-              <Users className="h-4 w-4 mr-2" />
-              Team Reports
-            </Link>
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        icon={BarChart3}
+        title="Workspace Overview"
+        description="High-level metrics and insights across all projects"
+        actions={
+          <>
+            <Button asChild variant="outline">
+              <Link href="/analytics">
+                <BarChart3 className="h-4 w-4 mr-2" />
+                Project Analytics
+              </Link>
+            </Button>
+            <Button asChild variant="outline">
+              <Link href="/analytics/team">
+                <Users className="h-4 w-4 mr-2" />
+                Team Reports
+              </Link>
+            </Button>
+          </>
+        }
+      />
 
       {/* KPI Grid */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">

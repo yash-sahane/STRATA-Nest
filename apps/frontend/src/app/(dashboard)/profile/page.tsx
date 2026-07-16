@@ -1,5 +1,7 @@
 'use client';
 
+import { PageHeader } from '@/components/layout/page-header';
+
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/providers/auth-provider';
@@ -87,10 +89,10 @@ export default function ProfilePage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">Profile Settings</h1>
-        <p className="text-muted-foreground">Manage your personal information and preferences</p>
-      </div>
+      <PageHeader
+        title="Profile Settings"
+        description="Manage your personal information and preferences"
+      />
 
       {/* Profile Card */}
       <Card>

@@ -20,6 +20,7 @@ import {
 import { Plus, Calendar, Target, PlayCircle, CheckCircle2, Users, Pencil, Trash2 } from 'lucide-react';
 import { formatDate } from '@/lib/utils';
 import { CreateSprintDialog } from '@/components/sprints/create-sprint-dialog';
+import { PageHeader } from '@/components/layout/page-header';
 import { useRouter } from 'next/navigation';
 
 export default function SprintsPage() {
@@ -186,12 +187,7 @@ export default function SprintsPage() {
   if (!projects || projects.length === 0) {
     return (
       <div className="space-y-6">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Sprints</h1>
-          <p className="text-muted-foreground">
-            Plan and manage your agile sprints
-          </p>
-        </div>
+        <PageHeader title="Sprints" description="Plan and manage your agile sprints" />
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12">
             <Calendar className="h-12 w-12 text-muted-foreground mb-4" />
@@ -211,32 +207,31 @@ export default function SprintsPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Sprints</h1>
-          <p className="text-muted-foreground">
-            Plan and manage your agile sprints
-          </p>
-        </div>
-        <div className="flex items-center gap-4">
-          <Select value={selectedProjectId} onValueChange={handleProjectChange}>
-            <SelectTrigger className="w-[200px]">
-              <SelectValue placeholder="Select project" />
-            </SelectTrigger>
-            <SelectContent>
-              {projects?.map((project) => (
-                <SelectItem key={project.id} value={project.id}>
-                  {project.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button onClick={() => setCreateDialogOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" />
-            New Sprint
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        icon={Calendar}
+        title="Sprints"
+        description="Plan and manage your agile sprints"
+        actions={
+          <>
+            <Select value={selectedProjectId} onValueChange={handleProjectChange}>
+              <SelectTrigger className="w-[200px]">
+                <SelectValue placeholder="Select project" />
+              </SelectTrigger>
+              <SelectContent>
+                {projects?.map((project) => (
+                  <SelectItem key={project.id} value={project.id}>
+                    {project.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button onClick={() => setCreateDialogOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              New Sprint
+            </Button>
+          </>
+        }
+      />
 
       {/* Sprint Cards */}
       {sprintsLoading ? (

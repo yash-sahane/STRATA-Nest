@@ -1,5 +1,7 @@
 'use client';
 
+import { PageHeader } from '@/components/layout/page-header';
+
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useTeamAnalytics } from '@/hooks/use-analytics';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -67,13 +69,11 @@ export default function TeamPerformancePage() {
   return (
     <div className="container mx-auto py-6 space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-3xl font-bold flex items-center gap-2">
-          <Users className="h-8 w-8" />
-          Team Performance
-        </h1>
-        <p className="text-muted-foreground mt-1">Individual and team-wide performance metrics</p>
-      </div>
+      <PageHeader
+        icon={Users}
+        title="Team Performance"
+        description="Individual and team-wide performance metrics"
+      />
 
       {/* Team Overview KPIs */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">

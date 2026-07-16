@@ -1,5 +1,7 @@
 'use client';
 
+import { PageHeader } from '@/components/layout/page-header';
+
 import * as React from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/components/providers/auth-provider';
@@ -115,30 +117,28 @@ export default function SprintBoardPage() {
           Back to Sprints
         </Button>
         
-        <div className="flex items-start justify-between">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">{sprint.name}</h1>
-            <p className="text-muted-foreground mt-1">
-              {sprint.goal || 'Drag and drop tasks to update their status'}
-            </p>
-          </div>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              onClick={() => router.push(`/sprints/${sprintId}/backlog`)}
-            >
-              <ListChecks className="mr-2 h-4 w-4" />
-              Backlog
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => router.push(`/sprints/${sprintId}/analytics`)}
-            >
-              <BarChart3 className="mr-2 h-4 w-4" />
-              Analytics
-            </Button>
-          </div>
-        </div>
+        <PageHeader
+          title={sprint.name}
+          description={sprint.goal || 'Drag and drop tasks to update their status'}
+          actions={
+            <>
+              <Button
+                variant="outline"
+                onClick={() => router.push(`/sprints/${sprintId}/backlog`)}
+              >
+                <ListChecks className="mr-2 h-4 w-4" />
+                Backlog
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => router.push(`/sprints/${sprintId}/analytics`)}
+              >
+                <BarChart3 className="mr-2 h-4 w-4" />
+                Analytics
+              </Button>
+            </>
+          }
+        />
       </div>
 
       {/* Stats Cards */}

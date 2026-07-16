@@ -23,6 +23,7 @@ import { formatDate } from '@/lib/utils';
 import type { Epic } from '@/types';
 import { CreateEpicDialog } from '@/components/epic/create-epic-dialog';
 import { EpicDetailDialog } from '@/components/epic/epic-detail-dialog';
+import { PageHeader } from '@/components/layout/page-header';
 import { useIsAdmin, useHasPermission } from '@/hooks/use-permissions';
 import { Permission } from '@/lib/permissions';
 
@@ -136,18 +137,19 @@ export default function EpicsPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Epics</h1>
-          <p className="text-muted-foreground">Large features spanning multiple sprints</p>
-        </div>
-        {(canCreateEpic || isAdmin) && (
-          <Button onClick={() => setCreateDialogOpen(true)} disabled={!selectedProjectId}>
-            <Plus className="mr-2 h-4 w-4" />
-            New Epic
-          </Button>
-        )}
-      </div>
+      <PageHeader
+        icon={Target}
+        title="Epics"
+        description="Large features spanning multiple sprints"
+        actions={
+          (canCreateEpic || isAdmin) && (
+            <Button onClick={() => setCreateDialogOpen(true)} disabled={!selectedProjectId}>
+              <Plus className="mr-2 h-4 w-4" />
+              New Epic
+            </Button>
+          )
+        }
+      />
 
       {/* Project Selector */}
       <Card>

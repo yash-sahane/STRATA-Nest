@@ -30,6 +30,7 @@ import { formatDate } from '@/lib/utils';
 import type { RequirementStatus, RequirementPriority } from '@/types';
 import { CreateClientRequirementDialog } from '@/components/requirements/create-client-requirement-dialog';
 import { ClientRequirementDetailDialog } from '@/components/requirements/client-requirement-detail-dialog';
+import { PageHeader } from '@/components/layout/page-header';
 import { AIGenerateDialog } from '@/components/ai/ai-generate-dialog';
 import type { GeneratedHierarchy } from '@/lib/ai-generator';
 import { useIsAdmin, useHasPermission } from '@/hooks/use-permissions';
@@ -166,13 +167,12 @@ export default function RequirementsPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Requirements</h1>
-          <p className="text-muted-foreground">Manage client and functional requirements</p>
-        </div>
-        <div className="flex gap-2">
-          {(canCreateRequirement || isAdmin) && (
+      <PageHeader
+        icon={FileText}
+        title="Requirements"
+        description="Manage client and functional requirements"
+        actions={
+          (canCreateRequirement || isAdmin) && (
             <>
               <Button
                 onClick={() => setAiGenerateDialogOpen(true)}
@@ -187,9 +187,9 @@ export default function RequirementsPage() {
                 New Requirement
               </Button>
             </>
-          )}
-        </div>
-      </div>
+          )
+        }
+      />
 
       {/* Project Selector */}
       <Card>

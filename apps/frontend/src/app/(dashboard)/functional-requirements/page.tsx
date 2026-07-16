@@ -1,5 +1,7 @@
 'use client';
 
+import { PageHeader } from '@/components/layout/page-header';
+
 import * as React from 'react';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
@@ -210,20 +212,18 @@ export default function FunctionalRequirementsPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Functional Requirements</h1>
-          <p className="text-muted-foreground">
-            Technical specifications derived from client requirements
-          </p>
-        </div>
-        {(canCreateFR || isAdmin) && (
-          <Button onClick={() => setCreateDialogOpen(true)} disabled={!selectedProjectId}>
-            <Plus className="mr-2 h-4 w-4" />
-            New Requirement
-          </Button>
-        )}
-      </div>
+      <PageHeader
+        title="Functional Requirements"
+        description="Technical specifications derived from client requirements"
+        actions={
+          (canCreateFR || isAdmin) && (
+            <Button onClick={() => setCreateDialogOpen(true)} disabled={!selectedProjectId}>
+              <Plus className="mr-2 h-4 w-4" />
+              New Requirement
+            </Button>
+          )
+        }
+      />
 
       {/* Project Selector */}
       <Card>

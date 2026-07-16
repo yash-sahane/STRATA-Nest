@@ -1,5 +1,7 @@
 'use client';
 
+import { PageHeader } from '@/components/layout/page-header';
+
 import * as React from 'react';
 import { Calendar, Users, BarChart3 } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -48,18 +50,16 @@ export default function LeavePage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Leave Management</h1>
-          <p className="text-muted-foreground">
-            Manage your leave requests and view your leave balance
-          </p>
-        </div>
-        <Button onClick={() => setIsLeaveFormOpen(true)}>
-          <Calendar className="mr-2 h-4 w-4" />
-          Request Leave
-        </Button>
-      </div>
+      <PageHeader
+        title="Leave Management"
+        description="Manage your leave requests and view your leave balance"
+        actions={
+          <Button onClick={() => setIsLeaveFormOpen(true)}>
+            <Calendar className="mr-2 h-4 w-4" />
+            Request Leave
+          </Button>
+        }
+      />
 
       {/* Leave Request Form Dialog */}
       {user && (

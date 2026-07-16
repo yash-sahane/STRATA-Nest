@@ -1,5 +1,7 @@
 'use client';
 
+import { PageHeader } from '@/components/layout/page-header';
+
 import * as React from 'react';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useWorkspaces, useDeleteWorkspace } from '@/hooks/use-workspace';
@@ -55,13 +57,11 @@ export default function WorkspacesPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Workspaces</h1>
-          <p className="text-muted-foreground">Manage your workspaces and team members</p>
-        </div>
-        <WorkspaceSwitcher />
-      </div>
+      <PageHeader
+        title="Workspaces"
+        description="Manage your workspaces and team members"
+        actions={<WorkspaceSwitcher />}
+      />
 
       {workspaces && workspaces.length > 0 ? (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">

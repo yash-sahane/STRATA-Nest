@@ -1,5 +1,7 @@
 'use client';
 
+import { PageHeader } from '@/components/layout/page-header';
+
 import * as React from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useSprint } from '@/hooks/use-sprint';
@@ -182,20 +184,20 @@ export default function SprintAnalyticsPage() {
           Back to Sprints
         </Button>
 
-        <div className="flex items-start justify-between">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">{sprint.name} Analytics</h1>
-            <p className="text-muted-foreground mt-1">Sprint performance metrics and insights</p>
-          </div>
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={() => router.push(`/sprints/${sprintId}/backlog`)}>
-              Open Backlog
-            </Button>
-            <Button variant="outline" onClick={() => router.push(`/sprints/${sprintId}/board`)}>
-              Open Board
-            </Button>
-          </div>
-        </div>
+        <PageHeader
+          title={`${sprint.name} Analytics`}
+          description="Sprint performance metrics and insights"
+          actions={
+            <>
+              <Button variant="outline" onClick={() => router.push(`/sprints/${sprintId}/backlog`)}>
+                Open Backlog
+              </Button>
+              <Button variant="outline" onClick={() => router.push(`/sprints/${sprintId}/board`)}>
+                Open Board
+              </Button>
+            </>
+          }
+        />
       </div>
 
       {/* Sprint Info */}

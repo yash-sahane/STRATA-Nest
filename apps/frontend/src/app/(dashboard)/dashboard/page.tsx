@@ -13,6 +13,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { PageLoader } from '@/components/ui/page-loader';
+import { PageHeader } from '@/components/layout/page-header';
 import {
   CheckCircle2,
   Clock,
@@ -125,14 +126,10 @@ export default function DashboardPage() {
   return (
     <div className="space-y-6">
       {/* Welcome Section */}
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">
-          Welcome back, {user?.name?.split(' ')[0] || 'User'}!
-        </h1>
-        <p className="text-muted-foreground">
-          Here&apos;s what&apos;s happening with your projects today.
-        </p>
-      </div>
+      <PageHeader
+        title={`Welcome back, ${user?.name?.split(' ')[0] || 'User'}!`}
+        description="Here's what's happening with your projects today."
+      />
 
       {/* Stats Grid */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">

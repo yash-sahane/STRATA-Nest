@@ -1,5 +1,7 @@
 'use client';
 
+import { PageHeader } from '@/components/layout/page-header';
+
 import * as React from 'react';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
@@ -213,13 +215,11 @@ export default function SettingsPage() {
   return (
     <div className="container mx-auto py-6 space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-3xl font-bold flex items-center gap-2">
-          <SettingsIcon className="h-8 w-8" />
-          Settings
-        </h1>
-        <p className="text-muted-foreground mt-1">Manage your account and workspace preferences</p>
-      </div>
+      <PageHeader
+        icon={SettingsIcon}
+        title="Settings"
+        description="Manage your account and workspace preferences"
+      />
 
       <Tabs defaultValue="profile" className="space-y-6">
         <TabsList>
