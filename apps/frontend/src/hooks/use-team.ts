@@ -13,7 +13,7 @@ export interface TeamMember {
   | 'MANAGER'
   | 'ASSISTANT_MANAGER'
   | 'SOFTWARE_DEVELOPER'
-  | 'SOFTWARE_DEVELOPER_INTERN'
+  | 'DEVELOPER_INTERN'
   | 'TESTER'
   | 'CONTENT_ENGINEER'
   | 'MEMBER';
@@ -32,7 +32,7 @@ function normalizeRole(role: string): TeamMember['role'] {
     Manager: 'MANAGER',
     'Assistant Manager': 'ASSISTANT_MANAGER',
     'Software Developer': 'SOFTWARE_DEVELOPER',
-    'Software Developer Intern': 'SOFTWARE_DEVELOPER_INTERN',
+    'Software Developer Intern': 'DEVELOPER_INTERN',
     Tester: 'TESTER',
     'Content Engineer': 'CONTENT_ENGINEER',
     Member: 'MEMBER',
@@ -40,7 +40,7 @@ function normalizeRole(role: string): TeamMember['role'] {
     MANAGER: 'MANAGER',
     ASSISTANT_MANAGER: 'ASSISTANT_MANAGER',
     SOFTWARE_DEVELOPER: 'SOFTWARE_DEVELOPER',
-    SOFTWARE_DEVELOPER_INTERN: 'SOFTWARE_DEVELOPER_INTERN',
+    DEVELOPER_INTERN: 'DEVELOPER_INTERN',
     TESTER: 'TESTER',
     CONTENT_ENGINEER: 'CONTENT_ENGINEER',
     MEMBER: 'MEMBER',
@@ -155,7 +155,7 @@ export const ROLE_CONFIG = {
     label: 'Software Developer',
     color: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
   },
-  SOFTWARE_DEVELOPER_INTERN: {
+  DEVELOPER_INTERN: {
     label: 'Software Developer Intern',
     color: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200',
   },

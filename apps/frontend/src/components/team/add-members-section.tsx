@@ -53,7 +53,7 @@ const ROLE_MAPPING: Record<string, string> = {
   MANAGER: 'Manager (Admin)',
   ASSISTANT_MANAGER: 'Assistant Manager',
   SOFTWARE_DEVELOPER: 'Software Developer',
-  SOFTWARE_DEVELOPER_INTERN: 'Software Developer Intern',
+  DEVELOPER_INTERN: 'Software Developer Intern',
   TESTER: 'Tester',
   CONTENT_ENGINEER: 'Content Engineer',
   MEMBER: 'Member',
@@ -95,7 +95,7 @@ export function AddMembersSection({
       { id: 'MANAGER', name: 'Manager (Admin)' },
       { id: 'ASSISTANT_MANAGER', name: 'Assistant Manager' },
       { id: 'SOFTWARE_DEVELOPER', name: 'Software Developer' },
-      { id: 'SOFTWARE_DEVELOPER_INTERN', name: 'Software Developer Intern' },
+      { id: 'DEVELOPER_INTERN', name: 'Software Developer Intern' },
       { id: 'TESTER', name: 'Tester' },
       { id: 'CONTENT_ENGINEER', name: 'Content Engineer' },
       { id: 'MEMBER', name: 'Member' },
@@ -395,7 +395,7 @@ export function AddMembersSection({
                       </li>
                       <li>
                         Valid roles: MANAGER, ASSISTANT_MANAGER, SOFTWARE_DEVELOPER,
-                        SOFTWARE_DEVELOPER_INTERN, TESTER, CONTENT_ENGINEER, MEMBER
+                        DEVELOPER_INTERN, TESTER, CONTENT_ENGINEER, MEMBER
                       </li>
                       <li>Email addresses must be unique and valid</li>
                     </ul>

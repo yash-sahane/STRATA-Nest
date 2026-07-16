@@ -9,7 +9,7 @@ export const ROLE_HIERARCHY = {
   ASSISTANT_MANAGER: 80,
   SOFTWARE_DEVELOPER: 60,
   TESTER: 50,
-  SOFTWARE_DEVELOPER_INTERN: 40,
+  DEVELOPER_INTERN: 40,
   CONTENT_ENGINEER: 40,
   MEMBER: 20,
 } as const;
@@ -229,7 +229,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     Permission.VIEW_ANALYTICS,
   ],
 
-  SOFTWARE_DEVELOPER_INTERN: [
+  DEVELOPER_INTERN: [
     // Limited permissions
     Permission.VIEW_PROJECTS,
 
