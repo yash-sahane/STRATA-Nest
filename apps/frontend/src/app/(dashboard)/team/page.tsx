@@ -1,5 +1,7 @@
 ﻿'use client';
 
+import { ErrorState } from '@/components/ui/error-state';
+
 import * as React from 'react';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
@@ -83,7 +85,12 @@ export default function TeamPage() {
   const { user } = useAuth();
   const { currentWorkspace, isLoading: workspacesLoading } = useCurrentWorkspace();
 
-  const { data: teamMembers = [], isLoading: membersLoading } = useTeamMembers(
+  const {
+    data: teamMembers = [],
+    isLoading: membersLoading,
+    isError: membersError,
+    refetch: refetchMembers,
+  } = useTeamMembers(
     currentWorkspace?.id
   );
   const { data: tasks } = useWorkspaceTasks(currentWorkspace?.id);
@@ -237,6 +244,15 @@ export default function TeamPage() {
 
   if (workspacesLoading || membersLoading) {
     return <PageLoader message="Loading team members..." />;
+  }
+
+  if (membersError) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader title="Team" description="We couldn't load your team members." />
+        <ErrorState onRetry={() => refetchMembers()} />
+      </div>
+    );
   }
 
   if (!currentWorkspace) {

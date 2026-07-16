@@ -1,6 +1,7 @@
 'use client';
 
 import { PageHeader } from '@/components/layout/page-header';
+import { ErrorState } from '@/components/ui/error-state';
 
 import * as React from 'react';
 import { useAuth } from '@/components/providers/auth-provider';
@@ -34,7 +35,7 @@ import { useRouter } from 'next/navigation';
 export default function WorkspacesPage() {
   const { user } = useAuth();
   const router = useRouter();
-  const { data: workspaces, isLoading } = useWorkspaces(user?.id);
+  const { data: workspaces, isLoading, isError, refetch } = useWorkspaces(user?.id);
   const deleteWorkspace = useDeleteWorkspace();
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
   const [workspaceToDelete, setWorkspaceToDelete] = React.useState<string | null>(null);
@@ -51,6 +52,15 @@ export default function WorkspacesPage() {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
         <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader title="Workspaces" description="We couldn't load your workspaces." />
+        <ErrorState onRetry={() => refetch()} />
       </div>
     );
   }
