@@ -98,6 +98,17 @@ function makeResolver(map: Record<string, SemanticTone>) {
   };
 }
 
+/**
+ * Ordered status keys per domain — use these to build filter dropdowns instead
+ * of re-listing statuses inline (which is how the duplicated maps started).
+ */
+export const TASK_STATUSES = Object.keys(TASK_STATUS);
+export const EPIC_STATUSES = Object.keys(EPIC_STATUS);
+export const FUNCTIONAL_REQUIREMENT_STATUSES = Object.keys(FUNCTIONAL_REQUIREMENT_STATUS);
+export const PROJECT_STATUSES = Object.keys(PROJECT_STATUS);
+export const SPRINT_STATUSES = Object.keys(SPRINT_STATUS);
+export const REQUIREMENT_STATUSES = Object.keys(REQUIREMENT_STATUS);
+
 export const getTaskStatusConfig = makeResolver(TASK_STATUS);
 export const getEpicStatusConfig = makeResolver(EPIC_STATUS);
 export const getFunctionalRequirementStatusConfig = makeResolver(FUNCTIONAL_REQUIREMENT_STATUS);

@@ -1,5 +1,7 @@
 ﻿'use client';
 
+import { getFunctionalRequirementStatusConfig } from '@/lib/semantic/status';
+
 import * as React from 'react';
 import {
   Dialog,
@@ -46,15 +48,6 @@ import { createBulkNotifications } from '@/hooks/use-notification';
 import { useAuth } from '@/components/providers/auth-provider';
 import type { FunctionalRequirement, ClientRequirement } from '@/types';
 import { logger } from '@/lib/logger';
-
-const statusConfig: Record<FunctionalRequirement['status'], { label: string; color: string }> = {
-  DRAFT: { label: 'Draft', color: 'bg-gray-500' },
-  REVIEW: { label: 'In Review', color: 'bg-yellow-500' },
-  APPROVED: { label: 'Approved', color: 'bg-blue-500' },
-  IMPLEMENTED: { label: 'Implemented', color: 'bg-purple-500' },
-  TESTED: { label: 'Tested', color: 'bg-indigo-500' },
-  DEPLOYED: { label: 'Deployed', color: 'bg-green-500' },
-};
 
 const complexityConfig: Record<
   FunctionalRequirement['complexity'],
@@ -323,8 +316,12 @@ export function FunctionalRequirementDetailDialog({
             <div className="space-y-2">
               <label className="text-sm font-medium">Status</label>
               <div className="flex items-center gap-2 px-3 py-2 bg-secondary/30 rounded-md">
-                <div className={`w-2 h-2 rounded-full ${statusConfig[requirement.status].color}`} />
-                <span className="text-sm">{statusConfig[requirement.status].label}</span>
+                <div
+                  className={`w-2 h-2 rounded-full ${getFunctionalRequirementStatusConfig(requirement.status).dot}`}
+                />
+                <span className="text-sm">
+                  {getFunctionalRequirementStatusConfig(requirement.status).label}
+                </span>
                 <span className="text-xs text-muted-foreground ml-auto">
                   (Auto-calculated from tasks)
                 </span>

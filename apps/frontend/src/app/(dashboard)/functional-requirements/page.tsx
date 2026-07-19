@@ -2,6 +2,10 @@
 
 import { PageHeader } from '@/components/layout/page-header';
 import { ErrorState } from '@/components/ui/error-state';
+import {
+  FUNCTIONAL_REQUIREMENT_STATUSES,
+  getFunctionalRequirementStatusConfig,
+} from '@/lib/semantic/status';
 import { EmptyState } from '@/components/ui/empty-state';
 import { InlineLoader } from '@/components/ui/page-loader';
 
@@ -32,15 +36,6 @@ import { CreateFunctionalRequirementDialog } from '@/components/requirements/cre
 import { FunctionalRequirementDetailDialog } from '@/components/requirements/functional-requirement-detail-dialog';
 import { useIsAdmin, useHasPermission } from '@/hooks/use-permissions';
 import { Permission } from '@/lib/permissions';
-
-const statusConfig: Record<FunctionalRequirement['status'], { label: string; color: string }> = {
-  DRAFT: { label: 'Draft', color: 'bg-gray-500' },
-  REVIEW: { label: 'In Review', color: 'bg-yellow-500' },
-  APPROVED: { label: 'Approved', color: 'bg-blue-500' },
-  IMPLEMENTED: { label: 'Implemented', color: 'bg-purple-500' },
-  TESTED: { label: 'Tested', color: 'bg-indigo-500' },
-  DEPLOYED: { label: 'Deployed', color: 'bg-green-500' },
-};
 
 const complexityConfig: Record<
   FunctionalRequirement['complexity'],
@@ -342,9 +337,9 @@ export default function FunctionalRequirementsPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Statuses</SelectItem>
-                    {Object.entries(statusConfig).map(([value, { label }]) => (
+                    {FUNCTIONAL_REQUIREMENT_STATUSES.map((value) => (
                       <SelectItem key={value} value={value}>
-                        {label}
+                        {getFunctionalRequirementStatusConfig(value).label}
                       </SelectItem>
                     ))}
                   </SelectContent>

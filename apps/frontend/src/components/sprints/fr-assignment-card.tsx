@@ -1,5 +1,7 @@
 ﻿'use client';
 
+import { getFunctionalRequirementStatusConfig } from '@/lib/semantic/status';
+
 import * as React from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -19,15 +21,6 @@ import { useTasksByFunctionalRequirement, useUpdateTask } from '@/hooks/use-task
 import { toast } from '@/hooks/use-toast';
 import { getInitials } from '@/lib/utils';
 import { logger } from '@/lib/logger';
-
-const statusConfig: Record<FunctionalRequirement['status'], { label: string; color: string }> = {
-  DRAFT: { label: 'Draft', color: 'bg-gray-500' },
-  REVIEW: { label: 'In Review', color: 'bg-yellow-500' },
-  APPROVED: { label: 'Approved', color: 'bg-blue-500' },
-  IMPLEMENTED: { label: 'Implemented', color: 'bg-purple-500' },
-  TESTED: { label: 'Tested', color: 'bg-indigo-500' },
-  DEPLOYED: { label: 'Deployed', color: 'bg-green-500' },
-};
 
 const complexityConfig: Record<
   FunctionalRequirement['complexity'],
@@ -172,7 +165,7 @@ export function FRAssignmentCard({ fr, teamMembers, projectId }: FRAssignmentCar
     }
   };
 
-  const status = statusConfig[fr.status];
+  const status = getFunctionalRequirementStatusConfig(fr.status);
   const complexity = complexityConfig[fr.complexity];
 
   const complexityColor = {
@@ -280,7 +273,7 @@ export function FRAssignmentCard({ fr, teamMembers, projectId }: FRAssignmentCar
 
         {/* FR Metadata */}
         <div className="flex items-center gap-3 pt-2 border-t text-xs text-muted-foreground">
-          <Badge variant="secondary" className={status.color}>
+          <Badge variant={status.badgeVariant}>
             Status: {status.label}
           </Badge>
           {fr.priority && (
