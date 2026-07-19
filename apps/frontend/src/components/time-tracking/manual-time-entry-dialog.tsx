@@ -142,7 +142,7 @@ export function ManualTimeEntryDialog({
           </Button>
         )}
       </DialogTrigger>
-      <DialogContent className="max-w-md">
+      <DialogContent size="sm">
         <form onSubmit={handleSubmit}>
           <DialogHeader>
             <DialogTitle>Log Time Manually</DialogTitle>

@@ -91,7 +91,7 @@ export function TaskDetailsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+      <DialogContent size="xl" className="max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <div className="flex items-start justify-between">
             <div className="space-y-2 flex-1">

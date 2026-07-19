@@ -29,13 +29,18 @@ const DialogOverlay = React.forwardRef<
 ));
 DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
 
-/** Standard dialog widths (SIZE-02). Base `max-w-*` so a caller's own
- *  `className="max-w-*"` still wins via tailwind-merge. */
+/**
+ * Standard dialog widths (SIZE-02), named after the underlying Tailwind
+ * max-w-* step so the mapping is self-evident. Base classes only — a caller's
+ * own `className="max-w-*"` still wins via tailwind-merge.
+ */
 const dialogContentSizes = {
   sm: 'max-w-md',
   md: 'max-w-lg',
   lg: 'max-w-2xl',
-  xl: 'max-w-4xl',
+  xl: 'max-w-3xl',
+  '2xl': 'max-w-4xl',
+  '3xl': 'max-w-6xl',
 } as const
 
 const DialogContent = React.forwardRef<

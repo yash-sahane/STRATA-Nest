@@ -71,7 +71,7 @@ export function CreateProjectDialog({ workspaceId }: CreateProjectDialogProps) {
           Create Project
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-2xl">
+      <DialogContent size="lg">
         <DialogHeader>
           <DialogTitle>Create New Project</DialogTitle>
           <DialogDescription>

@@ -101,7 +101,7 @@ export function CreateSprintDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent size="lg">
         <DialogHeader>
           <DialogTitle>{initialData ? 'Edit Sprint' : 'Create New Sprint'}</DialogTitle>
           <DialogDescription>
