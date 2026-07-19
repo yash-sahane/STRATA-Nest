@@ -1,6 +1,7 @@
 ﻿'use client';
 
 import { getFunctionalRequirementStatusConfig } from '@/lib/semantic/status';
+import { getComplexityConfig } from '@/lib/semantic/complexity';
 
 import * as React from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -21,16 +22,6 @@ import { useTasksByFunctionalRequirement, useUpdateTask } from '@/hooks/use-task
 import { toast } from '@/hooks/use-toast';
 import { getInitials } from '@/lib/utils';
 import { logger } from '@/lib/logger';
-
-const complexityConfig: Record<
-  FunctionalRequirement['complexity'],
-  { label: string; color: string }
-> = {
-  LOW: { label: 'Low', color: 'green' },
-  MEDIUM: { label: 'Medium', color: 'yellow' },
-  HIGH: { label: 'High', color: 'orange' },
-  VERY_HIGH: { label: 'Very High', color: 'red' },
-};
 
 interface FRAssignmentCardProps {
   fr: FunctionalRequirement;
@@ -166,7 +157,7 @@ export function FRAssignmentCard({ fr, teamMembers, projectId }: FRAssignmentCar
   };
 
   const status = getFunctionalRequirementStatusConfig(fr.status);
-  const complexity = complexityConfig[fr.complexity];
+  const complexity = getComplexityConfig(fr.complexity);
 
   const complexityColor = {
     LOW: 'bg-green-500',

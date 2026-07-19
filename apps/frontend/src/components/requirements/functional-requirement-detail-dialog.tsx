@@ -1,6 +1,8 @@
 ﻿'use client';
 
 import { getFunctionalRequirementStatusConfig } from '@/lib/semantic/status';
+import { getComplexityConfig } from '@/lib/semantic/complexity';
+import { getPriorityConfig } from '@/lib/semantic/priority';
 
 import * as React from 'react';
 import {
@@ -48,16 +50,6 @@ import { createBulkNotifications } from '@/hooks/use-notification';
 import { useAuth } from '@/components/providers/auth-provider';
 import type { FunctionalRequirement, ClientRequirement } from '@/types';
 import { logger } from '@/lib/logger';
-
-const complexityConfig: Record<
-  FunctionalRequirement['complexity'],
-  { label: string; color: string }
-> = {
-  LOW: { label: 'Low', color: 'green' },
-  MEDIUM: { label: 'Medium', color: 'yellow' },
-  HIGH: { label: 'High', color: 'orange' },
-  VERY_HIGH: { label: 'Very High', color: 'red' },
-};
 
 interface FunctionalRequirementDetailDialogProps {
   requirement: FunctionalRequirement;
@@ -280,7 +272,7 @@ export function FunctionalRequirementDetailDialog({
     setSelectedProject('');
   };
 
-  const complexity = complexityConfig[requirement.complexity];
+  const complexity = getComplexityConfig(requirement.complexity);
   const linkedClientReq = clientRequirements.find(
     (cr) => cr.id === requirement.clientRequirementId
   );
@@ -350,15 +342,15 @@ export function FunctionalRequirementDetailDialog({
               <div>
                 <label className="text-sm font-medium text-muted-foreground">Priority</label>
                 <div className="mt-1">
-                  <Badge variant="outline">{requirement.priority}</Badge>
+                  <Badge variant={getPriorityConfig(requirement.priority).badgeVariant}>
+                    {getPriorityConfig(requirement.priority).label}
+                  </Badge>
                 </div>
               </div>
               <div>
                 <label className="text-sm font-medium text-muted-foreground">Complexity</label>
                 <div className="mt-1">
-                  <Badge variant="outline" className={`bg-${complexity.color}-500/10`}>
-                    {complexity.label}
-                  </Badge>
+                  <Badge variant={complexity.badgeVariant}>{complexity.label}</Badge>
                 </div>
               </div>
             </div>

@@ -7,6 +7,7 @@ import {
   getFunctionalRequirementStatusConfig,
 } from '@/lib/semantic/status';
 import { getPriorityConfig } from '@/lib/semantic/priority';
+import { getComplexityConfig } from '@/lib/semantic/complexity';
 import { EmptyState } from '@/components/ui/empty-state';
 import { InlineLoader } from '@/components/ui/page-loader';
 
@@ -21,6 +22,14 @@ import { useTasks } from '@/hooks/use-task';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { Input } from '@/components/ui/input';
 import {
   Select,
@@ -37,16 +46,6 @@ import { CreateFunctionalRequirementDialog } from '@/components/requirements/cre
 import { FunctionalRequirementDetailDialog } from '@/components/requirements/functional-requirement-detail-dialog';
 import { useIsAdmin, useHasPermission } from '@/hooks/use-permissions';
 import { Permission } from '@/lib/permissions';
-
-const complexityConfig: Record<
-  FunctionalRequirement['complexity'],
-  { label: string; color: string }
-> = {
-  LOW: { label: 'Low', color: 'green' },
-  MEDIUM: { label: 'Medium', color: 'yellow' },
-  HIGH: { label: 'High', color: 'orange' },
-  VERY_HIGH: { label: 'Very High', color: 'red' },
-};
 
 export default function FunctionalRequirementsPage() {
   const { user } = useAuth();
@@ -143,7 +142,7 @@ export default function FunctionalRequirementsPage() {
   const selectedProject = projects.find((p) => p.id === selectedProjectId);
 
   const renderRequirement = (req: FunctionalRequirement) => {
-    const complexity = complexityConfig[req.complexity];
+    const complexity = getComplexityConfig(req.complexity);
     const clientReq = clientRequirements.find((cr) => cr.id === req.clientRequirementId);
 
     // Calculate progress from linked tasks if stored progress is 0
@@ -155,32 +154,28 @@ export default function FunctionalRequirementsPage() {
     }
 
     return (
-      <tr
+      <TableRow
         key={req.id}
-        className="hover:bg-muted/50 cursor-pointer transition-colors"
+        className="cursor-pointer"
         onClick={() => setSelectedRequirement(req)}
       >
-        <td className="p-4">
-          <div className="flex items-center gap-2">
-            <Badge variant="outline" className="font-mono">
-              {req.hierarchyId}
-            </Badge>
-          </div>
-        </td>
-        <td className="p-4">
-          <div>
-            <div className="font-medium">{req.title}</div>
-            {req.description && (
-              <div className="text-sm text-muted-foreground line-clamp-1 mt-1">
-                {req.description}
-              </div>
-            )}
-            {clientReq && (
-              <div className="text-xs text-muted-foreground mt-1">Linked to: {clientReq.title}</div>
-            )}
-          </div>
-        </td>
-        <td className="p-4">
+        <TableCell>
+          <Badge variant="outline" className="font-mono">
+            {req.hierarchyId}
+          </Badge>
+        </TableCell>
+        <TableCell>
+          <div className="font-medium">{req.title}</div>
+          {req.description && (
+            <div className="text-sm text-muted-foreground line-clamp-1 mt-1">
+              {req.description}
+            </div>
+          )}
+          {clientReq && (
+            <div className="text-xs text-muted-foreground mt-1">Linked to: {clientReq.title}</div>
+          )}
+        </TableCell>
+        <TableCell>
           {req.priority ? (
             <Badge variant={getPriorityConfig(req.priority).badgeVariant}>
               {getPriorityConfig(req.priority).label}
@@ -188,23 +183,18 @@ export default function FunctionalRequirementsPage() {
           ) : (
             <span className="text-muted-foreground text-sm">-</span>
           )}
-        </td>
-        <td className="p-4">
-          <Badge
-            variant="outline"
-            className={`bg-${complexity.color}-500/10 text-${complexity.color}-700`}
-          >
-            {complexity.label}
-          </Badge>
-        </td>
-        <td className="p-4">
+        </TableCell>
+        <TableCell>
+          <Badge variant={complexity.badgeVariant}>{complexity.label}</Badge>
+        </TableCell>
+        <TableCell>
           <div className="flex items-center gap-2">
             <Progress value={progress} className="w-20 h-2" />
             <span className="text-sm text-muted-foreground">{progress}%</span>
           </div>
-        </td>
-        <td className="p-4 text-sm text-muted-foreground">{formatDate(req.createdAt)}</td>
-      </tr>
+        </TableCell>
+        <TableCell className="text-muted-foreground">{formatDate(req.createdAt)}</TableCell>
+      </TableRow>
     );
   };
 
@@ -380,22 +370,22 @@ export default function FunctionalRequirementsPage() {
                   }
                 />
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="border-b">
-                      <tr className="text-left">
-                        <th className="p-4 font-medium">id</th>
-                        <th className="p-4 font-medium">Title</th>
-                        <th className="p-4 font-medium">Priority</th>
-                        <th className="p-4 font-medium">Complexity</th>
-                        <th className="p-4 font-medium">Progress</th>
-                        <th className="p-4 font-medium">Created</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y">
+                <div className="rounded-md border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>ID</TableHead>
+                        <TableHead>Title</TableHead>
+                        <TableHead>Priority</TableHead>
+                        <TableHead>Complexity</TableHead>
+                        <TableHead>Progress</TableHead>
+                        <TableHead>Created</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
                       {filteredRequirements.map((req) => renderRequirement(req))}
-                    </tbody>
-                  </table>
+                    </TableBody>
+                  </Table>
                 </div>
               )}
             </CardContent>
