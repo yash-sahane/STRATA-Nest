@@ -39,7 +39,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { PageLoader } from '@/components/ui/page-loader';
+import { PageLoader, InlineLoader } from '@/components/ui/page-loader';
 import { MetricCard, HealthBadge } from '@/components/analytics/kpi-widgets';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useProjects } from '@/hooks/use-project';
@@ -113,7 +113,7 @@ export default function AnalyticsPage() {
         <TabsContent value="workspace" className="space-y-4">
           {isLoading ? (
             <div className="flex items-center justify-center py-12">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+              <InlineLoader />
             </div>
           ) : !workspaceAnalytics ? (
             <div className="text-center py-12">
@@ -497,7 +497,7 @@ export default function AnalyticsPage() {
 
           {projectAnalyticsLoading ? (
             <div className="flex items-center justify-center py-12">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+              <InlineLoader />
             </div>
           ) : !projectAnalytics || !selectedProjectId ? (
             <div className="text-center py-12">
@@ -591,7 +591,7 @@ export default function AnalyticsPage() {
         <TabsContent value="team" className="space-y-4">
           {teamLoading ? (
             <div className="flex items-center justify-center py-12">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+              <InlineLoader />
             </div>
           ) : !teamAnalytics ? (
             <div className="text-center py-12">

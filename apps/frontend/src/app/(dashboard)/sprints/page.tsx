@@ -23,6 +23,7 @@ import { CreateSprintDialog } from '@/components/sprints/create-sprint-dialog';
 import { PageHeader } from '@/components/layout/page-header';
 import { useConfirm } from '@/components/providers/confirm-provider';
 import { ErrorState } from '@/components/ui/error-state';
+import { PageLoader, InlineLoader } from '@/components/ui/page-loader';
 import { useRouter } from 'next/navigation';
 
 export default function SprintsPage() {
@@ -178,11 +179,7 @@ export default function SprintsPage() {
 
   // Show loading state while data is being fetched
   if (workspacesLoading || projectsLoading || !user) {
-    return (
-      <div className="flex items-center justify-center h-[50vh]">
-        <p className="text-muted-foreground">Loading...</p>
-      </div>
-    );
+    return <PageLoader message="Loading sprints..." />;
   }
 
   // Show message if no workspace
@@ -247,9 +244,7 @@ export default function SprintsPage() {
 
       {/* Sprint Cards */}
       {sprintsLoading ? (
-        <div className="flex items-center justify-center h-[50vh]">
-          <p className="text-muted-foreground">Loading sprints...</p>
-        </div>
+        <InlineLoader />
       ) : sprintsError ? (
         <ErrorState onRetry={() => refetchSprints()} />
       ) : sprints && sprints.length > 0 ? (

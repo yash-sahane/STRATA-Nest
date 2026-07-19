@@ -1,6 +1,7 @@
 'use client';
 
 import { PageHeader } from '@/components/layout/page-header';
+import { PageLoader } from '@/components/ui/page-loader';
 
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
@@ -15,7 +16,7 @@ import { Label } from '@/components/ui/label';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
-import { User, Mail, Shield, Calendar, Loader2 } from 'lucide-react';
+import { User, Mail, Shield, Calendar } from 'lucide-react';
 import { formatDate, getInitials } from '@/lib/utils';
 import { authClient, resources } from '@/lib/api/client';
 import { toast } from 'sonner';
@@ -77,13 +78,7 @@ export default function ProfilePage() {
   };
 
   if (!user) {
-    return (
-      <div className="flex items-center justify-center h-[calc(100vh-4rem)]">
-        <div className="text-center">
-          <p className="text-muted-foreground">Loading profile...</p>
-        </div>
-      </div>
-    );
+    return <PageLoader message="Loading profile..." />;
   }
 
   return (
@@ -109,15 +104,8 @@ export default function ProfilePage() {
                 <Button variant="outline" onClick={handleCancel} disabled={isSaving}>
                   Cancel
                 </Button>
-                <Button onClick={handleSave} disabled={isSaving}>
-                  {isSaving ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Saving...
-                    </>
-                  ) : (
-                    'Save Changes'
-                  )}
+                <Button onClick={handleSave} loading={isSaving}>
+                  {isSaving ? 'Saving...' : 'Save Changes'}
                 </Button>
               </div>
             )}

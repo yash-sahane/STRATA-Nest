@@ -2,6 +2,7 @@
 
 import { PageHeader } from '@/components/layout/page-header';
 import { ErrorState } from '@/components/ui/error-state';
+import { PageLoader } from '@/components/ui/page-loader';
 
 import * as React from 'react';
 import { useAuth } from '@/components/providers/auth-provider';
@@ -49,11 +50,7 @@ export default function WorkspacesPage() {
   };
 
   if (isLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
-      </div>
-    );
+    return <PageLoader message="Loading workspaces..." />;
   }
 
   if (isError) {

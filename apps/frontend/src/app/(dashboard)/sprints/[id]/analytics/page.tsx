@@ -1,6 +1,7 @@
 'use client';
 
 import { PageHeader } from '@/components/layout/page-header';
+import { PageLoader } from '@/components/ui/page-loader';
 
 import * as React from 'react';
 import { useParams, useRouter } from 'next/navigation';
@@ -156,11 +157,7 @@ export default function SprintAnalyticsPage() {
   const daysPassed = totalDays - daysRemaining;
 
   if (sprintLoading || tasksLoading) {
-    return (
-      <div className="flex items-center justify-center h-[50vh]">
-        <p className="text-muted-foreground">Loading analytics...</p>
-      </div>
-    );
+    return <PageLoader message="Loading sprint analytics..." />;
   }
 
   if (!sprint) {

@@ -2,6 +2,7 @@
 
 import { PageHeader } from '@/components/layout/page-header';
 import { ErrorState } from '@/components/ui/error-state';
+import { InlineLoader } from '@/components/ui/page-loader';
 
 import * as React from 'react';
 import { useAuth } from '@/components/providers/auth-provider';
@@ -361,9 +362,7 @@ export default function FunctionalRequirementsPage() {
             </CardHeader>
             <CardContent>
               {isLoading ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  Loading requirements...
-                </div>
+                <InlineLoader />
               ) : isError ? (
                 <ErrorState onRetry={() => refetch()} />
               ) : filteredRequirements.length === 0 ? (

@@ -32,6 +32,7 @@ import { CreateClientRequirementDialog } from '@/components/requirements/create-
 import { ClientRequirementDetailDialog } from '@/components/requirements/client-requirement-detail-dialog';
 import { PageHeader } from '@/components/layout/page-header';
 import { ErrorState } from '@/components/ui/error-state';
+import { InlineLoader } from '@/components/ui/page-loader';
 import { AIGenerateDialog } from '@/components/ai/ai-generate-dialog';
 import type { GeneratedHierarchy } from '@/lib/ai-generator';
 import { useIsAdmin, useHasPermission } from '@/hooks/use-permissions';
@@ -347,7 +348,7 @@ export default function RequirementsPage() {
             </CardHeader>
             <CardContent>
               {isLoading ? (
-                <div className="text-center py-8 text-muted-foreground">Loading...</div>
+                <InlineLoader />
               ) : isError ? (
                 <ErrorState onRetry={() => refetch()} />
               ) : filteredRequirements.length === 0 ? (

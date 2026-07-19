@@ -1,5 +1,7 @@
 'use client';
 
+import { PageLoader } from '@/components/ui/page-loader';
+
 import * as React from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
@@ -60,11 +62,7 @@ export default function ProjectDetailPage() {
   }, [project, tasks]);
 
   if (isLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
-      </div>
-    );
+    return <PageLoader message="Loading project..." />;
   }
 
   if (!project) {

@@ -16,6 +16,7 @@ import { TaskDetailsDialog } from '@/components/tasks/task-details-dialog';
 import { EditTaskDialog } from '@/components/tasks/edit-task-dialog';
 import { PageHeader } from '@/components/layout/page-header';
 import { ErrorState } from '@/components/ui/error-state';
+import { InlineLoader } from '@/components/ui/page-loader';
 import {
   useTasks,
   useCreateTask,
@@ -781,12 +782,7 @@ export default function TasksPage() {
       {/* Task Board */}
       {selectedProjectId ? (
         isLoadingTasks ? (
-          <div className="flex items-center justify-center h-96">
-            <div className="text-center">
-              <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent mx-auto mb-4"></div>
-              <p className="text-muted-foreground">Loading tasks...</p>
-            </div>
-          </div>
+          <InlineLoader />
         ) : isErrorTasks ? (
           <ErrorState onRetry={() => refetchTasks()} />
         ) : (

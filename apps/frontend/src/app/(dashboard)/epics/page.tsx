@@ -25,6 +25,7 @@ import { CreateEpicDialog } from '@/components/epic/create-epic-dialog';
 import { EpicDetailDialog } from '@/components/epic/epic-detail-dialog';
 import { PageHeader } from '@/components/layout/page-header';
 import { ErrorState } from '@/components/ui/error-state';
+import { InlineLoader } from '@/components/ui/page-loader';
 import { useIsAdmin, useHasPermission } from '@/hooks/use-permissions';
 import { Permission } from '@/lib/permissions';
 
@@ -221,8 +222,8 @@ export default function EpicsPage() {
           {/* Epics Grid */}
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {isLoading ? (
-              <div className="col-span-full text-center py-8 text-muted-foreground">
-                Loading epics...
+              <div className="col-span-full">
+                <InlineLoader />
               </div>
             ) : isError ? (
               <div className="col-span-full">

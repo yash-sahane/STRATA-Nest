@@ -1,6 +1,7 @@
 'use client';
 
 import { PageHeader } from '@/components/layout/page-header';
+import { PageLoader } from '@/components/ui/page-loader';
 
 import * as React from 'react';
 import { useAuth } from '@/components/providers/auth-provider';
@@ -42,11 +43,7 @@ export default function ActivityPage() {
   }
 
   if (workspacesLoading || projectsLoading) {
-    return (
-      <div className="flex items-center justify-center h-[calc(100vh-4rem)]">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
-      </div>
-    );
+    return <PageLoader message="Loading activity..." />;
   }
 
   if (!currentWorkspace) {
