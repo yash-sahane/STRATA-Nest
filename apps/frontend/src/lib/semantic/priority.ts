@@ -18,6 +18,8 @@ export interface PriorityConfig {
   /** Solid background for a priority dot / left border. */
   dot: string;
   border: string;
+  /** Left-edge accent only (kanban card leading border). */
+  borderLeft: string;
   icon: LucideIcon;
   /** Higher = more urgent. Use for sorting. */
   score: number;
@@ -41,6 +43,7 @@ export function getPriorityConfig(priority: string | null | undefined): Priority
     badgeVariant: tone.badgeVariant,
     dot: tone.dot,
     border: tone.border,
+    borderLeft: tone.borderLeft,
     icon: base.icon,
     score: base.score,
   };

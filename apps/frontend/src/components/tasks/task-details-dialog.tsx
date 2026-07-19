@@ -1,5 +1,7 @@
 'use client';
 
+import { getPriorityConfig } from '@/lib/semantic/priority';
+
 import * as React from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -54,13 +56,6 @@ const statusConfig = {
   DONE: { label: 'Done', color: 'bg-green-500' },
 };
 
-const priorityConfig = {
-  LOW: { label: 'Low', color: 'text-green-500' },
-  MEDIUM: { label: 'Medium', color: 'text-yellow-500' },
-  HIGH: { label: 'High', color: 'text-orange-500' },
-  CRITICAL: { label: 'Critical', color: 'text-red-500' },
-};
-
 export function TaskDetailsDialog({
   task,
   open,
@@ -90,9 +85,7 @@ export function TaskDetailsDialog({
   if (!task) return null;
 
   const status = statusConfig[task.status as keyof typeof statusConfig] || statusConfig.BACKLOG;
-  const priority = task.priority
-    ? priorityConfig[task.priority as keyof typeof priorityConfig]
-    : null;
+  const priority = task.priority ? getPriorityConfig(task.priority) : null;
   const labels = task.labels && Array.isArray(task.labels) ? task.labels : [];
 
   const handleAddDependency = async (targetTaskId: string, type: 'blocks' | 'blockedBy') => {
@@ -116,7 +109,7 @@ export function TaskDetailsDialog({
                 <Badge className={status.color}>{status.label}</Badge>
                 {priority && (
                   <div className="flex items-center gap-1">
-                    <span className={`text-lg ${priority.color}`}>●</span>
+                    <span className={cn('h-2 w-2 rounded-full', priority.dot)} />
                     <span className="text-sm text-muted-foreground">{priority.label}</span>
                   </div>
                 )}

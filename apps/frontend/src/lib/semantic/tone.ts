@@ -27,14 +27,40 @@ export interface ToneStyle {
   badgeVariant: BadgeVariant;
   /** Solid background for status dots / small indicators. */
   dot: string;
-  /** Solid border color (e.g. a card's leading border). */
+  /** Solid border color (all sides). */
   border: string;
+  /**
+   * Left-edge accent only (e.g. a kanban card's leading border), for when the
+   * card keeps its neutral border on the other three sides. Written as literal
+   * classes so Tailwind can detect them — never build these by string concat.
+   */
+  borderLeft: string;
 }
 
 export const toneStyle: Record<SemanticTone, ToneStyle> = {
-  neutral: { badgeVariant: 'secondary', dot: 'bg-muted-foreground', border: 'border-border' },
-  info: { badgeVariant: 'info', dot: 'bg-info', border: 'border-info' },
-  warning: { badgeVariant: 'warning', dot: 'bg-warning', border: 'border-warning' },
-  success: { badgeVariant: 'success', dot: 'bg-success', border: 'border-success' },
-  destructive: { badgeVariant: 'destructive', dot: 'bg-destructive', border: 'border-destructive' },
+  neutral: {
+    badgeVariant: 'secondary',
+    dot: 'bg-muted-foreground',
+    border: 'border-border',
+    borderLeft: 'border-l-border',
+  },
+  info: { badgeVariant: 'info', dot: 'bg-info', border: 'border-info', borderLeft: 'border-l-info' },
+  warning: {
+    badgeVariant: 'warning',
+    dot: 'bg-warning',
+    border: 'border-warning',
+    borderLeft: 'border-l-warning',
+  },
+  success: {
+    badgeVariant: 'success',
+    dot: 'bg-success',
+    border: 'border-success',
+    borderLeft: 'border-l-success',
+  },
+  destructive: {
+    badgeVariant: 'destructive',
+    dot: 'bg-destructive',
+    border: 'border-destructive',
+    borderLeft: 'border-l-destructive',
+  },
 };

@@ -23,6 +23,8 @@ export interface StatusConfig {
   badgeVariant: BadgeVariant;
   dot: string;
   border: string;
+  /** Left-edge accent only (e.g. a card's leading border). */
+  borderLeft: string;
 }
 
 const TASK_STATUS: Record<string, SemanticTone> = {
@@ -91,6 +93,7 @@ function makeResolver(map: Record<string, SemanticTone>) {
       badgeVariant: style.badgeVariant,
       dot: style.dot,
       border: style.border,
+      borderLeft: style.borderLeft,
     };
   };
 }

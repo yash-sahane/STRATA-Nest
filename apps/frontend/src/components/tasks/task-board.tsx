@@ -1,5 +1,7 @@
 'use client';
 
+import { getPriorityConfig } from '@/lib/semantic/priority';
+
 import * as React from 'react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -16,7 +18,7 @@ import {
 import { cn } from '@/lib/utils';
 import { useTasksRealtime } from '@/hooks/use-realtime';
 import type { Task, TaskStatus } from '@/types';
-import { MoreVertical, Clock, AlertCircle, Circle, Calendar } from 'lucide-react';
+import { MoreVertical, Clock, Calendar } from 'lucide-react';
 import { formatDate } from '@/lib/utils';
 
 // Helper function to parse label format "color:text"
@@ -60,55 +62,6 @@ const COLUMNS: { id: TaskStatus; title: string; color: string }[] = [
   { id: 'REVIEW', title: 'Review', color: 'bg-purple-100 dark:bg-purple-900' },
   { id: 'DONE', title: 'Done', color: 'bg-green-100 dark:bg-green-900' },
 ];
-
-const priorityConfig: Record<
-  string,
-  {
-    label: string;
-    color: string;
-    icon: typeof AlertCircle;
-    borderColor: string;
-    dotColor: string;
-  }
-> = {
-  CRITICAL: {
-    label: 'Critical',
-    color: 'destructive',
-    icon: AlertCircle,
-    borderColor: 'border-l-red-500',
-    dotColor: 'bg-red-500',
-  },
-  HIGH: {
-    label: 'High',
-    color: 'orange',
-    icon: AlertCircle,
-    borderColor: 'border-l-orange-500',
-    dotColor: 'bg-orange-500',
-  },
-  MEDIUM: {
-    label: 'Medium',
-    color: 'yellow',
-    icon: Circle,
-    borderColor: 'border-l-yellow-500',
-    dotColor: 'bg-yellow-500',
-  },
-  LOW: {
-    label: 'Low',
-    color: 'gray',
-    icon: Circle,
-    borderColor: 'border-l-gray-400',
-    dotColor: 'bg-gray-400',
-  },
-};
-
-// Default priority config for unknown values
-const defaultPriorityConfig = {
-  label: 'Low',
-  color: 'gray',
-  icon: Circle,
-  borderColor: 'border-l-gray-400',
-  dotColor: 'bg-gray-400',
-};
 
 export function TaskBoard({
   tasks,
@@ -290,7 +243,7 @@ export function TaskBoard({
                             {...provided.dragHandleProps}
                             className={cn(
                               'cursor-pointer transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md border-l-4',
-                              (priorityConfig[task.priority] || defaultPriorityConfig).borderColor,
+                              getPriorityConfig(task.priority).borderLeft,
                               snapshot.isDragging && 'shadow-xl ring-2 ring-primary'
                             )}
                             onClick={() => onTaskClick(task)}
@@ -306,14 +259,12 @@ export function TaskBoard({
                                       <span
                                         className={cn(
                                           'h-2 w-2 rounded-full',
-                                          (priorityConfig[task.priority] || defaultPriorityConfig)
-                                            .dotColor
+                                          getPriorityConfig(task.priority).dot
                                         )}
                                       />
                                       <span className="text-xs text-muted-foreground font-medium">
                                         {
-                                          (priorityConfig[task.priority] || defaultPriorityConfig)
-                                            .label
+                                          getPriorityConfig(task.priority).label
                                         }
                                       </span>
                                     </div>

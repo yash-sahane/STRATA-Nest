@@ -1,5 +1,7 @@
 'use client';
 
+import { getPriorityConfig } from '@/lib/semantic/priority';
+
 import * as React from 'react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { Card, CardContent } from '@/components/ui/card';
@@ -12,7 +14,7 @@ import {
 import { useUserRole } from '@/hooks/use-permissions';
 import type { Task, TaskStatus, FunctionalRequirement, FunctionalRequirementStatus } from '@/types';
 import { cn } from '@/lib/utils';
-import { AlertCircle, User, Calendar, Flag, Link2, FileText } from 'lucide-react';
+import { User, Calendar, Link2, FileText } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 
 interface SprintBoardProps {
@@ -56,13 +58,6 @@ const COLUMNS: { id: TaskStatus; label: string; color: string }[] = [
   { id: 'REVIEW', label: 'Review', color: 'bg-purple-50 dark:bg-purple-950' },
   { id: 'DONE', label: 'Done', color: 'bg-green-50 dark:bg-green-950' },
 ];
-
-const priorityConfig = {
-  CRITICAL: { label: 'Critical', color: 'bg-red-500', icon: AlertCircle },
-  HIGH: { label: 'High', color: 'bg-orange-500', icon: Flag },
-  MEDIUM: { label: 'Medium', color: 'bg-yellow-500', icon: Flag },
-  LOW: { label: 'Low', color: 'bg-green-500', icon: Flag },
-};
 
 // ✅ Component to display FR badge for tasks linked to FRs
 function TaskFRBadge({ functionalRequirementId }: { functionalRequirementId?: string }) {
@@ -221,11 +216,11 @@ export function SprintBoard({ tasks, frs = [] }: SprintBoardProps) {
                                       </Badge>
                                     )}
                                   </div>
-                                  {data.priority && priorityConfig[data.priority] && (
+                                  {data.priority && (
                                     <div
                                       className={cn(
                                         'w-2 h-2 rounded-full',
-                                        priorityConfig[data.priority].color
+                                        getPriorityConfig(data.priority).dot
                                       )}
                                     />
                                   )}
