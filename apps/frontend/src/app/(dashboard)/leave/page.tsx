@@ -126,7 +126,7 @@ export default function LeavePage() {
           ) : (
             <div className="grid gap-4 md:grid-cols-2">
               {myLeaves.map((leave) => (
-                <Card key={leave.id} className="hover:shadow-md transition-shadow">
+                <Card key={leave.id} className="transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
                   <CardHeader>
                     <div className="flex items-start justify-between">
                       <div className="space-y-1">

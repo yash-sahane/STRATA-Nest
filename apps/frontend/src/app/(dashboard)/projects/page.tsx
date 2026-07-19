@@ -278,7 +278,7 @@ export default function ProjectsPage() {
             return (
               <Card
                 key={project.id}
-                className="group flex h-full flex-col overflow-hidden transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-md animate-in fade-in slide-in-from-bottom-2"
+                className="group flex h-full flex-col overflow-hidden transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md animate-in fade-in slide-in-from-bottom-2"
                 style={{ animationDelay: `${index * 50}ms` }}
               >
                 <CardHeader>

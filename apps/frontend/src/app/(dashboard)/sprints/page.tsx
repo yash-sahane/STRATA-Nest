@@ -251,7 +251,7 @@ export default function SprintsPage() {
             return (
               <Card
                 key={sprint.id}
-                className="hover:shadow-lg transition-shadow cursor-pointer"
+                className="transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md cursor-pointer"
                 onClick={() => router.push(`/sprints/${sprint.id}/board`)}
               >
                 <CardHeader>

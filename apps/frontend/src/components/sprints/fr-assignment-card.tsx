@@ -183,7 +183,7 @@ export function FRAssignmentCard({ fr, teamMembers, projectId }: FRAssignmentCar
   };
 
   return (
-    <Card className="hover:shadow-md transition-shadow">
+    <Card className="transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between">
           <div className="space-y-1">

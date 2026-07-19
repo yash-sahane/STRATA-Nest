@@ -251,7 +251,7 @@ export default function EpicsPage() {
                 return (
                   <Card
                     key={epic.id}
-                    className="cursor-pointer hover:shadow-lg transition-shadow"
+                    className="cursor-pointer transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
                     onClick={() => setSelectedEpic(epic)}
                   >
                     <CardHeader>

@@ -73,7 +73,7 @@ export default function WorkspacesPage() {
       {workspaces && workspaces.length > 0 ? (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {workspaces.map((workspace) => (
-            <Card key={workspace.id} className="hover:shadow-lg transition-shadow">
+            <Card key={workspace.id} className="transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
               <CardHeader>
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
