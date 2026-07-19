@@ -1,6 +1,7 @@
 'use client';
 
 import { getPriorityConfig } from '@/lib/semantic/priority';
+import { getTaskStatusConfig } from '@/lib/semantic/status';
 
 import * as React from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -48,14 +49,6 @@ interface TaskDetailsDialogProps {
   onDelete?: (taskId: string) => void;
 }
 
-const statusConfig = {
-  BACKLOG: { label: 'Backlog', color: 'bg-gray-500' },
-  TODO: { label: 'To Do', color: 'bg-blue-500' },
-  IN_PROGRESS: { label: 'In Progress', color: 'bg-yellow-500' },
-  REVIEW: { label: 'Review', color: 'bg-purple-500' },
-  DONE: { label: 'Done', color: 'bg-green-500' },
-};
-
 export function TaskDetailsDialog({
   task,
   open,
@@ -84,7 +77,7 @@ export function TaskDetailsDialog({
 
   if (!task) return null;
 
-  const status = statusConfig[task.status as keyof typeof statusConfig] || statusConfig.BACKLOG;
+  const status = getTaskStatusConfig(task.status);
   const priority = task.priority ? getPriorityConfig(task.priority) : null;
   const labels = task.labels && Array.isArray(task.labels) ? task.labels : [];
 
@@ -106,7 +99,7 @@ export function TaskDetailsDialog({
                 <Badge variant="outline" className="font-mono">
                   {task.hierarchyId}
                 </Badge>
-                <Badge className={status.color}>{status.label}</Badge>
+                <Badge variant={status.badgeVariant}>{status.label}</Badge>
                 {priority && (
                   <div className="flex items-center gap-1">
                     <span className={cn('h-2 w-2 rounded-full', priority.dot)} />

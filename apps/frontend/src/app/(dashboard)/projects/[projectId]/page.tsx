@@ -1,6 +1,7 @@
 'use client';
 
 import { PageLoader } from '@/components/ui/page-loader';
+import { getProjectStatusConfig } from '@/lib/semantic/status';
 
 import * as React from 'react';
 import { useParams, useRouter } from 'next/navigation';
@@ -24,17 +25,8 @@ import {
   FileText,
 } from 'lucide-react';
 import { formatDate } from '@/lib/utils';
-import type { ProjectStatus } from '@/types';
 import { ProjectHealthCard } from '@/components/projects/project-health-card';
 import { calculateProjectHealth } from '@/lib/project-health';
-
-const statusConfig: Record<ProjectStatus, { label: string; variant: 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'info' }> = {
-  PLANNING: { label: 'Planning', variant: 'outline' },
-  ACTIVE: { label: 'Active', variant: 'success' },
-  ON_HOLD: { label: 'On Hold', variant: 'warning' },
-  COMPLETED: { label: 'Completed', variant: 'info' },
-  ARCHIVED: { label: 'Archived', variant: 'secondary' },
-};
 
 export default function ProjectDetailPage() {
   const params = useParams();
@@ -98,8 +90,8 @@ export default function ProjectDetailPage() {
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-3xl font-bold tracking-tight">{project.name}</h1>
-                <Badge variant={statusConfig[project.status].variant}>
-                  {statusConfig[project.status].label}
+                <Badge variant={getProjectStatusConfig(project.status).badgeVariant}>
+                  {getProjectStatusConfig(project.status).label}
                 </Badge>
               </div>
               <p className="text-muted-foreground">

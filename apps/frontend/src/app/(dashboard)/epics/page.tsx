@@ -26,18 +26,10 @@ import { EpicDetailDialog } from '@/components/epic/epic-detail-dialog';
 import { PageHeader } from '@/components/layout/page-header';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
+import { getEpicStatusConfig } from '@/lib/semantic/status';
 import { InlineLoader } from '@/components/ui/page-loader';
 import { useIsAdmin, useHasPermission } from '@/hooks/use-permissions';
 import { Permission } from '@/lib/permissions';
-
-const statusConfig: Record<
-  Epic['status'],
-  { label: string; variant: 'default' | 'secondary' | 'destructive' | 'outline' }
-> = {
-  TODO: { label: 'To Do', variant: 'secondary' },
-  IN_PROGRESS: { label: 'In Progress', variant: 'default' },
-  DONE: { label: 'Done', variant: 'default' },
-};
 
 export default function EpicsPage() {
   const { user } = useAuth();
@@ -246,7 +238,7 @@ export default function EpicsPage() {
             ) : (
               epics.map((epic) => {
                 const metrics = getEpicMetrics(epic);
-                const status = statusConfig[epic.status];
+                const status = getEpicStatusConfig(epic.status);
 
                 return (
                   <Card
@@ -275,7 +267,7 @@ export default function EpicsPage() {
                       {/* Status */}
                       <div className="flex items-center justify-between text-sm">
                         <span className="text-muted-foreground">Status</span>
-                        <Badge variant={status.variant}>{status.label}</Badge>
+                        <Badge variant={status.badgeVariant}>{status.label}</Badge>
                       </div>
 
                       {/* Progress */}

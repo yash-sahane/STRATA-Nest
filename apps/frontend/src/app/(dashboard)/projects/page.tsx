@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/select';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
+import { PROJECT_STATUSES, getProjectStatusConfig } from '@/lib/semantic/status';
 import { PageHeader } from '@/components/layout/page-header';
 import {
   DropdownMenu,
@@ -67,20 +68,6 @@ import { useRouter } from 'next/navigation';
 import type { ProjectStatus, Project } from '@/types';
 import { useHasPermission, useIsAdmin } from '@/hooks/use-permissions';
 import { Permission } from '@/lib/permissions';
-
-const statusConfig: Record<
-  ProjectStatus,
-  {
-    label: string;
-    variant: 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'info';
-  }
-> = {
-  PLANNING: { label: 'Planning', variant: 'outline' },
-  ACTIVE: { label: 'Active', variant: 'success' },
-  ON_HOLD: { label: 'On Hold', variant: 'warning' },
-  COMPLETED: { label: 'Completed', variant: 'info' },
-  ARCHIVED: { label: 'Archived', variant: 'secondary' },
-};
 
 export default function ProjectsPage() {
   const { user } = useAuth();
@@ -244,11 +231,9 @@ export default function ProjectsPage() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="ALL">All Status</SelectItem>
-              {Object.entries(statusConfig)
-                .filter(([status]) => status !== 'ARCHIVED')
-                .map(([status, config]) => (
+              {PROJECT_STATUSES.filter((status) => status !== 'ARCHIVED').map((status) => (
                   <SelectItem key={status} value={status}>
-                    {config.label}
+                    {getProjectStatusConfig(status).label}
                   </SelectItem>
                 ))}
             </SelectContent>
@@ -271,7 +256,7 @@ export default function ProjectsPage() {
       {filteredProjects.length > 0 && visibleProjects.length > 0 ? (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {visibleProjects.map((project, index) => {
-            const status = statusConfig[project.status];
+            const status = getProjectStatusConfig(project.status);
             const projectTasks = allTasks?.filter((task) => task.projectId === project.id) || [];
             const health = calculateProjectHealth(project, allTasks || []);
 
@@ -288,7 +273,7 @@ export default function ProjectsPage() {
                         <Badge variant="outline" className="font-mono">
                           {project.shortCode}
                         </Badge>
-                        <Badge variant={status.variant}>{status.label}</Badge>
+                        <Badge variant={status.badgeVariant}>{status.label}</Badge>
                         {projectTasks.length > 0 && (
                           <ProjectHealthBadge score={health.score} showLabel={false} size="sm" />
                         )}

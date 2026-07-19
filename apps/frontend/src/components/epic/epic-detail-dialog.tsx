@@ -1,5 +1,7 @@
 'use client';
 
+import { getEpicStatusConfig } from '@/lib/semantic/status';
+
 import * as React from 'react';
 import {
   Dialog,
@@ -114,12 +116,6 @@ export function EpicDetailDialog({
     onOpenChange(false);
   };
 
-  const statusConfig: Record<Epic['status'], { label: string; color: string }> = {
-    TODO: { label: 'To Do', color: 'bg-gray-500' },
-    IN_PROGRESS: { label: 'In Progress', color: 'bg-blue-500' },
-    DONE: { label: 'Done', color: 'bg-green-500' },
-  };
-
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
@@ -146,8 +142,10 @@ export function EpicDetailDialog({
             <div className="space-y-2">
               <label className="text-sm font-medium">Status</label>
               <div className="flex items-center gap-2 px-3 py-2 bg-secondary/30 rounded-md">
-                <div className={`w-2 h-2 rounded-full ${statusConfig[metrics.autoStatus].color}`} />
-                <span className="text-sm">{statusConfig[metrics.autoStatus].label}</span>
+                <div
+                  className={`w-2 h-2 rounded-full ${getEpicStatusConfig(metrics.autoStatus).dot}`}
+                />
+                <span className="text-sm">{getEpicStatusConfig(metrics.autoStatus).label}</span>
                 <span className="text-xs text-muted-foreground ml-auto">
                   (Auto-calculated from {metrics.totalFRs > 0 ? 'FRs' : 'tasks'})
                 </span>
