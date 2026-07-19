@@ -68,11 +68,14 @@ const SPRINT_STATUS: Record<string, SemanticTone> = {
 const REQUIREMENT_STATUS: Record<string, SemanticTone> = {
   DRAFT: 'neutral',
   PROPOSED: 'neutral',
+  // Awaiting a decision — "needs attention", same tone as REVIEW elsewhere.
+  SUBMITTED: 'warning',
   APPROVED: 'info',
   IN_PROGRESS: 'info',
   ON_HOLD: 'warning',
   COMPLETED: 'success',
   REJECTED: 'destructive',
+  ARCHIVED: 'neutral',
 };
 
 function titleCase(value: string): string {

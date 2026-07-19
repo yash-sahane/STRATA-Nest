@@ -1,5 +1,8 @@
 'use client';
 
+import { getRequirementStatusConfig } from '@/lib/semantic/status';
+import { getPriorityConfig } from '@/lib/semantic/priority';
+
 import * as React from 'react';
 import {
   Dialog,
@@ -39,27 +42,14 @@ import {
 } from '@/hooks/use-client-requirement';
 import type { RequirementPriority, RequirementStatus } from '@/types';
 
-const statusConfig: Record<
-  RequirementStatus,
-  {
-    label: string;
-    icon: React.ComponentType<{ className?: string }>;
-    variant: 'default' | 'secondary' | 'destructive' | 'outline';
-  }
-> = {
-  DRAFT: { label: 'Draft', icon: FileText, variant: 'secondary' },
-  SUBMITTED: { label: 'Submitted', icon: Clock, variant: 'default' },
-  APPROVED: { label: 'Approved', icon: CheckCircle2, variant: 'default' },
-  IN_PROGRESS: { label: 'In Progress', icon: Clock, variant: 'default' },
-  COMPLETED: { label: 'Completed', icon: CheckCircle2, variant: 'default' },
-  ARCHIVED: { label: 'Archived', icon: Archive, variant: 'secondary' },
-};
-
-const priorityConfig: Record<RequirementPriority, { label: string; color: string }> = {
-  LOW: { label: 'Low', color: 'text-green-500' },
-  MEDIUM: { label: 'Medium', color: 'text-yellow-500' },
-  HIGH: { label: 'High', color: 'text-orange-500' },
-  CRITICAL: { label: 'Critical', color: 'text-red-500' },
+/** Icon per status; colour and label come from lib/semantic/status. */
+const statusIcons: Record<RequirementStatus, React.ComponentType<{ className?: string }>> = {
+  DRAFT: FileText,
+  SUBMITTED: Clock,
+  APPROVED: CheckCircle2,
+  IN_PROGRESS: Clock,
+  COMPLETED: CheckCircle2,
+  ARCHIVED: Archive,
 };
 
 interface ClientRequirementDetailDialogProps {
@@ -112,9 +102,9 @@ export function ClientRequirementDetailDialog({
 
   if (!requirement) return null;
 
-  const currentStatusConfig = statusConfig[status];
-  const currentPriorityConfig = priorityConfig[priority];
-  const StatusIcon = currentStatusConfig.icon;
+  const currentStatusConfig = getRequirementStatusConfig(status);
+  const currentPriorityConfig = getPriorityConfig(priority);
+  const StatusIcon = statusIcons[status] ?? FileText;
 
   const handleSave = async () => {
     await updateRequirement.mutateAsync({
@@ -149,12 +139,15 @@ export function ClientRequirementDetailDialog({
             <div className="flex items-start justify-between gap-4">
               <div className="space-y-3 flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <Badge variant={currentStatusConfig.variant} className="flex items-center gap-1">
+                  <Badge
+                    variant={currentStatusConfig.badgeVariant}
+                    className="flex items-center gap-1"
+                  >
                     <StatusIcon className="h-3 w-3" />
                     {currentStatusConfig.label}
                   </Badge>
                   <div className="flex items-center gap-1">
-                    <span className={`text-lg ${currentPriorityConfig.color}`}>●</span>
+                    <span className={`h-2 w-2 rounded-full ${currentPriorityConfig.dot}`} />
                     <span className="text-sm text-muted-foreground">
                       {currentPriorityConfig.label} Priority
                     </span>

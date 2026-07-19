@@ -33,6 +33,8 @@ import { ClientRequirementDetailDialog } from '@/components/requirements/client-
 import { PageHeader } from '@/components/layout/page-header';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
+import { getRequirementStatusConfig } from '@/lib/semantic/status';
+import { getPriorityConfig } from '@/lib/semantic/priority';
 import { InlineLoader } from '@/components/ui/page-loader';
 import { AIGenerateDialog } from '@/components/ai/ai-generate-dialog';
 import type { GeneratedHierarchy } from '@/lib/ai-generator';
@@ -43,27 +45,17 @@ import { logger } from '@/lib/logger';
 // Add permission for requirements (using epic permission as proxy since requirements follow similar hierarchy)
 // Note: In a production app, you might want to add specific requirement permissions
 
-const statusConfig: Record<
-  RequirementStatus,
-  {
-    label: string;
-    icon: React.ComponentType<{ className?: string }>;
-    variant: 'default' | 'secondary' | 'outline' | 'destructive';
-  }
-> = {
-  DRAFT: { label: 'Draft', icon: FileText, variant: 'secondary' },
-  SUBMITTED: { label: 'Submitted', icon: Clock, variant: 'default' },
-  APPROVED: { label: 'Approved', icon: CheckCircle2, variant: 'default' },
-  IN_PROGRESS: { label: 'In Progress', icon: Clock, variant: 'default' },
-  COMPLETED: { label: 'Completed', icon: CheckCircle2, variant: 'default' },
-  ARCHIVED: { label: 'Archived', icon: Archive, variant: 'secondary' },
-};
-
-const priorityConfig: Record<RequirementPriority, { label: string; color: string }> = {
-  LOW: { label: 'Low', color: 'text-green-500' },
-  MEDIUM: { label: 'Medium', color: 'text-yellow-500' },
-  HIGH: { label: 'High', color: 'text-orange-500' },
-  CRITICAL: { label: 'Critical', color: 'text-red-500' },
+/**
+ * Icon per status. Colour and label come from lib/semantic/status — this map
+ * only owns the icon, which is a separate axis from tone.
+ */
+const statusIcons: Record<RequirementStatus, React.ComponentType<{ className?: string }>> = {
+  DRAFT: FileText,
+  SUBMITTED: Clock,
+  APPROVED: CheckCircle2,
+  IN_PROGRESS: Clock,
+  COMPLETED: CheckCircle2,
+  ARCHIVED: Archive,
 };
 
 export default function RequirementsPage() {
@@ -385,9 +377,9 @@ export default function RequirementsPage() {
                     </TableHeader>
                     <TableBody>
                       {filteredRequirements.map((requirement) => {
-                        const status = statusConfig[requirement.status];
-                        const priority = priorityConfig[requirement.priority];
-                        const StatusIcon = status.icon;
+                        const status = getRequirementStatusConfig(requirement.status);
+                        const priority = getPriorityConfig(requirement.priority);
+                        const StatusIcon = statusIcons[requirement.status] ?? FileText;
 
                         return (
                           <TableRow
@@ -399,13 +391,13 @@ export default function RequirementsPage() {
                             <TableCell>{requirement.clientName}</TableCell>
                             <TableCell>
                               <div className="flex items-center gap-1">
-                                <span className={`text-lg ${priority.color}`}>●</span>
+                                <span className={`h-2 w-2 rounded-full ${priority.dot}`} />
                                 <span className="text-sm">{priority.label}</span>
                               </div>
                             </TableCell>
                             <TableCell>
                               <Badge
-                                variant={status.variant}
+                                variant={status.badgeVariant}
                                 className="flex items-center gap-1 w-fit"
                               >
                                 <StatusIcon className="h-3 w-3" />

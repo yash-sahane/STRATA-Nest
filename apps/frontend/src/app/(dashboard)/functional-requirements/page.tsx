@@ -6,6 +6,7 @@ import {
   FUNCTIONAL_REQUIREMENT_STATUSES,
   getFunctionalRequirementStatusConfig,
 } from '@/lib/semantic/status';
+import { getPriorityConfig } from '@/lib/semantic/priority';
 import { EmptyState } from '@/components/ui/empty-state';
 import { InlineLoader } from '@/components/ui/page-loader';
 
@@ -153,13 +154,6 @@ export default function FunctionalRequirementsPage() {
       progress = Math.round((completedTasks / linkedTasks.length) * 100);
     }
 
-    const priorityColors = {
-      CRITICAL: 'bg-red-500 text-white',
-      HIGH: 'bg-orange-500 text-white',
-      MEDIUM: 'bg-yellow-500 text-black',
-      LOW: 'bg-green-500 text-white',
-    };
-
     return (
       <tr
         key={req.id}
@@ -188,7 +182,9 @@ export default function FunctionalRequirementsPage() {
         </td>
         <td className="p-4">
           {req.priority ? (
-            <Badge className={priorityColors[req.priority]}>{req.priority}</Badge>
+            <Badge variant={getPriorityConfig(req.priority).badgeVariant}>
+              {getPriorityConfig(req.priority).label}
+            </Badge>
           ) : (
             <span className="text-muted-foreground text-sm">-</span>
           )}
