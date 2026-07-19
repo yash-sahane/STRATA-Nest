@@ -25,6 +25,7 @@ import { CreateEpicDialog } from '@/components/epic/create-epic-dialog';
 import { EpicDetailDialog } from '@/components/epic/epic-detail-dialog';
 import { PageHeader } from '@/components/layout/page-header';
 import { ErrorState } from '@/components/ui/error-state';
+import { EmptyState } from '@/components/ui/empty-state';
 import { InlineLoader } from '@/components/ui/page-loader';
 import { useIsAdmin, useHasPermission } from '@/hooks/use-permissions';
 import { Permission } from '@/lib/permissions';
@@ -230,15 +231,17 @@ export default function EpicsPage() {
                 <ErrorState onRetry={() => refetch()} />
               </div>
             ) : epics.length === 0 ? (
-              <div className="col-span-full text-center py-12">
-                <Target className="mx-auto h-12 w-12 text-muted-foreground opacity-50 mb-4" />
-                <p className="text-muted-foreground mb-4">No epics yet</p>
-                {(canCreateEpic || isAdmin) && (
-                  <Button onClick={() => setCreateDialogOpen(true)}>
-                    <Plus className="mr-2 h-4 w-4" />
-                    Create First Epic
-                  </Button>
-                )}
+              <div className="col-span-full">
+                <EmptyState
+                  icon={Target}
+                  title="No epics yet"
+                  description="Create your first epic to group related functional requirements."
+                  action={
+                    canCreateEpic || isAdmin
+                      ? { label: 'Create First Epic', onClick: () => setCreateDialogOpen(true) }
+                      : undefined
+                  }
+                />
               </div>
             ) : (
               epics.map((epic) => {

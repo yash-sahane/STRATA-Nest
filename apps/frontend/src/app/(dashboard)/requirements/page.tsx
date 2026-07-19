@@ -32,6 +32,7 @@ import { CreateClientRequirementDialog } from '@/components/requirements/create-
 import { ClientRequirementDetailDialog } from '@/components/requirements/client-requirement-detail-dialog';
 import { PageHeader } from '@/components/layout/page-header';
 import { ErrorState } from '@/components/ui/error-state';
+import { EmptyState } from '@/components/ui/empty-state';
 import { InlineLoader } from '@/components/ui/page-loader';
 import { AIGenerateDialog } from '@/components/ai/ai-generate-dialog';
 import type { GeneratedHierarchy } from '@/lib/ai-generator';
@@ -352,20 +353,23 @@ export default function RequirementsPage() {
               ) : isError ? (
                 <ErrorState onRetry={() => refetch()} />
               ) : filteredRequirements.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  {requirements.length === 0 ? (
-                    <>
-                      <FileText className="mx-auto h-12 w-12 mb-4 opacity-50" />
-                      <p>No client requirements yet</p>
-                      <Button className="mt-4" onClick={() => setCreateDialogOpen(true)}>
-                        <Plus className="mr-2 h-4 w-4" />
-                        Create First Requirement
-                      </Button>
-                    </>
-                  ) : (
-                    <p>No requirements match your filters</p>
-                  )}
-                </div>
+                requirements.length === 0 ? (
+                  <EmptyState
+                    icon={FileText}
+                    title="No client requirements yet"
+                    description="Capture your first client requirement to start the delivery chain."
+                    action={{
+                      label: 'Create First Requirement',
+                      onClick: () => setCreateDialogOpen(true),
+                    }}
+                  />
+                ) : (
+                  <EmptyState
+                    icon={Search}
+                    title="No requirements match your filters"
+                    description="Try a different search term or status filter."
+                  />
+                )
               ) : (
                 <div className="rounded-md border">
                   <Table>

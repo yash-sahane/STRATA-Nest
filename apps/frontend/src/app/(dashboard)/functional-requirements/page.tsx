@@ -2,6 +2,7 @@
 
 import { PageHeader } from '@/components/layout/page-header';
 import { ErrorState } from '@/components/ui/error-state';
+import { EmptyState } from '@/components/ui/empty-state';
 import { InlineLoader } from '@/components/ui/page-loader';
 
 import * as React from 'react';
@@ -366,20 +367,27 @@ export default function FunctionalRequirementsPage() {
               ) : isError ? (
                 <ErrorState onRetry={() => refetch()} />
               ) : filteredRequirements.length === 0 ? (
-                <div className="text-center py-12">
-                  <FileText className="mx-auto h-12 w-12 text-muted-foreground opacity-50 mb-4" />
-                  <p className="text-muted-foreground mb-4">
-                    {searchQuery || statusFilter !== 'all'
+                <EmptyState
+                  icon={FileText}
+                  title={
+                    searchQuery || statusFilter !== 'all'
                       ? 'No requirements match your filters'
-                      : 'No functional requirements yet'}
-                  </p>
-                  {(canCreateFR || isAdmin) && (
-                    <Button onClick={() => setCreateDialogOpen(true)}>
-                      <Plus className="mr-2 h-4 w-4" />
-                      Create First Requirement
-                    </Button>
-                  )}
-                </div>
+                      : 'No functional requirements yet'
+                  }
+                  description={
+                    searchQuery || statusFilter !== 'all'
+                      ? 'Try a different search term or status filter.'
+                      : 'Break client requirements down into functional requirements to get started.'
+                  }
+                  action={
+                    canCreateFR || isAdmin
+                      ? {
+                          label: 'Create First Requirement',
+                          onClick: () => setCreateDialogOpen(true),
+                        }
+                      : undefined
+                  }
+                />
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full">

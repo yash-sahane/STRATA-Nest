@@ -40,6 +40,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { PageLoader, InlineLoader } from '@/components/ui/page-loader';
+import { EmptyState } from '@/components/ui/empty-state';
 import { MetricCard, HealthBadge } from '@/components/analytics/kpi-widgets';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useProjects } from '@/hooks/use-project';
@@ -116,9 +117,11 @@ export default function AnalyticsPage() {
               <InlineLoader />
             </div>
           ) : !workspaceAnalytics ? (
-            <div className="text-center py-12">
-              <p className="text-muted-foreground">No workspace analytics available</p>
-            </div>
+            <EmptyState
+              icon={BarChart3}
+              title="No workspace analytics available"
+              description="Analytics appear once there is project activity to report on."
+            />
           ) : (
             <>
               {/* KPI Grid */}
@@ -500,9 +503,11 @@ export default function AnalyticsPage() {
               <InlineLoader />
             </div>
           ) : !projectAnalytics || !selectedProjectId ? (
-            <div className="text-center py-12">
-              <p className="text-muted-foreground">Select a project to view analytics</p>
-            </div>
+            <EmptyState
+              icon={BarChart3}
+              title="Select a project"
+              description="Choose a project above to view its analytics."
+            />
           ) : (
             <>
               {/* Project KPIs */}
@@ -594,9 +599,11 @@ export default function AnalyticsPage() {
               <InlineLoader />
             </div>
           ) : !teamAnalytics ? (
-            <div className="text-center py-12">
-              <p className="text-muted-foreground">No team performance data available</p>
-            </div>
+            <EmptyState
+              icon={BarChart3}
+              title="No team performance data available"
+              description="Team metrics appear once members start completing work."
+            />
           ) : (
             <>
               {/* Team KPIs */}

@@ -1,6 +1,7 @@
 'use client';
 
 import { PageHeader } from '@/components/layout/page-header';
+import { EmptyState } from '@/components/ui/empty-state';
 
 import * as React from 'react';
 import { Calendar, Users, BarChart3 } from 'lucide-react';
@@ -117,17 +118,11 @@ export default function LeavePage() {
               ))}
             </div>
           ) : myLeaves.length === 0 ? (
-            <Card>
-              <CardContent className="pt-6">
-                <div className="text-center py-12">
-                  <Calendar className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-                  <h3 className="text-lg font-medium mb-2">No leave requests yet</h3>
-                  <p className="text-muted-foreground mb-4">
-                    Click the &quot;Request Leave&quot; button above to submit your first leave request
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
+            <EmptyState
+              icon={Calendar}
+              title="No leave requests yet"
+              description="Use the Request Leave button above to submit your first leave request."
+            />
           ) : (
             <div className="grid gap-4 md:grid-cols-2">
               {myLeaves.map((leave) => (
@@ -193,17 +188,11 @@ export default function LeavePage() {
                 ))}
               </div>
             ) : teamLeaveRequests.length === 0 ? (
-              <Card>
-                <CardContent className="pt-6">
-                  <div className="text-center py-12">
-                    <Users className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-                    <h3 className="text-lg font-medium mb-2">No team leave requests</h3>
-                    <p className="text-muted-foreground">
-                      There are no pending leave requests from your team members
-                    </p>
-                  </div>
-                </CardContent>
-              </Card>
+              <EmptyState
+                icon={Users}
+                title="No team leave requests"
+                description="There are no pending leave requests from your team members."
+              />
             ) : (
               <>
                 {/* Pending Requests */}

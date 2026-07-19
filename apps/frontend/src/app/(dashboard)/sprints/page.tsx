@@ -23,6 +23,7 @@ import { CreateSprintDialog } from '@/components/sprints/create-sprint-dialog';
 import { PageHeader } from '@/components/layout/page-header';
 import { useConfirm } from '@/components/providers/confirm-provider';
 import { ErrorState } from '@/components/ui/error-state';
+import { EmptyState } from '@/components/ui/empty-state';
 import { PageLoader, InlineLoader } from '@/components/ui/page-loader';
 import { useRouter } from 'next/navigation';
 
@@ -197,18 +198,12 @@ export default function SprintsPage() {
     return (
       <div className="space-y-6">
         <PageHeader title="Sprints" description="Plan and manage your agile sprints" />
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-12">
-            <Calendar className="h-12 w-12 text-muted-foreground mb-4" />
-            <h3 className="text-lg font-semibold mb-2">No projects yet</h3>
-            <p className="text-muted-foreground text-center mb-4">
-              Create a project first to start planning sprints
-            </p>
-            <Button onClick={() => router.push('/projects')}>
-              Go to Projects
-            </Button>
-          </CardContent>
-        </Card>
+        <EmptyState
+          icon={Calendar}
+          title="No projects yet"
+          description="Create a project first to start planning sprints."
+          action={{ label: 'Go to Projects', onClick: () => router.push('/projects') }}
+        />
       </div>
     );
   }
@@ -384,19 +379,12 @@ export default function SprintsPage() {
           })}
         </div>
       ) : (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-12">
-            <Calendar className="h-12 w-12 text-muted-foreground mb-4" />
-            <h3 className="text-lg font-semibold mb-2">No sprints yet</h3>
-            <p className="text-muted-foreground text-center mb-4">
-              Get started by creating your first sprint
-            </p>
-            <Button onClick={() => setCreateDialogOpen(true)}>
-              <Plus className="mr-2 h-4 w-4" />
-              Create Sprint
-            </Button>
-          </CardContent>
-        </Card>
+        <EmptyState
+          icon={Calendar}
+          title="No sprints yet"
+          description="Get started by creating your first sprint."
+          action={{ label: 'Create Sprint', onClick: () => setCreateDialogOpen(true) }}
+        />
       )}
 
       <CreateSprintDialog
