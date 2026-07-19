@@ -546,11 +546,7 @@ export function FunctionalRequirementDetailDialog({
           </div>
           <AlertDialogFooter>
             <AlertDialogCancel onClick={() => setSelectedProject('')}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={handleClone}
-              disabled={!selectedProject}
-              className="bg-blue-600 hover:bg-blue-700"
-            >
+            <AlertDialogAction onClick={handleClone} disabled={!selectedProject}>
               Clone FR
             </AlertDialogAction>
           </AlertDialogFooter>

@@ -175,9 +175,9 @@ export default function RequirementsPage() {
           (canCreateRequirement || isAdmin) && (
             <>
               <Button
+                variant="outline"
                 onClick={() => setAiGenerateDialogOpen(true)}
                 disabled={!selectedProjectId}
-                className="bg-purple-600 hover:bg-purple-700"
               >
                 <Sparkles className="mr-2 h-4 w-4" />
                 Generate with AI

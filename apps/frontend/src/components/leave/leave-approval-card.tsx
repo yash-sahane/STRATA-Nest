@@ -215,9 +215,9 @@ export function LeaveApprovalCard({
             </Button>
             <Button
               type="button"
+              variant="success"
               onClick={handleApprove}
               disabled={approveLeave.isPending}
-              className="bg-green-600 hover:bg-green-700"
             >
               {approveLeave.isPending ? 'Approving...' : 'Approve Leave'}
             </Button>

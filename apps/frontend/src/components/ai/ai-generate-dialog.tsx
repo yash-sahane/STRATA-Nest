@@ -345,7 +345,7 @@ We need a mobile app for our e-commerce business that allows customers to browse
                 <Button type="button" variant="outline" onClick={handleCancel}>
                   Cancel
                 </Button>
-                <Button type="submit" className="bg-purple-600 hover:bg-purple-700">
+                <Button type="submit">
                   <Sparkles className="mr-2 h-4 w-4" />
                   Generate with AI
                 </Button>
@@ -584,11 +584,7 @@ We need a mobile app for our e-commerce business that allows customers to browse
                 <Button type="button" variant="outline" onClick={() => setStep('input')}>
                   Regenerate
                 </Button>
-                <Button
-                  type="button"
-                  onClick={handleConfirmGeneration}
-                  className="bg-green-600 hover:bg-green-700"
-                >
+                <Button type="button" variant="success" onClick={handleConfirmGeneration}>
                   <CheckCircle2 className="mr-2 h-4 w-4" />
                   Confirm & Save All
                 </Button>

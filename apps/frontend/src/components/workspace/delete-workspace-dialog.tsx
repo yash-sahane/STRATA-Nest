@@ -96,9 +96,9 @@ export function DeleteWorkspaceDialog({ open, onOpenChange }: DeleteWorkspaceDia
             Cancel
           </AlertDialogCancel>
           <AlertDialogAction
+            variant="destructive"
             onClick={handleDelete}
             disabled={!isConfirmed || isPending}
-            className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
           >
             {isPending ? 'Deleting...' : 'Delete Workspace'}
           </AlertDialogAction>
