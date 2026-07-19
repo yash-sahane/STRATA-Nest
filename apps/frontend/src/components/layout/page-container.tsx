@@ -27,7 +27,16 @@ const MAX_WIDTH: Record<PageWidth, string> = {
  */
 export function PageContainer({ children, size = 'default', className }: PageContainerProps) {
   return (
-    <div className={cn('mx-auto w-full px-4 py-6 sm:px-6 lg:px-8', MAX_WIDTH[size], className)}>
+    <div
+      className={cn(
+        'mx-auto w-full px-4 py-6 sm:px-6 lg:px-8',
+        // One page-entrance animation for every route, so content doesn't
+        // appear instantly on some pages and animate in on others.
+        'animate-in fade-in duration-500',
+        MAX_WIDTH[size],
+        className
+      )}
+    >
       {children}
     </div>
   );

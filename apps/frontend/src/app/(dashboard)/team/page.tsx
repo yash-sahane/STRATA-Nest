@@ -287,14 +287,13 @@ export default function TeamPage() {
         <TabsContent value="members" className="space-y-6">
           {/* Stats Cards */}
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            {summaryCards.map((card, index) => {
+            {summaryCards.map((card) => {
               const Icon = card.icon;
 
               return (
                 <Card
                   key={card.title}
-                  className="overflow-hidden transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md animate-in fade-in slide-in-from-bottom-2"
-                  style={{ animationDelay: `${index * 50}ms` }}
+                  className="overflow-hidden transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
                 >
                   <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                     <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -320,7 +319,7 @@ export default function TeamPage() {
           )}
 
           {/* Filters & Team Directory */}
-          <Card className="overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-500">
+          <Card className="overflow-hidden">
             <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <CardTitle className="text-base">Team Directory</CardTitle>

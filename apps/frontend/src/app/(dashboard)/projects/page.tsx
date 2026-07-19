@@ -212,7 +212,7 @@ export default function ProjectsPage() {
       />
 
       {filteredProjects.length > 0 && (
-        <div className="grid gap-3 rounded-lg border bg-card p-3 animate-in fade-in slide-in-from-bottom-2 duration-500 lg:grid-cols-[minmax(0,1fr)_12rem_auto]">
+        <div className="grid gap-3 rounded-lg border bg-card p-3 lg:grid-cols-[minmax(0,1fr)_12rem_auto]">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -255,7 +255,7 @@ export default function ProjectsPage() {
 
       {filteredProjects.length > 0 && visibleProjects.length > 0 ? (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {visibleProjects.map((project, index) => {
+          {visibleProjects.map((project) => {
             const status = getProjectStatusConfig(project.status);
             const projectTasks = allTasks?.filter((task) => task.projectId === project.id) || [];
             const health = calculateProjectHealth(project, allTasks || []);
@@ -263,8 +263,7 @@ export default function ProjectsPage() {
             return (
               <Card
                 key={project.id}
-                className="group flex h-full flex-col overflow-hidden transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md animate-in fade-in slide-in-from-bottom-2"
-                style={{ animationDelay: `${index * 50}ms` }}
+                className="group flex h-full flex-col overflow-hidden transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
               >
                 <CardHeader>
                   <div className="flex items-start justify-between">
@@ -401,7 +400,6 @@ export default function ProjectsPage() {
           icon={FolderPlus}
           title="No projects yet"
           description="Create your first project to start organizing tasks and sprints."
-          className="animate-in fade-in slide-in-from-bottom-2 duration-500"
         />
       )}
 
