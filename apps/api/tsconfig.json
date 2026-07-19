@@ -5,7 +5,12 @@
     "outDir": "./dist",
     "types": ["node", "jest"],
     "noUnusedLocals": false,
-    "noUnusedParameters": false
+    "noUnusedParameters": false,
+    // Apps are leaf artifacts — nothing imports their built types — so they don't
+    // emit .d.ts. This also avoids TS2742: mapper return types infer Prisma Json
+    // types whose only name is a non-portable path into packages/prisma's nested
+    // @prisma/client, which only matters during declaration emit.
+    "declaration": false
   },
   "include": ["src/**/*.ts"],
   "exclude": ["node_modules", "dist", "test"]
