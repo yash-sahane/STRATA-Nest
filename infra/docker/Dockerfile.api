@@ -1,0 +1,32 @@
+# syntax=docker/dockerfile:1
+# L-T-Connect API image (NestJS HTTP + WS). Multi-stage, pnpm workspace.
+FROM node:20-alpine AS base
+RUN corepack enable
+WORKDIR /repo
+
+# --- deps: install with only manifests for better layer caching ---
+FROM base AS deps
+COPY package.json pnpm-workspace.yaml .npmrc tsconfig.base.json ./
+COPY apps/api/package.json apps/api/package.json
+COPY packages/common/package.json packages/common/package.json
+COPY packages/config/package.json packages/config/package.json
+COPY packages/shared/package.json packages/shared/package.json
+COPY packages/prisma/package.json packages/prisma/package.json
+RUN pnpm install
+
+# --- build ---
+FROM deps AS build
+COPY . .
+RUN pnpm --filter @lt/prisma run generate || echo "prisma generate skipped (no models yet)"
+# turbo builds @lt/api's workspace deps (shared, config, common, prisma) first (^build).
+RUN pnpm exec turbo run build --filter=@lt/api
+
+# --- runtime ---
+FROM base AS runtime
+ENV NODE_ENV=production
+COPY --from=build /repo /repo
+WORKDIR /repo/apps/api
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD wget -qO- http://localhost:8000/api/v1/health || exit 1
+CMD ["node", "dist/main.js"]
