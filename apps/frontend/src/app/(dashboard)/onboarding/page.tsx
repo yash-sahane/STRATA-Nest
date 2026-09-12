@@ -108,7 +108,7 @@ export default function OnboardingPage() {
               <Building2 className="h-12 w-12 text-primary" />
             </div>
           </div>
-          <h1 className="text-3xl font-bold mb-2">Create Your Workspace</h1>
+          <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl mb-2">Create Your Workspace</h1>
           <p className="text-muted-foreground">
             Set up your first workspace to start managing projects and teams
           </p>

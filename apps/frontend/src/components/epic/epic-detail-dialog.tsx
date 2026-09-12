@@ -10,6 +10,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
@@ -298,13 +299,7 @@ export function EpicDetailDialog({
           {/* Until now an epic could be created and deleted but never changed —
               the update hook existed with no control behind it. */}
           {(canEdit || canDelete) && (
-            <div className="flex justify-end gap-2">
-              {canEdit && (
-                <Button variant="outline" onClick={() => setEditDialogOpen(true)}>
-                  <Pencil className="h-4 w-4" />
-                  Edit
-                </Button>
-              )}
+            <DialogFooter>
               {canDelete && (
                 <Button
                   variant="destructive"
@@ -315,7 +310,13 @@ export function EpicDetailDialog({
                   Delete
                 </Button>
               )}
-            </div>
+              {canEdit && (
+                <Button variant="outline" onClick={() => setEditDialogOpen(true)}>
+                  <Pencil className="h-4 w-4" />
+                  Edit
+                </Button>
+              )}
+            </DialogFooter>
           )}
         </DialogContent>
       </Dialog>

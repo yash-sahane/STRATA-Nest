@@ -188,7 +188,7 @@ export default function ProjectDetailPage() {
             </Button>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-3xl font-bold tracking-tight">{project.name}</h1>
+                <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">{project.name}</h1>
                 <Badge variant={getProjectStatusConfig(project.status).badgeVariant}>
                   {getProjectStatusConfig(project.status).label}
                 </Badge>

@@ -5,6 +5,7 @@ import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useAttendanceAnalytics } from '@/hooks/use-attendance';
 import { countWorkingDaysInMonth, getWorkingSaturdaysInMonth } from '@/lib/attendance-utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { TrendingUp, Clock, AlertCircle, Calendar, CheckCircle } from 'lucide-react';
 import { InlineLoader } from '@/components/ui/page-loader';
@@ -148,12 +149,14 @@ export function AttendanceStats({ year, month }: AttendanceStatsProps) {
                     : `${attendedDays} of ${days(expectedDays)} so far this month`}
                 </span>
               </div>
-              <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-                <div
-                  className="bg-gradient-to-r from-green-500 to-green-600 h-2 rounded-full transition-all"
-                  style={{ width: `${expectedDays === 0 ? 0 : Math.min(attendanceRate, 100)}%` }}
-                />
-              </div>
+              {/* The primitive supplies the progressbar role and the value; a
+                  bare pair of divs told a screen reader nothing. It clamps too,
+                  so the explicit Math.min is no longer load-bearing. */}
+              <Progress
+                value={expectedDays === 0 ? 0 : attendanceRate}
+                aria-label="Attendance rate this period"
+                indicatorClassName="bg-linear-to-r from-green-500 to-green-600"
+              />
             </div>
           </CardContent>
         </Card>

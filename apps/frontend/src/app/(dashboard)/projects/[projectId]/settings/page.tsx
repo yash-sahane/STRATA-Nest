@@ -270,7 +270,7 @@ export default function ProjectSettingsPage() {
             <ArrowLeft className="mr-2 h-4 w-4" />
             Back to Project
           </Button>
-          <h1 className="text-3xl font-bold tracking-tight mt-2">Project Settings</h1>
+          <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl mt-2">Project Settings</h1>
           <p className="text-muted-foreground">
             Manage {project.name} configuration
           </p>

@@ -7,6 +7,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
@@ -213,7 +214,7 @@ export function CreateEpicDialog({
             </div>
 
             {/* Actions */}
-            <div className="flex justify-end gap-2 pt-4">
+            <DialogFooter className="pt-4">
               <Button
                 type="button"
                 variant="outline"
@@ -227,7 +228,7 @@ export function CreateEpicDialog({
               <Button type="submit" disabled={createEpic.isPending}>
                 {createEpic.isPending ? 'Creating...' : 'Create Epic'}
               </Button>
-            </div>
+            </DialogFooter>
           </form>
         </Form>
       </DialogContent>

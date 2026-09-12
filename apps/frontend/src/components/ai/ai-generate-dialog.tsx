@@ -9,6 +9,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
@@ -576,7 +577,7 @@ We need a mobile app for our e-commerce business that allows customers to browse
               />
 
               {/* Actions */}
-              <div className="flex justify-end gap-2">
+              <DialogFooter>
                 <Button type="button" variant="outline" onClick={handleCancel}>
                   Cancel
                 </Button>
@@ -584,7 +585,7 @@ We need a mobile app for our e-commerce business that allows customers to browse
                   <Sparkles className="mr-2 h-4 w-4" />
                   Generate with AI
                 </Button>
-              </div>
+              </DialogFooter>
             </form>
           </Form>
         )}

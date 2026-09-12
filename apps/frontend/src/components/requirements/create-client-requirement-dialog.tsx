@@ -8,6 +8,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
@@ -169,7 +170,7 @@ export function CreateClientRequirementDialog({
             )}
           </div>
 
-          <div className="flex justify-end gap-2">
+          <DialogFooter>
             <Button
               type="button"
               variant="outline"
@@ -181,7 +182,7 @@ export function CreateClientRequirementDialog({
             <Button type="submit" disabled={isSubmitting}>
               {isSubmitting ? 'Creating...' : 'Create Requirement'}
             </Button>
-          </div>
+          </DialogFooter>
         </form>
       </DialogContent>
     </Dialog>

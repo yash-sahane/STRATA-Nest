@@ -8,6 +8,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
@@ -220,14 +221,14 @@ export function EditEpicDialog({ open, onOpenChange, epic }: EditEpicDialogProps
               />
             </div>
 
-            <div className="flex justify-end gap-2 pt-4">
+            <DialogFooter className="pt-4">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 Cancel
               </Button>
               <Button type="submit" disabled={updateEpic.isPending}>
                 {updateEpic.isPending ? 'Saving...' : 'Save Changes'}
               </Button>
-            </div>
+            </DialogFooter>
           </form>
         </Form>
       </DialogContent>

@@ -7,6 +7,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
@@ -349,7 +350,7 @@ export function CreateFunctionalRequirementDialog({
             />
 
             {/* Actions */}
-            <div className="flex justify-end gap-2 pt-4">
+            <DialogFooter className="pt-4">
               <Button
                 type="button"
                 variant="outline"
@@ -363,7 +364,7 @@ export function CreateFunctionalRequirementDialog({
               <Button type="submit" disabled={createRequirement.isPending || epics.length === 0}>
                 {createRequirement.isPending ? 'Creating...' : 'Create Requirement'}
               </Button>
-            </div>
+            </DialogFooter>
           </form>
         </Form>
       </DialogContent>

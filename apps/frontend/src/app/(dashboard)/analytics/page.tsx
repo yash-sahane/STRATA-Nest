@@ -2,6 +2,7 @@
 
 import { PageHeader } from '@/components/layout/page-header';
 import { Badge } from '@/components/ui/badge';
+import { Progress } from '@/components/ui/progress';
 import { getTaskStatusConfig } from '@/lib/semantic/status';
 import { legendLabel } from '@/lib/chart-legend';
 
@@ -421,12 +422,14 @@ function AnalyticsPageContent() {
                                   <span className="text-muted-foreground">Progress</span>
                                   <span className="font-medium">{completionRate.toFixed(0)}%</span>
                                 </div>
-                                <div className="w-full bg-muted rounded-full h-2">
-                                  <div
-                                    className="bg-info h-2 rounded-full transition-all"
-                                    style={{ width: `${completionRate}%` }}
-                                  />
-                                </div>
+                                {/* The primitive, not two divs: it supplies the
+                                    progressbar role, the value, and a clamp for a
+                                    rate computed from a ratio. */}
+                                <Progress
+                                  value={completionRate}
+                                  aria-label={`${project.name} completion`}
+                                  indicatorClassName="bg-info"
+                                />
                                 <div className="flex justify-between text-sm text-muted-foreground">
                                   <span>
                                     {completed}/{total} tasks
@@ -862,12 +865,12 @@ function AnalyticsPageContent() {
                               </p>
                             </div>
                             <div className="flex items-center gap-2 mt-1">
-                              <div className="flex-1 bg-muted rounded-full h-2">
-                                <div
-                                  className="bg-success h-2 rounded-full transition-all"
-                                  style={{ width: `${member.completionRate}%` }}
-                                />
-                              </div>
+                              <Progress
+                                className="flex-1"
+                                value={member.completionRate}
+                                aria-label={`${member.memberName} task completion`}
+                                indicatorClassName="bg-success"
+                              />
                               <span className="text-xs text-muted-foreground w-12 text-right">
                                 {member.completionRate.toFixed(0)}%
                               </span>
