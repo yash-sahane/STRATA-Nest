@@ -65,20 +65,43 @@ export interface GeneratedHierarchy {
 /**
  * Call AI via Next.js API route (supports HuggingFace + Gemini fallback)
  */
+/**
+ * Slightly longer than the route's own TOTAL_TIMEOUT_MS (90s), so a route that
+ * times out cleanly gets to say so — and a route that does not settle at all
+ * still cannot leave the dialog waiting forever. Without this the generate
+ * dialog sat at 90% with no cancel and nothing to distinguish a slow model from
+ * a hung one.
+ */
+const AI_REQUEST_TIMEOUT_MS = 100_000;
+
 async function callAI(prompt: string, maxRetries = 3, workspaceId?: string): Promise<string> {
-  const response = await fetch('/api/ai-generate', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      prompt,
-      maxRetries,
-      // The route checks the caller holds requirement:write HERE before it
-      // spends the operator's model quota, so it has to be told where "here" is.
-      workspaceId,
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetch('/api/ai-generate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        prompt,
+        maxRetries,
+        // The route checks the caller holds requirement:write HERE before it
+        // spends the operator's model quota, so it has to be told where "here" is.
+        workspaceId,
+      }),
+      signal: AbortSignal.timeout(AI_REQUEST_TIMEOUT_MS),
+    });
+  } catch (error) {
+    // A timeout surfaces as an AbortError, whose default message ("signal is
+    // aborted without reason") tells the user nothing at all.
+    if (error instanceof DOMException && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+      throw new Error(
+        `Generation timed out after ${Math.round(AI_REQUEST_TIMEOUT_MS / 1000)}s. ` +
+          'The model provider did not respond — try again, or with a shorter document.',
+      );
+    }
+    throw error;
+  }
 
   if (!response.ok) {
     // The route answers 401 when the session has expired; a non-JSON body (a

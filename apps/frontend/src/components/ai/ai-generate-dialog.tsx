@@ -243,7 +243,38 @@ export function AIGenerateDialog({
     return planned.toLowerCase() === estimate.toLowerCase() ? '' : planned;
   }, [generatedData, analysis]);
 
+  /**
+   * The handle for whichever progress timer is running.
+   *
+   * A ref rather than a local: `clearInterval` has to be reachable from the
+   * unmount effect below and from `finally`, and a second attempt must not be
+   * able to start a second timer while the first is still ticking.
+   */
+  const progressTimer = React.useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopProgressTimer = React.useCallback(() => {
+    if (progressTimer.current !== null) {
+      clearInterval(progressTimer.current);
+      progressTimer.current = null;
+    }
+  }, []);
+
+  const startProgressTimer = React.useCallback(
+    (advance: () => void, everyMs: number) => {
+      // Never two at once.
+      stopProgressTimer();
+      progressTimer.current = setInterval(advance, everyMs);
+    },
+    [stopProgressTimer],
+  );
+
+  // Closing the dialog mid-generation used to leave the timer running, calling
+  // setProgress on an unmounted component every 800ms for the life of the page.
+  React.useEffect(() => stopProgressTimer, [stopProgressTimer]);
+
   const resetDialog = () => {
+    // Nothing should still be ticking once the dialog is put away.
+    stopProgressTimer();
     setStep('input');
     setProgress(0);
     setGeneratedData(null);
@@ -330,8 +361,10 @@ export function AIGenerateDialog({
       setStep('generating');
       setProgress(20);
 
-      // Simulate progress while AI processes
-      const progressInterval = setInterval(() => {
+      // Simulate progress while AI processes. Cleared in `finally` below: this
+      // was cleared here only, so any throw — including the generation timeout —
+      // left it ticking forever.
+      startProgressTimer(() => {
         setProgress((prev) => Math.min(prev + 10, 90));
       }, 800);
 
@@ -339,7 +372,7 @@ export function AIGenerateDialog({
         await generateProjectHierarchyUnified(values.documentText, workspaceId)
       );
 
-      clearInterval(progressInterval);
+      stopProgressTimer();
       setProgress(100);
 
       // Extract analysis from unified response
@@ -364,6 +397,9 @@ export function AIGenerateDialog({
       });
       setStep('input');
       setProgress(0);
+    } finally {
+      // Every path, not just the successful one.
+      stopProgressTimer();
     }
   };
 
@@ -374,8 +410,9 @@ export function AIGenerateDialog({
     setSaveProgress(10);
 
     try {
-      // Simulate progress during API call
-      const progressInterval = setInterval(() => {
+      // Simulate progress during API call. Same leak as the generate step: this
+      // was cleared on the happy path alone.
+      startProgressTimer(() => {
         setSaveProgress((prev) => Math.min(prev + 10, 90));
       }, 500);
 
@@ -395,7 +432,7 @@ export function AIGenerateDialog({
         }),
       });
 
-      clearInterval(progressInterval);
+      stopProgressTimer();
       setSaveProgress(100);
 
       const data = await response.json();
@@ -438,6 +475,9 @@ export function AIGenerateDialog({
       // Go back to preview on error so user can retry
       setStep('preview');
       setSaveProgress(0);
+    } finally {
+      // A failed bulk save left this ticking at 500ms for the life of the page.
+      stopProgressTimer();
     }
   };
 

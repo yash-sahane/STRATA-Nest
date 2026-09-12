@@ -86,6 +86,9 @@ async function callHuggingFace(prompt: string): Promise<string> {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(requestBody),
+      // A real abort rather than a race: this releases the socket instead of
+      // leaving it open while the route walks away from the response.
+      signal: AbortSignal.timeout(ATTEMPT_TIMEOUT_MS),
     });
 
     if (!response.ok) {
@@ -131,6 +134,39 @@ async function callHuggingFace(prompt: string): Promise<string> {
 }
 
 /**
+ * How long any one provider attempt may take, and how long the whole request
+ * may take across every attempt and fallback.
+ *
+ * Without these a provider that accepts the connection and never answers left
+ * the request outstanding forever: the caller's dialog sat at 90% with no cancel
+ * and nothing to distinguish "working" from "hung". The total matters as much as
+ * the per-attempt cap, because three attempts plus a fallback otherwise add up
+ * to four times the patience anybody has.
+ */
+const ATTEMPT_TIMEOUT_MS = 45_000;
+const TOTAL_TIMEOUT_MS = 90_000;
+
+/** Rejects if `work` outlives `ms`, naming what timed out. */
+async function withTimeout<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${what} did not respond within ${Math.round(ms / 1000)}s`)),
+          ms,
+        );
+      }),
+    ]);
+  } finally {
+    // Always, or the process holds a pending timer per call and the route can
+    // never settle early.
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
  * Call Gemini API using Google GenAI SDK
  */
 async function callGemini(prompt: string): Promise<string> {
@@ -141,9 +177,18 @@ async function callGemini(prompt: string): Promise<string> {
 
     logger.debug('[Gemini] Using model', { model: GEMINI_MODEL });
 
-    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+    // requestOptions.timeout is the SDK's own cap; withTimeout at the call site
+    // is the backstop for the case where the SDK itself does not settle.
+    const model = genAI.getGenerativeModel(
+      { model: GEMINI_MODEL },
+      { timeout: ATTEMPT_TIMEOUT_MS },
+    );
 
-    const result = await model.generateContent(prompt);
+    const result = await withTimeout(
+      model.generateContent(prompt),
+      ATTEMPT_TIMEOUT_MS,
+      'Gemini',
+    );
     const text = result.response.text();
 
     if (!text) {
@@ -214,18 +259,31 @@ export async function POST(request: NextRequest) {
     const retries = Math.min(Math.max(Number(maxRetries) || 1, 1), 3);
 
     let lastError: Error | null = null;
+    // Retries and the fallback share one budget, so the caller's wait is bounded
+    // by TOTAL_TIMEOUT_MS whatever the providers do.
+    const deadline = Date.now() + TOTAL_TIMEOUT_MS;
+    const timeLeft = () => deadline - Date.now();
 
     // Try Gemini FIRST (more reliable, faster)
     if (GEMINI_API_KEY) {
       for (let attempt = 0; attempt < retries; attempt++) {
+        if (timeLeft() <= 0) {
+          logger.warn('Gemini retries abandoned: the request budget is spent');
+          break;
+        }
         try {
           logger.debug(`Attempting Gemini (attempt ${attempt + 1}/${retries})`);
-          const text = await callGemini(prompt);
+          const text = await withTimeout(
+            callGemini(prompt),
+            Math.min(ATTEMPT_TIMEOUT_MS, timeLeft()),
+            `Gemini attempt ${attempt + 1}`,
+          );
           return NextResponse.json({ text, provider: 'gemini' });
         } catch (error: unknown) {
           lastError = error instanceof Error ? error : new Error(String(error));
           logger.warn(`Gemini attempt ${attempt + 1} failed`, { error: lastError.message });
-          if (attempt < retries - 1) {
+          // Don't sleep away a budget that has nothing left to spend.
+          if (attempt < retries - 1 && timeLeft() > 1500) {
             await new Promise((resolve) => setTimeout(resolve, 1000));
           }
         }
@@ -236,11 +294,15 @@ export async function POST(request: NextRequest) {
     }
 
     // Fallback to HuggingFace (can be slow/unreliable)
-    if (HF_API_KEY) {
+    if (HF_API_KEY && timeLeft() > 0) {
       // Only 1 retry for HuggingFace since it's slow
       try {
         logger.debug('Attempting HuggingFace (fallback)');
-        const text = await callHuggingFace(prompt);
+        const text = await withTimeout(
+          callHuggingFace(prompt),
+          Math.min(ATTEMPT_TIMEOUT_MS, timeLeft()),
+          'HuggingFace',
+        );
         return NextResponse.json({ text, provider: 'huggingface' });
       } catch (error: unknown) {
         lastError = error instanceof Error ? error : new Error(String(error));
