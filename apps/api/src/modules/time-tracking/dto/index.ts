@@ -1,9 +1,14 @@
-import { IsArray, IsBoolean, IsInt, IsNumber, IsObject, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsBoolean, IsInt, IsNumber, IsObject, IsOptional, IsString, Min } from 'class-validator';
+import { IsStrictBoolean } from '@strata/common';
 
 export class CreateTimeEntryDto {
   @IsString() workspaceId!: string;
   @IsString() startTime!: string;
   @IsString() endTime!: string;
+  // Accepted for backwards compatibility and then IGNORED: the server derives
+  // duration from startTime/endTime. Trusting it let a 90-minute window carry
+  // 100000 minutes, and a PATCH of the times never recomputed it, so a row
+  // could permanently claim 8h for a range of -99 minutes.
   @IsOptional() @IsInt() duration?: number;
   @IsOptional() @IsString() taskId?: string;
   @IsOptional() @IsString() taskTitle?: string;
@@ -11,19 +16,25 @@ export class CreateTimeEntryDto {
   @IsOptional() @IsString() projectId?: string;
   @IsOptional() @IsString() projectName?: string;
   @IsOptional() @IsString() description?: string;
-  @IsOptional() @IsBoolean() isBillable?: boolean;
-  @IsOptional() @IsNumber() billableRate?: number;
+  @IsOptional() @IsStrictBoolean() @IsBoolean() isBillable?: boolean;
+  @IsOptional() @IsNumber() @Min(0) billableRate?: number | null;
   @IsOptional() @IsString() type?: string;
   @IsOptional() @IsArray() tags?: unknown[];
 }
 export class UpdateTimeEntryDto {
+  // `status` is deliberately absent: approval is a state transition, owned by
+  // POST :id/approve|reject (manager-only, self-approval blocked).
   @IsOptional() @IsString() startTime?: string;
   @IsOptional() @IsString() endTime?: string;
   @IsOptional() @IsInt() duration?: number;
   @IsOptional() @IsString() description?: string;
-  @IsOptional() @IsBoolean() isBillable?: boolean;
-  @IsOptional() @IsNumber() billableRate?: number;
-  @IsOptional() @IsString() status?: string;
+  @IsOptional() @IsStrictBoolean() @IsBoolean() isBillable?: boolean;
+  // `null` is a MEANINGFUL value here and @IsOptional() lets it through (it
+  // skips validation for null as well as undefined): an absent key leaves the
+  // stored rate alone, `null` clears it. Without a way to say "no rate" a
+  // cleared field could only be sent as undefined, which JSON.stringify drops,
+  // so the entry kept a rate the owner had deleted.
+  @IsOptional() @IsNumber() @Min(0) billableRate?: number | null;
   @IsOptional() @IsArray() tags?: unknown[];
 }
 
@@ -43,7 +54,7 @@ export class CreateActiveTimerDto {
   @IsOptional() @IsObject() pomodoroSettings?: Record<string, unknown>;
 }
 export class UpdateActiveTimerDto {
-  @IsOptional() @IsBoolean() isPaused?: boolean;
+  @IsOptional() @IsStrictBoolean() @IsBoolean() isPaused?: boolean;
   @IsOptional() @IsString() description?: string;
   @IsOptional() @IsObject() pomodoroSettings?: Record<string, unknown>;
 }
@@ -60,6 +71,6 @@ export class StartTimerDto {
 }
 export class StopTimerDto {
   @IsString() workspaceId!: string;
-  @IsOptional() @IsBoolean() isBillable?: boolean;
-  @IsOptional() @IsNumber() billableRate?: number;
+  @IsOptional() @IsStrictBoolean() @IsBoolean() isBillable?: boolean;
+  @IsOptional() @IsNumber() @Min(0) billableRate?: number;
 }

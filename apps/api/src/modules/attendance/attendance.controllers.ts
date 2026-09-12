@@ -36,7 +36,8 @@ export class AttendanceController {
 export class HolidaysController {
   constructor(private readonly svc: HolidaysService) {}
   @Get() list(@CurrentUser() u: User, @Query() q: Q) { return this.svc.list(u, q); }
-  @Post() @RequirePermission(Permission.HrWrite) create(@CurrentUser() u: User, @Body() d: CreateHolidayDto) { return this.svc.create(u, d); }
+  /** Holidays are workspace calendar config — manager-only writes. */
+  @Post() @RequirePermission(Permission.LeaveApprove) create(@CurrentUser() u: User, @Body() d: CreateHolidayDto) { return this.svc.create(u, d); }
   @Get(':id') get(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.retrieve(u, id); }
   @Patch(':id') patch(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateHolidayDto) { return this.svc.patch(u, id, d); }
   @Put(':id') put(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateHolidayDto) { return this.svc.patch(u, id, d); }

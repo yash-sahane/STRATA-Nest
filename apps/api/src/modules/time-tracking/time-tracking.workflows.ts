@@ -7,7 +7,8 @@ import type { ActiveTimer, Prisma, TimeEntry, User } from '@prisma/client';
 import { Permission } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import type { StartTimerDto, StopTimerDto } from './dto';
-import { activeTimerResponse, timeEntryResponse } from './mappers';
+import { activeTimerResponse, discardedTimerResponse, timeEntryResponse } from './mappers';
+import { MIN_ENTRY_MINUTES, resolveBillableRate } from './time-tracking.services';
 
 /** Server-side timer lifecycle + duration computation. */
 @Injectable()
@@ -65,7 +66,10 @@ export class TimerService {
     );
   }
 
-  /** Stop → compute duration (minutes, minus paused time) → create TimeEntry, delete timer. */
+  /**
+   * Stop → compute duration (minutes, minus paused time) → create TimeEntry,
+   * delete timer. A run too short to round to a minute writes NO entry.
+   */
   async stop(user: User, dto: StopTimerDto) {
     const t = await this.timer(user.id);
     if (!t) throw new NotFoundException('No active timer');
@@ -77,6 +81,17 @@ export class TimerService {
       0,
       Math.round((now.getTime() - t.startTime.getTime()) / 60000 - pausedSecs / 60),
     );
+
+    if (durationMin < MIN_ENTRY_MINUTES) {
+      // Started and stopped again straight away: no work was recorded, so there
+      // is nothing to log and — the part that hurt — nothing for anyone else to
+      // decide. Two such runs sat in Pending Approvals reading "0m", asking a
+      // manager to sign off on no time at all. The timer is dropped and the
+      // caller is told nothing was written, rather than rounding a few seconds
+      // up into time the member never spent.
+      await this.prisma.activeTimer.delete({ where: { id: t.id } });
+      return discardedTimerResponse(MIN_ENTRY_MINUTES);
+    }
 
     const entryId = generateId();
     const [entry] = await this.prisma.$transaction([
@@ -98,7 +113,8 @@ export class TimerService {
           endTime: now,
           duration: durationMin,
           isBillable: dto.isBillable ?? false,
-          billableRate: dto.billableRate ?? null,
+          // Same rule as a manual entry: a rate is only kept on a billable one.
+          billableRate: resolveBillableRate(dto.isBillable ?? false, dto.billableRate),
           type: t.type,
           status: 'PENDING',
         },
@@ -140,18 +156,26 @@ export class TimeApprovalService {
     if (entry.userId === user.id) {
       throw new ForbiddenException('Cannot approve your own time entry'); // self-approval block
     }
-    const updated = await this.prisma.timeEntry.update({
-      where: { id },
+    // Conditional on it still being pending: load() read the status on an
+    // earlier statement, so two approvers clicking at once would both write a
+    // decision and both emit TimeEntryApproved. The loser is told it was already
+    // handled instead of overwriting the decision that is already recorded.
+    const claimed = await this.prisma.timeEntry.updateMany({
+      where: { id, status: 'PENDING' },
       data: { status: 'APPROVED', approvedBy: user.id, approvedAt: new Date() },
     });
+    if (claimed.count === 0) throw new BadRequestException('Time entry already handled');
+    const updated = await this.prisma.timeEntry.findUniqueOrThrow({ where: { id } });
     this.emit(HrEvents.TimeEntryApproved, updated);
     return timeEntryResponse(updated);
   }
 
   async reject(user: User, id: string, reason?: string) {
-    const entry = await this.load(user, id);
-    const updated = await this.prisma.timeEntry.update({
-      where: { id },
+    // Not bound: load() is called for its guards (existence, TimeApprove, still
+    // PENDING), and reject needs none of the row's fields.
+    await this.load(user, id);
+    const claimed = await this.prisma.timeEntry.updateMany({
+      where: { id, status: 'PENDING' },
       data: {
         status: 'REJECTED',
         approvedBy: user.id,
@@ -159,6 +183,8 @@ export class TimeApprovalService {
         rejectionReason: reason ?? '',
       },
     });
+    if (claimed.count === 0) throw new BadRequestException('Time entry already handled');
+    const updated = await this.prisma.timeEntry.findUniqueOrThrow({ where: { id } });
     this.emit(HrEvents.TimeEntryRejected, updated);
     return timeEntryResponse(updated);
   }

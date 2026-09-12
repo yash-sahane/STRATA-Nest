@@ -34,6 +34,22 @@ export function timeEntryResponse(t: TimeEntry) {
   };
 }
 
+/**
+ * What POST /active_timers/stop returns when the run was too short to log.
+ *
+ * `discarded` is the discriminator: a stop that DID write a row returns the
+ * time entry, which carries no such field, so a client can branch on
+ * `'discarded' in body` without a second request.
+ */
+export function discardedTimerResponse(minimumMinutes: number) {
+  const unit = minimumMinutes === 1 ? 'a minute' : `${minimumMinutes} minutes`;
+  return {
+    discarded: true as const,
+    minimumMinutes,
+    message: `Timer discarded — it ran for less than ${unit}, so nothing was logged.`,
+  };
+}
+
 export function activeTimerResponse(t: ActiveTimer) {
   return {
     id: String(t.id),

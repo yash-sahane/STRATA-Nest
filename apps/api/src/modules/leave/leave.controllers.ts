@@ -28,6 +28,8 @@ export class LeaveRequestsController {
   /** approve (deducts balance) / reject — manager-only, self-approval blocked. */
   @Post(':id/approve') approve(@CurrentUser() u: User, @Param('id') id: string) { return this.approvals.approve(u, id); }
   @Post(':id/reject') reject(@CurrentUser() u: User, @Param('id') id: string, @Body() d: RejectLeaveDto) { return this.approvals.reject(u, id, d.reason); }
+  /** cancel — the requester withdraws their own (or an approver cancels), restoring any deducted balance. */
+  @Post(':id/cancel') cancel(@CurrentUser() u: User, @Param('id') id: string) { return this.approvals.cancel(u, id); }
   @Get(':id') get(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.retrieve(u, id); }
   @Patch(':id') patch(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateLeaveRequestDto) { return this.svc.patch(u, id, d); }
   @Put(':id') put(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateLeaveRequestDto) { return this.svc.patch(u, id, d); }
@@ -39,6 +41,10 @@ export class LeaveRequestsController {
 export class LeaveBalancesController {
   constructor(private readonly svc: LeaveBalancesService) {}
   @Get() list(@CurrentUser() u: User, @Query() q: Q) { return this.svc.list(u, q); }
+  /** The caller's own balance, provisioned on first read (members cannot POST one). */
+  @Get('me') mine(@CurrentUser() u: User, @Query('workspaceId') workspaceId: string, @Query('year') year?: string) {
+    return this.svc.mine(u, workspaceId, year ? Number(year) : undefined);
+  }
   @Post() @RequirePermission(Permission.LeaveApprove) create(@CurrentUser() u: User, @Body() d: CreateLeaveBalanceDto) { return this.svc.create(u, d); }
   @Get(':id') get(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.retrieve(u, id); }
   @Patch(':id') patch(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateLeaveBalanceDto) { return this.svc.patch(u, id, d); }
