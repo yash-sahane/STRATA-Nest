@@ -16,7 +16,18 @@ export interface SearchResult {
   projectId?: string;
   projectName?: string;
   createdAt?: string;
+  /**
+   * Ranking signal only. It is a SUM over the matched fields, with a per-type
+   * boost on top, so it is unbounded above 100 and must never be rendered as a
+   * percentage — that is what produced "Match: 270%".
+   */
   relevanceScore: number;
+  /**
+   * The strongest single-field match, 0-100, and the only one of the two that is
+   * meaningful as a percentage: 100 exact, 90 the field starts with the query,
+   * 70 the field contains it, at most 60 for a scattered fuzzy match.
+   */
+  matchStrength: number;
   matchedFields: string[];
 }
 
@@ -61,19 +72,23 @@ function fuzzyScore(text: string, query: string): number {
 function searchInFields(
   fields: { name: string; value: string }[],
   query: string
-): { score: number; matchedFields: string[] } {
+): { score: number; best: number; matchedFields: string[] } {
   let totalScore = 0;
+  // The best single field, kept separately: summing is how you rank, not how you
+  // express a percentage.
+  let best = 0;
   const matchedFields: string[] = [];
 
   fields.forEach(({ name, value }) => {
     const score = fuzzyScore(value, query);
     if (score > 0) {
       totalScore += score;
+      if (score > best) best = score;
       matchedFields.push(name);
     }
   });
 
-  return { score: totalScore, matchedFields };
+  return { score: totalScore, best, matchedFields };
 }
 
 interface SearchCorpus {
@@ -127,7 +142,7 @@ function scoreCorpus(corpus: SearchCorpus, searchQuery: string): SearchResult[] 
   const results: SearchResult[] = [];
 
   corpus.tasks.forEach((task) => {
-    const { score, matchedFields } = searchInFields(
+    const { score, best, matchedFields } = searchInFields(
       [
         { name: 'title', value: task.title || '' },
         { name: 'description', value: task.description || '' },
@@ -147,13 +162,14 @@ function scoreCorpus(corpus: SearchCorpus, searchQuery: string): SearchResult[] 
         projectId: task.projectId,
         createdAt: task.createdAt,
         relevanceScore: score,
+        matchStrength: best,
         matchedFields,
       });
     }
   });
 
   corpus.projects.forEach((project) => {
-    const { score, matchedFields } = searchInFields(
+    const { score, best, matchedFields } = searchInFields(
       [
         { name: 'name', value: project.name || '' },
         { name: 'description', value: project.description || '' },
@@ -170,13 +186,14 @@ function scoreCorpus(corpus: SearchCorpus, searchQuery: string): SearchResult[] 
         status: project.status,
         createdAt: project.createdAt,
         relevanceScore: score * 1.2, // Boost project results slightly
+        matchStrength: best,
         matchedFields,
       });
     }
   });
 
   corpus.epics.forEach((epic) => {
-    const { score, matchedFields } = searchInFields(
+    const { score, best, matchedFields } = searchInFields(
       [
         { name: 'name', value: epic.name || '' },
         { name: 'description', value: epic.description || '' },
@@ -197,13 +214,14 @@ function scoreCorpus(corpus: SearchCorpus, searchQuery: string): SearchResult[] 
         projectId: epic.projectId,
         createdAt: epic.createdAt,
         relevanceScore: score * 1.1,
+        matchStrength: best,
         matchedFields,
       });
     }
   });
 
   corpus.sprints.forEach((sprint) => {
-    const { score, matchedFields } = searchInFields(
+    const { score, best, matchedFields } = searchInFields(
       [
         { name: 'name', value: sprint.name || '' },
         { name: 'goal', value: sprint.goal || '' },
@@ -220,13 +238,14 @@ function scoreCorpus(corpus: SearchCorpus, searchQuery: string): SearchResult[] 
         projectId: sprint.projectId,
         createdAt: sprint.createdAt,
         relevanceScore: score,
+        matchStrength: best,
         matchedFields,
       });
     }
   });
 
   corpus.requirements.forEach((doc: any) => {
-    const { score, matchedFields } = searchInFields(
+    const { score, best, matchedFields } = searchInFields(
       [
         { name: 'title', value: doc.title || '' },
         { name: 'description', value: doc.description || '' },
@@ -252,6 +271,7 @@ function scoreCorpus(corpus: SearchCorpus, searchQuery: string): SearchResult[] 
         projectId: doc.projectId,
         createdAt: doc.createdAt,
         relevanceScore: score,
+        matchStrength: best,
         matchedFields,
       });
     }

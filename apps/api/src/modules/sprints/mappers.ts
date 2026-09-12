@@ -15,6 +15,13 @@ export function sprintResponse(s: Sprint) {
     endDate: dateOnly(s.endDate),
     status: s.status,
     retrospectiveNotes: s.retrospectiveNotes,
+    // The figures as they stood when the sprint was closed. Null on a sprint
+    // completed before these were recorded — the UI says "not recorded" rather
+    // than substituting a number nobody measured.
+    completedAt: s.completedAt ? formatApiTimestamp(s.completedAt) : null,
+    completedTaskCount: s.completedTaskCount,
+    totalTaskCount: s.totalTaskCount,
+    rolledOverTaskCount: s.rolledOverTaskCount,
     createdBy: s.createdById,
     createdByName: s.createdByName,
     createdAt: formatApiTimestamp(s.createdAt),

@@ -30,8 +30,29 @@ export class SprintCompletionService {
     if (sprint.status === 'COMPLETED') throw new BadRequestException('Sprint already completed');
 
     const existingRetro = await this.prisma.retrospective.findFirst({ where: { sprintId } });
+
+    // Count the sprint as it stands, BEFORE the roll-out. `sprint.completed` is
+    // emitted after this transaction commits and its subscriber clears sprintId
+    // on everything unfinished, so these figures are the only surviving record
+    // of what the sprint actually got through. Without them the analytics page —
+    // which filters tasks by sprintId — sees the DONE ones alone and reports
+    // 100% for every completed sprint.
+    const [totalTaskCount, completedTaskCount] = await Promise.all([
+      this.prisma.task.count({ where: { sprintId } }),
+      this.prisma.task.count({ where: { sprintId, status: 'DONE' } }),
+    ]);
+
     const ops: Prisma.PrismaPromise<unknown>[] = [
-      this.prisma.sprint.update({ where: { id: sprintId }, data: { status: 'COMPLETED' } }),
+      this.prisma.sprint.update({
+        where: { id: sprintId },
+        data: {
+          status: 'COMPLETED',
+          completedAt: new Date(),
+          totalTaskCount,
+          completedTaskCount,
+          rolledOverTaskCount: totalTaskCount - completedTaskCount,
+        },
+      }),
     ];
     if (!existingRetro) {
       ops.push(

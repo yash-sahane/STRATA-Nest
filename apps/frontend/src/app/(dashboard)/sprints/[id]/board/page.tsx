@@ -87,6 +87,11 @@ export default function SprintBoardPage() {
 
     return {
       total,
+      // Kept apart so the card can say what the total is made of. The Analytics
+      // tab counts tasks alone, and until the board said which it was counting,
+      // the two tabs showed different numbers under the same word.
+      taskCount: sprintTasks.length,
+      frCount: visibleFRs.length,
       completed,
       inProgress,
       review,
@@ -169,12 +174,15 @@ export default function SprintBoardPage() {
       <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Tasks</CardTitle>
+            <CardTitle className="text-sm font-medium">Board Items</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{stats.total}</div>
             <p className="text-xs text-muted-foreground mt-1">
-              {stats.total} tasks
+              {stats.frCount > 0
+                ? `${stats.taskCount} ${stats.taskCount === 1 ? 'task' : 'tasks'} · ` +
+                  `${stats.frCount} ${stats.frCount === 1 ? 'requirement' : 'requirements'}`
+                : `${stats.taskCount} ${stats.taskCount === 1 ? 'task' : 'tasks'}`}
             </p>
           </CardContent>
         </Card>

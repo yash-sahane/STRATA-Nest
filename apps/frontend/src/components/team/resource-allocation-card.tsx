@@ -18,6 +18,7 @@ import {
   getWorkloadColor,
   getWorkloadBgColor,
   getWorkloadStatus,
+  WORKLOAD_BANDS,
 } from '@/lib/team-workload';
 
 interface ResourceAllocationCardProps {
@@ -129,25 +130,29 @@ export function ResourceAllocationCard({
         {workloadData.length > 0 && (
           <div className="pt-4 border-t space-y-2">
             <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Capacity Legend:</span>
+              <span className="text-muted-foreground">Capacity Legend (open tasks):</span>
             </div>
-            <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs sm:grid-cols-4">
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-green-100 dark:bg-green-950/30 border border-green-300" />
-                <span>Light (0-70%)</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-yellow-100 dark:bg-yellow-950/30 border border-yellow-300" />
-                <span>Busy (70-100%)</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-orange-100 dark:bg-orange-950/30 border border-orange-300" />
-                <span>High (100-150%)</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-red-100 dark:bg-red-950/30 border border-red-300" />
-                <span>Overload (150%+)</span>
-              </div>
+            {/* Generated from the band table, not written out beside it: the
+                hardcoded version listed four bands with different names and
+                boundaries from the five the page actually uses. */}
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs sm:grid-cols-3 lg:grid-cols-5">
+              {WORKLOAD_BANDS.map((band, i) => {
+                const from = i === 0 ? 0 : WORKLOAD_BANDS[i - 1].maxTasks + 1;
+                const open = !Number.isFinite(band.maxTasks);
+                const range = open
+                  ? `${from}+`
+                  : from === band.maxTasks
+                    ? `${band.maxTasks}`
+                    : `${from}-${band.maxTasks}`;
+                return (
+                  <div key={band.label} className="flex items-center gap-2">
+                    <div className={cn('w-3 h-3 rounded-full border', band.bgColor)} />
+                    <span>
+                      {band.label} ({range} {from === 1 && band.maxTasks === 1 ? 'task' : 'tasks'})
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}

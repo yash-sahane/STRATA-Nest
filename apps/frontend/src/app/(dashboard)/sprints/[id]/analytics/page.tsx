@@ -79,6 +79,12 @@ export default function SprintAnalyticsPage() {
   }, [allTasks, sprintId]);
 
   // Calculate metrics (story points deprecated — use task counts)
+  //
+  // For a COMPLETED sprint the live counts cannot be trusted: closing a sprint
+  // rolls its unfinished tasks out, clearing their sprintId, so `sprintTasks`
+  // then holds the DONE ones alone and every completed sprint reported a 100%
+  // completion rate. The snapshot the server takes inside the closing
+  // transaction is the real record, and is used in preference where present.
   const metrics = React.useMemo(() => {
     const total = sprintTasks.length;
     const completed = sprintTasks.filter((t) => t.status === 'DONE').length;
@@ -87,18 +93,41 @@ export default function SprintAnalyticsPage() {
     ).length;
     const todo = sprintTasks.filter((t) => t.status === 'TODO' || t.status === 'BACKLOG').length;
 
-    const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0;
-    const velocity = completed; // velocity expressed as completed tasks
+    const isClosed = sprint?.status === 'COMPLETED';
+    const snapTotal = sprint?.totalTaskCount;
+    const snapDone = sprint?.completedTaskCount;
+    const hasSnapshot =
+      isClosed && typeof snapTotal === 'number' && typeof snapDone === 'number';
+
+    if (hasSnapshot) {
+      return {
+        total: snapTotal as number,
+        completed: snapDone as number,
+        // The sprint is closed: nothing is in progress in it any more, and the
+        // rest was rolled back to the backlog.
+        inProgress: 0,
+        todo: Math.max(0, (snapTotal as number) - (snapDone as number)),
+        completionRate:
+          (snapTotal as number) > 0
+            ? Math.round(((snapDone as number) / (snapTotal as number)) * 100)
+            : 0,
+        velocity: snapDone as number,
+        source: 'snapshot' as const,
+      };
+    }
 
     return {
       total,
       completed,
       inProgress,
       todo,
-      completionRate,
-      velocity,
+      completionRate: total > 0 ? Math.round((completed / total) * 100) : 0,
+      velocity: completed, // velocity expressed as completed tasks
+      // A sprint closed before the snapshot existed has no trustworthy figures.
+      // Saying so beats printing the 100% the old filter produced.
+      source: isClosed ? ('unrecorded' as const) : ('live' as const),
     };
-  }, [sprintTasks]);
+  }, [sprintTasks, sprint]);
 
   // Burndown Chart Data
   const burndownData = React.useMemo(() => {
@@ -137,7 +166,13 @@ export default function SprintAnalyticsPage() {
 
   // Status Distribution
   const statusData = [
-    { name: 'To Do', value: metrics.todo, color: STATUS_COLORS.TODO },
+    // On a closed sprint the leftovers were not left "To Do" in it — they were
+    // rolled back to the backlog when it closed.
+    {
+      name: metrics.source === 'snapshot' ? 'Rolled over' : 'To Do',
+      value: metrics.todo,
+      color: STATUS_COLORS.TODO,
+    },
     { name: 'In Progress', value: metrics.inProgress, color: STATUS_COLORS.IN_PROGRESS },
     { name: 'Completed', value: metrics.completed, color: STATUS_COLORS.DONE },
   ].filter((item) => item.value > 0);
@@ -294,9 +329,16 @@ export default function SprintAnalyticsPage() {
             <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{metrics.completionRate}%</div>
+            <div className="text-2xl font-bold">
+              {metrics.source === 'unrecorded' ? '—' : `${metrics.completionRate}%`}
+            </div>
             <p className="text-xs text-muted-foreground">
-              {metrics.completed} of {metrics.total} tasks
+              {metrics.source === 'unrecorded'
+                ? 'Not recorded — this sprint was closed before completion figures were kept'
+                : `${metrics.completed} of ${metrics.total} tasks`}
+              {metrics.source === 'snapshot' && sprint?.rolledOverTaskCount
+                ? ` · ${sprint.rolledOverTaskCount} rolled over`
+                : ''}
             </p>
           </CardContent>
         </Card>
@@ -307,8 +349,12 @@ export default function SprintAnalyticsPage() {
             <Zap className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{metrics.velocity}</div>
-            <p className="text-xs text-muted-foreground">Completed tasks</p>
+            <div className="text-2xl font-bold">
+              {metrics.source === 'unrecorded' ? '—' : metrics.velocity}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {metrics.source === 'snapshot' ? 'Completed tasks, at close' : 'Completed tasks'}
+            </p>
           </CardContent>
         </Card>
 

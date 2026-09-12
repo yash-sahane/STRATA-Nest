@@ -356,9 +356,12 @@ export function Header() {
                                     {result.priority}
                                   </Badge>
                                 )}
-                                {result.relevanceScore && (
+                                {/* matchStrength, not relevanceScore: the latter
+                                    is a sum over fields times a per-type boost
+                                    and reached "Match: 270%". */}
+                                {result.matchStrength > 0 && (
                                   <span className="ml-auto">
-                                    Match: {Math.round(result.relevanceScore)}%
+                                    Match: {Math.round(result.matchStrength)}%
                                   </span>
                                 )}
                               </div>

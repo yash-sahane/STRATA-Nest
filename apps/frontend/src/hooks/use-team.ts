@@ -1,6 +1,7 @@
 ﻿import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { resources } from '@/lib/api/client';
 import { query } from '@/lib/api/client';
+import { workloadBandForTasks } from '@/lib/team-workload';
 
 export interface TeamMember {
   id: string;
@@ -237,10 +238,13 @@ export function useMemberTaskCounts(workspaceId?: string) {
     queryFn: async () => {
       if (!workspaceId) return new Map<string, MemberTaskCount>();
 
-      // Get all tasks in workspace
-      const response = await resources.list('tasks', [
+      // listAll, not list(limit(1000)). The Resource Allocation card on the same
+      // page derives its figures from useWorkspaceTasks, which walks every page,
+      // so a workspace past 1000 tasks had the card and the table below it
+      // counting different corpora on top of the band mismatch — and the
+      // truncation was silent either way.
+      const response = await resources.listAll('tasks', [
         query.equal('workspaceId', workspaceId),
-        query.limit(1000),
       ]);
 
       const taskCounts = new Map<string, MemberTaskCount>();
@@ -303,10 +307,12 @@ export function useMemberTaskCounts(workspaceId?: string) {
  * there is no token between warning and success — pinned to 700 so it passes.
  */
 export function getWorkloadLevel(activeTasks: number): { label: string; color: string } {
-  if (activeTasks === 0) return { label: 'Available', color: 'text-success-text' };
-  if (activeTasks <= 3) return { label: 'Light', color: 'text-success-text' };
-  if (activeTasks <= 6) return { label: 'Moderate', color: 'text-yellow-700 dark:text-yellow-400' };
-  if (activeTasks <= 10) return { label: 'Busy', color: 'text-warning-text' };
-  return { label: 'Overloaded', color: 'text-destructive-text' };
+  // Delegated to the shared band table. This function and getWorkloadStatus in
+  // lib/team-workload each carried their own thresholds, and both render on
+  // /team — one in the Resource Allocation card, one in the member table
+  // directly below — so a member with seven open tasks read "Busy" here and
+  // "Moderate" there.
+  const band = workloadBandForTasks(activeTasks);
+  return { label: band.label, color: band.color };
 }
 

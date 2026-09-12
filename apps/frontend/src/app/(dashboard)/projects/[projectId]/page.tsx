@@ -8,6 +8,9 @@ import * as React from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useProject } from '@/hooks/use-project';
 import { useTasks } from '@/hooks/use-task';
+import { useEpics } from '@/hooks/use-epic';
+import { useSprints } from '@/hooks/use-sprint';
+import { formatDistanceToNow } from 'date-fns';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -47,6 +50,63 @@ export default function ProjectDetailPage() {
   // list exists, which is exactly the window the health card's loading state
   // has to cover.
   const { data: tasks = [], isPending: tasksPending } = useTasks(projectId);
+  // For "Recent Updates" below, which promises every project entity. Both are
+  // already cached elsewhere on this route, so neither is an extra round trip in
+  // practice.
+  const { data: epics = [] } = useEpics(projectId);
+  const { data: sprints = [] } = useSprints(projectId);
+
+  /**
+   * The five things in this project that changed most recently.
+   *
+   * `useTasks` orders by board `position`, so taking `tasks.slice(0, 5)` — which
+   * is what this card used to do — listed the leftmost five cards on the board
+   * and called them recent. Nothing on the row showed a time, so there was no
+   * way to notice.
+   */
+  const recentUpdates = React.useMemo(() => {
+    type Row = {
+      id: string;
+      kind: 'Task' | 'Epic' | 'Sprint';
+      ref?: string;
+      title: string;
+      description?: string;
+      status?: string;
+      updatedAt?: string;
+    };
+    const rows: Row[] = [
+      ...tasks.map((t) => ({
+        id: t.id,
+        kind: 'Task' as const,
+        ref: t.hierarchyId,
+        title: t.title,
+        description: t.description,
+        status: t.status,
+        updatedAt: t.updatedAt ?? t.createdAt,
+      })),
+      ...epics.map((e) => ({
+        id: e.id,
+        kind: 'Epic' as const,
+        ref: e.hierarchyId,
+        title: e.name,
+        description: e.description,
+        status: e.status,
+        updatedAt: e.updatedAt ?? e.createdAt,
+      })),
+      ...sprints.map((sp) => ({
+        id: sp.id,
+        kind: 'Sprint' as const,
+        title: sp.name,
+        description: sp.goal,
+        status: sp.status,
+        updatedAt: sp.updatedAt ?? sp.createdAt,
+      })),
+    ];
+    return rows
+      .filter((r) => Boolean(r.updatedAt))
+      .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+      .slice(0, 5);
+  }, [tasks, epics, sprints]);
 
   // Calculate task statistics
   const taskStats = React.useMemo(() => {
@@ -308,40 +368,51 @@ export default function ProjectDetailPage() {
           <Card>
             <CardHeader>
               <CardTitle>Recent Updates</CardTitle>
-              <CardDescription>Latest activity across all project entities</CardDescription>
+              <CardDescription>
+                The tasks, epics and sprints changed most recently
+              </CardDescription>
             </CardHeader>
             <CardContent>
-              {tasks.length > 0 ? (
+              {recentUpdates.length > 0 ? (
                 <div className="space-y-2">
-                  {tasks.slice(0, 5).map(task => (
+                  {recentUpdates.map(row => (
                     <div
-                      key={task.id}
-                      className="flex items-center justify-between p-3 rounded-lg border hover:bg-accent/50 transition-colors"
+                      key={`${row.kind}-${row.id}`}
+                      className="flex items-center justify-between gap-3 p-3 rounded-lg border hover:bg-accent/50 transition-colors"
                     >
-                      <div className="flex items-center gap-3">
-                        <Badge variant="outline" className="font-mono text-xs">
-                          {task.hierarchyId}
+                      <div className="flex min-w-0 items-center gap-3">
+                        <Badge variant="outline" className="font-mono text-xs shrink-0">
+                          {row.ref ?? row.kind}
                         </Badge>
-                        <div>
-                          <p className="text-sm font-medium">{task.title}</p>
-                          {task.description && (
-                            <p className="text-xs text-muted-foreground line-clamp-1">
-                              {task.description}
-                            </p>
-                          )}
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium truncate">{row.title}</p>
+                          {/* The time is the point of the card: without it there
+                              was nothing to tell "recent" from "first on the
+                              board". */}
+                          <p className="text-xs text-muted-foreground">
+                            {row.kind}
+                            {row.updatedAt
+                              ? ` · updated ${formatDistanceToNow(new Date(row.updatedAt), {
+                                  addSuffix: true,
+                                })}`
+                              : ''}
+                          </p>
                         </div>
                       </div>
-                      <Badge
-                        variant={
-                          task.status === 'DONE'
-                            ? 'success'
-                            : task.status === 'IN_PROGRESS'
-                              ? 'default'
-                              : 'secondary'
-                        }
-                      >
-                        {task.status.replace('_', ' ')}
-                      </Badge>
+                      {row.status && (
+                        <Badge
+                          className="shrink-0"
+                          variant={
+                            row.status === 'DONE' || row.status === 'COMPLETED'
+                              ? 'success'
+                              : row.status === 'IN_PROGRESS' || row.status === 'ACTIVE'
+                                ? 'default'
+                                : 'secondary'
+                          }
+                        >
+                          {row.status.replace('_', ' ')}
+                        </Badge>
+                      )}
                     </div>
                   ))}
                 </div>

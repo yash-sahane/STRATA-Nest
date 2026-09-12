@@ -187,6 +187,16 @@ export interface Sprint {
   endDate: string;
   status: 'PLANNING' | 'ACTIVE' | 'COMPLETED';
   retrospectiveNotes?: string;
+  /**
+   * What the sprint had actually finished when it was closed. Completion rolls
+   * unfinished tasks OUT of the sprint, so counting tasks by sprintId afterwards
+   * finds only the DONE ones — these are the only surviving record of the real
+   * figures. Null on a sprint completed before they were recorded.
+   */
+  completedAt?: string | null;
+  completedTaskCount?: number | null;
+  totalTaskCount?: number | null;
+  rolledOverTaskCount?: number | null;
   createdBy: string;
   createdByName?: string; // Denormalized name for display
   createdAt: string;
