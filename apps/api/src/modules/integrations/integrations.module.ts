@@ -15,6 +15,7 @@ import {
 import { GitQueueService } from './git-queue.service';
 import { IntegrationAccess } from './integration-access.service';
 import { TokenCipher } from './token-cipher';
+import { IntegrationTestService } from './integration-test.service';
 
 /**
  * Integrations. CRUD for the 4 collections (tokens encrypted at rest
@@ -30,6 +31,7 @@ import { TokenCipher } from './token-cipher';
     WebhookController,
   ],
   providers: [
+    IntegrationTestService,
     GitHubIntegrationsService,
     GitLabIntegrationsService,
     DiscordIntegrationsService,

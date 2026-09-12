@@ -16,6 +16,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { IntegrationsPanel } from '@/components/settings/integrations-panel';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -279,6 +280,7 @@ function SettingsPageContent() {
           <TabsTrigger value="notifications">Notifications</TabsTrigger>
           <TabsTrigger value="security">Security</TabsTrigger>
           <TabsTrigger value="appearance">Appearance</TabsTrigger>
+          <TabsTrigger value="integrations">Integrations</TabsTrigger>
         </TabsList>
 
         {/* Profile Tab */}
@@ -653,6 +655,12 @@ function SettingsPageContent() {
         </TabsContent>
 
         {/* Appearance Tab */}
+        {/* The integrations API had no client at all: three providers with full
+            CRUD and encrypted token storage, unreachable from the app. */}
+        <TabsContent value="integrations" className="space-y-4">
+          <IntegrationsPanel />
+        </TabsContent>
+
         <TabsContent value="appearance" className="space-y-4">
           <Card>
             <CardHeader>

@@ -43,6 +43,22 @@ export function useCollectionSubscription(
   });
   const queryKeysId = queryKeys.join('|');
 
+  /**
+   * Events arriving inside this window share one refetch.
+   *
+   * Measured before this: five remote writes in quick succession produced five
+   * ws frames and five full list refetches — 1.00 GETs per event, which is
+   * minimal per event and wasteful per ACTION, because bursts are the normal
+   * case. A teammate reordering a board emits one event per card moved.
+   *
+   * 120ms is chosen to absorb a drag or a bulk update while staying well under
+   * the threshold at which a single change stops feeling immediate. Invalidation
+   * is idempotent, so coalescing changes what is fetched not at all — only how
+   * many times.
+   */
+  const COALESCE_MS = 120;
+  const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     if (!enabled || typeof window === 'undefined') return;
 
@@ -58,16 +74,28 @@ export function useCollectionSubscription(
           documentId: response.payload.id,
         });
 
-        // Invalidate all related queries
-        queryKeysRef.current.forEach(key => {
-          queryClient.invalidateQueries({ queryKey: [key] });
-        });
+        // Invalidate all related queries — once per burst, not once per event.
+        // The keys are read at FLUSH time from the ref, so a burst spanning a
+        // re-render still invalidates the current set.
+        if (flushTimer.current !== null) clearTimeout(flushTimer.current);
+        flushTimer.current = setTimeout(() => {
+          flushTimer.current = null;
+          queryKeysRef.current.forEach((key) => {
+            queryClient.invalidateQueries({ queryKey: [key] });
+          });
+        }, COALESCE_MS);
       }
     );
 
     return () => {
       logger.debug(`Unsubscribing from collection: ${collectionId}`);
       subscriptionRef.current?.unsubscribe();
+      // A pending flush after unmount would invalidate on behalf of a component
+      // that is gone, refetching for nobody.
+      if (flushTimer.current !== null) {
+        clearTimeout(flushTimer.current);
+        flushTimer.current = null;
+      }
     };
   }, [collectionId, enabled, queryClient, queryKeysId]);
 }

@@ -20,6 +20,11 @@ export function githubIntegrationResponse(g: GitHubIntegration) {
     repoName: g.repoName,
     autoUpdateStatus: g.autoUpdateStatus,
     enabledEvents: asJson(g.enabledEvents),
+    // Whether this credential has ever been shown to work. Null = never tested,
+    // which is a state the UI shows rather than a blank it has to interpret.
+    lastTestedAt: g.lastTestedAt ? formatApiTimestamp(g.lastTestedAt) : null,
+    lastTestOk: g.lastTestOk,
+    lastTestError: g.lastTestError ?? null,
     createdAt: formatApiTimestamp(g.createdAt),
     updatedAt: formatApiTimestamp(g.updatedAt),
   };
@@ -32,6 +37,11 @@ export function gitlabIntegrationResponse(g: GitLabIntegration) {
     projectPath: g.projectPath,
     autoUpdateStatus: g.autoUpdateStatus,
     enabledEvents: asJson(g.enabledEvents),
+    // Whether this credential has ever been shown to work. Null = never tested,
+    // which is a state the UI shows rather than a blank it has to interpret.
+    lastTestedAt: g.lastTestedAt ? formatApiTimestamp(g.lastTestedAt) : null,
+    lastTestOk: g.lastTestOk,
+    lastTestError: g.lastTestError ?? null,
     createdAt: formatApiTimestamp(g.createdAt),
     updatedAt: formatApiTimestamp(g.updatedAt),
   };
@@ -43,6 +53,11 @@ export function discordIntegrationResponse(d: DiscordIntegration) {
     projectId: d.projectId,
     webhookUrl: d.webhookUrl,
     enabledEvents: asJson(d.enabledEvents),
+    // Whether this credential has ever been shown to work. Null = never tested,
+    // which is a state the UI shows rather than a blank it has to interpret.
+    lastTestedAt: d.lastTestedAt ? formatApiTimestamp(d.lastTestedAt) : null,
+    lastTestOk: d.lastTestOk,
+    lastTestError: d.lastTestError ?? null,
     createdAt: formatApiTimestamp(d.createdAt),
     updatedAt: formatApiTimestamp(d.updatedAt),
   };

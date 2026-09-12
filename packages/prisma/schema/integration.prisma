@@ -15,6 +15,15 @@ model GitHubIntegration {
   autoUpdateStatus Boolean  @default(false) @map("auto_update_status")
   enabledEvents    Json     @default("[]") @map("enabled_events")
 
+
+  // Whether this credential has ever been shown to work, and when. All three
+  // providers accepted a token without ever calling the provider, so a broken
+  // integration was indistinguishable from a working one. Null means never
+  // tested — a real state, not a missing value.
+  lastTestedAt     DateTime? @map("last_tested_at")
+  lastTestOk       Boolean?  @map("last_test_ok")
+  lastTestError    String?   @map("last_test_error")
+
   @@map("integrations_githubintegration")
 }
 
@@ -29,6 +38,15 @@ model GitLabIntegration {
   autoUpdateStatus Boolean  @default(false) @map("auto_update_status")
   enabledEvents    Json     @default("[]") @map("enabled_events")
 
+
+  // Whether this credential has ever been shown to work, and when. All three
+  // providers accepted a token without ever calling the provider, so a broken
+  // integration was indistinguishable from a working one. Null means never
+  // tested — a real state, not a missing value.
+  lastTestedAt     DateTime? @map("last_tested_at")
+  lastTestOk       Boolean?  @map("last_test_ok")
+  lastTestError    String?   @map("last_test_error")
+
   @@map("integrations_gitlabintegration")
 }
 
@@ -39,6 +57,15 @@ model DiscordIntegration {
   projectId     String   @unique @map("project_id")
   webhookUrl    String   @map("webhook_url")
   enabledEvents Json     @default("[]") @map("enabled_events")
+
+
+  // Whether this credential has ever been shown to work, and when. All three
+  // providers accepted a token without ever calling the provider, so a broken
+  // integration was indistinguishable from a working one. Null means never
+  // tested — a real state, not a missing value.
+  lastTestedAt     DateTime? @map("last_tested_at")
+  lastTestOk       Boolean?  @map("last_test_ok")
+  lastTestError    String?   @map("last_test_error")
 
   @@map("integrations_discordintegration")
 }

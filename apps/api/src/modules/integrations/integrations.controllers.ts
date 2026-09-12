@@ -39,42 +39,49 @@ import {
   GitLabIntegrationsService,
 } from './integrations.services';
 import { normalizeCommits, verifyGithubSignature, verifyGitlabToken } from './webhook.util';
+import { IntegrationTestService } from './integration-test.service';
 
 type Q = Record<string, string | string[] | undefined>;
 
 @ApiTags('github_integrations')
 @Controller('github_integrations')
 export class GitHubIntegrationsController {
-  constructor(private readonly svc: GitHubIntegrationsService) {}
+  constructor(private readonly svc: GitHubIntegrationsService, private readonly tester: IntegrationTestService) {}
   @Get() list(@CurrentUser() u: User, @Query() q: Q) { return this.svc.list(u, q); }
   @Post() create(@CurrentUser() u: User, @Body() d: CreateGitHubIntegrationDto) { return this.svc.create(u, d); }
   @Get(':id') get(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.retrieve(u, id); }
   @Patch(':id') patch(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateGitHubIntegrationDto) { return this.svc.patch(u, id, d); }
   @Put(':id') put(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateGitHubIntegrationDto) { return this.svc.patch(u, id, d); }
+  /** Ask the provider whether this credential actually works, and record the answer. */
+  @Post(':id/test') test(@CurrentUser() u: User, @Param('id') id: string) { return this.tester.testGitHub(u, id); }
   @Delete(':id') @HttpCode(204) remove(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.remove(u, id); }
 }
 
 @ApiTags('gitlab_integrations')
 @Controller('gitlab_integrations')
 export class GitLabIntegrationsController {
-  constructor(private readonly svc: GitLabIntegrationsService) {}
+  constructor(private readonly svc: GitLabIntegrationsService, private readonly tester: IntegrationTestService) {}
   @Get() list(@CurrentUser() u: User, @Query() q: Q) { return this.svc.list(u, q); }
   @Post() create(@CurrentUser() u: User, @Body() d: CreateGitLabIntegrationDto) { return this.svc.create(u, d); }
   @Get(':id') get(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.retrieve(u, id); }
   @Patch(':id') patch(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateGitLabIntegrationDto) { return this.svc.patch(u, id, d); }
   @Put(':id') put(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateGitLabIntegrationDto) { return this.svc.patch(u, id, d); }
+  /** Ask the provider whether this credential actually works, and record the answer. */
+  @Post(':id/test') test(@CurrentUser() u: User, @Param('id') id: string) { return this.tester.testGitLab(u, id); }
   @Delete(':id') @HttpCode(204) remove(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.remove(u, id); }
 }
 
 @ApiTags('discord_integrations')
 @Controller('discord_integrations')
 export class DiscordIntegrationsController {
-  constructor(private readonly svc: DiscordIntegrationsService) {}
+  constructor(private readonly svc: DiscordIntegrationsService, private readonly tester: IntegrationTestService) {}
   @Get() list(@CurrentUser() u: User, @Query() q: Q) { return this.svc.list(u, q); }
   @Post() create(@CurrentUser() u: User, @Body() d: CreateDiscordIntegrationDto) { return this.svc.create(u, d); }
   @Get(':id') get(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.retrieve(u, id); }
   @Patch(':id') patch(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateDiscordIntegrationDto) { return this.svc.patch(u, id, d); }
   @Put(':id') put(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateDiscordIntegrationDto) { return this.svc.patch(u, id, d); }
+  /** Ask the provider whether this credential actually works, and record the answer. */
+  @Post(':id/test') test(@CurrentUser() u: User, @Param('id') id: string) { return this.tester.testDiscord(u, id); }
   @Delete(':id') @HttpCode(204) remove(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.remove(u, id); }
 }
 
