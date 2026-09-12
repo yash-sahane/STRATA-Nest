@@ -56,7 +56,36 @@ export class TasksService extends ScopedCrudService<Task, ReturnType<typeof task
   protected map(row: Task) {
     return taskResponse(row);
   }
+  /**
+   * Display names for an assignee list.
+   *
+   * `assigneeIds` and `assignedTo` are two views of the same list and mirror
+   * each other, but `assignedToNames` has nothing to mirror from: a name is not
+   * derivable from an id without a lookup, and only the server can do that. A
+   * client that sent ids alone — Clone Project did exactly this, and so does any
+   * direct API caller — produced a task that read as assigned to NOBODY on every
+   * screen that renders the names, with no way to repair it except reassigning
+   * by hand.
+   *
+   * Resolved from the user table rather than trusted from the request, so the
+   * denormalised copy cannot disagree with the account it names. Ids with no
+   * matching user are dropped rather than rendered as a blank chip.
+   */
+  private async namesFor(ids: readonly string[]): Promise<string[]> {
+    if (ids.length === 0) return [];
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: [...ids] } },
+      select: { id: true, name: true, email: true },
+    });
+    const byId = new Map(users.map((u) => [u.id, u.name || u.email]));
+    return ids.map((id) => byId.get(id)).filter((n): n is string => Boolean(n));
+  }
+
   async create(user: User, dto: CreateTaskDto) {
+    const assignees = dto.assigneeIds ?? dto.assignedTo ?? [];
+    // Same reasoning one field over: a client that names an assigner by id only
+    // left every "Assigned by" line blank.
+    const [assignedByName] = dto.assignedBy ? await this.namesFor([dto.assignedBy]) : [];
     // Every parent named here is a soft FK. Without these a task could be filed
     // in your own workspace while pointing at a project in one you cannot even
     // read — and `GET /tasks?projectId=…`, the exact query the board sends,
@@ -85,11 +114,12 @@ export class TasksService extends ScopedCrudService<Task, ReturnType<typeof task
       // assigneeIds and assignedTo are two views of the same list. A client that
       // sends only one used to leave the other empty, so whichever view the
       // reader trusted showed nobody assigned — mirror them here instead.
-      assigneeIds: dto.assigneeIds ?? dto.assignedTo ?? [],
+      assigneeIds: assignees,
       assignedBy: dto.assignedBy ?? '',
-      assignedByName: dto.assignedByName ?? '',
-      assignedTo: dto.assignedTo ?? dto.assigneeIds ?? [],
-      assignedToNames: dto.assignedToNames ?? [],
+      assignedByName: dto.assignedByName || assignedByName,
+      assignedTo: assignees,
+      // Resolved from the ids when the caller did not send them — see namesFor.
+      assignedToNames: dto.assignedToNames ?? (await this.namesFor(assignees)),
       watcherIds: dto.watcherIds ?? [],
       createdById: user.id,
       createdByName: user.name ?? '',
@@ -106,7 +136,7 @@ export class TasksService extends ScopedCrudService<Task, ReturnType<typeof task
       blocks: [],
     });
   }
-  patch(user: User, id: string, dto: UpdateTaskDto) {
+  async patch(user: User, id: string, dto: UpdateTaskDto) {
     assertNoSelfReference(id, dto);
     const data: Record<string, unknown> = {};
     // blockedBy/blocks are deliberately NOT copyable here: each is only half of
@@ -120,6 +150,18 @@ export class TasksService extends ScopedCrudService<Task, ReturnType<typeof task
     ] as const;
     for (const k of copy) if (dto[k] !== undefined) data[k] = dto[k];
     if (dto.dueDate !== undefined) data.dueDate = toDate(dto.dueDate, 'Due date');
+    // Reassigning by id alone must not blank the names, and the two id views
+    // must not drift apart — the same rules create applies.
+    const nextAssignees = dto.assigneeIds ?? dto.assignedTo;
+    if (nextAssignees !== undefined) {
+      data.assigneeIds = nextAssignees;
+      data.assignedTo = nextAssignees;
+      if (dto.assignedToNames === undefined) data.assignedToNames = await this.namesFor(nextAssignees);
+    }
+    if (dto.assignedBy !== undefined && dto.assignedByName === undefined) {
+      const [resolved] = dto.assignedBy ? await this.namesFor([dto.assignedBy]) : [];
+      data.assignedByName = resolved ?? '';
+    }
     // Keep the self-reference rejection synchronous — only the status path needs
     // to read the stored row first.
     if (dto.status === undefined) return this.update(user, id, data);

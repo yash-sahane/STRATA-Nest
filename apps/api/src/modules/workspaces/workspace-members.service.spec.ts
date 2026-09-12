@@ -279,6 +279,47 @@ describe('WorkspaceMembersService.update — orphaned-workspace guards', () => {
   });
 });
 
+describe('WorkspaceMembersService.update — INVITED is not reversible', () => {
+  /**
+   * Applying "Invited" to somebody who had already joined revoked their access
+   * outright: an INVITED row is not an activeMembership, so every scoped read
+   * answered 404 or zero rows — while the save reported success and the
+   * directory showed a friendly yellow "Invited" badge. Nothing said they were
+   * locked out.
+   */
+  it('refuses to put a member who has joined back to INVITED', async () => {
+    const { svc, update } = build({ existing: member({ status: 'ACTIVE' }), otherManagers: 2 });
+    await expect(svc.update(caller, 'm1', { status: 'INVITED' })).rejects.toThrow(
+      /already joined/i,
+    );
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('names INACTIVE as the way to revoke access', async () => {
+    const { svc } = build({ existing: member({ status: 'ACTIVE' }), otherManagers: 2 });
+    await expect(svc.update(caller, 'm1', { status: 'INVITED' })).rejects.toThrow(/Inactive/i);
+  });
+
+  it('and INACTIVE really is accepted', async () => {
+    const { svc, update } = build({ existing: member({ status: 'ACTIVE' }), otherManagers: 2 });
+    await svc.update(caller, 'm1', { status: 'INACTIVE' });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ data: { status: 'INACTIVE' } }));
+  });
+
+  it('leaves an INVITED membership editable — it has not joined yet', async () => {
+    // Re-saving the same status on a pending invitation is a no-op, not a lockout.
+    const { svc, update } = build({ existing: member({ status: 'INVITED' }), otherManagers: 2 });
+    await svc.update(caller, 'm1', { status: 'INVITED' });
+    expect(update).toHaveBeenCalled();
+  });
+
+  it('still lets an INVITED membership be activated', async () => {
+    const { svc, update } = build({ existing: member({ status: 'INVITED' }), otherManagers: 2 });
+    await svc.update(caller, 'm1', { status: 'ACTIVE' });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ data: { status: 'ACTIVE' } }));
+  });
+});
+
 describe('WorkspaceMembersService.remove — unchanged invariants', () => {
   it('still refuses the owner, the caller and the last manager', async () => {
     const owner = build({ existing: member({ userId: 'owner' }), ownerId: 'owner' });

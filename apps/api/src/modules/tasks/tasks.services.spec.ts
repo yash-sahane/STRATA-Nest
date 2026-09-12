@@ -51,6 +51,9 @@ function build(current: Partial<Task> = {}) {
   const sibling = () => ({ findUnique: jest.fn().mockResolvedValue({ projectId: 'p1' }) });
   const prisma = {
     task: { update, create, findFirst: jest.fn().mockResolvedValue(row), findUnique: jest.fn().mockResolvedValue({ projectId: 'p1' }) },
+    // namesFor() resolves assignee display names from here — a name is not
+    // derivable from an id, so the service has to look it up.
+    user: { findMany: jest.fn().mockResolvedValue([]) },
     project,
     sprint: sibling(),
     epic: sibling(),
@@ -67,9 +70,9 @@ function build(current: Partial<Task> = {}) {
 }
 
 describe('TasksService self-reference guard', () => {
-  it('rejects a task parenting itself', () => {
+  it('rejects a task parenting itself', async () => {
     const { svc, update } = build();
-    expect(() => svc.patch(user, 't1', { parentTaskId: 't1' })).toThrow(
+    await expect(svc.patch(user, 't1', { parentTaskId: 't1' })).rejects.toThrow(
       'A task cannot be its own parent',
     );
     expect(update).not.toHaveBeenCalled();
@@ -78,12 +81,12 @@ describe('TasksService self-reference guard', () => {
   // Dependency arrays are no longer writable through PATCH at all: one side of
   // an edge on its own desynchronises the graph and skips the cycle check, so
   // every caller has to go through the transactional dependency endpoints.
-  it('refuses to write a dependency array through PATCH', () => {
+  it('refuses to write a dependency array through PATCH', async () => {
     const { svc, update } = build();
-    expect(() => svc.patch(user, 't1', { blocks: ['t2', 't1'] })).toThrow(
+    await expect(svc.patch(user, 't1', { blocks: ['t2', 't1'] })).rejects.toThrow(
       '/tasks/{id}/dependencies',
     );
-    expect(() => svc.patch(user, 't1', { blockedBy: ['t2'] })).toThrow(
+    await expect(svc.patch(user, 't1', { blockedBy: ['t2'] })).rejects.toThrow(
       '/tasks/{id}/dependencies',
     );
     expect(update).not.toHaveBeenCalled();

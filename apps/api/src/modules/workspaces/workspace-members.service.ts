@@ -104,6 +104,29 @@ export class WorkspaceMembersService {
   }
 
   /**
+   * INVITED is not a state a membership can be put BACK into.
+   *
+   * It means "this person has not accepted yet", which is a fact about the past,
+   * not a switch. Applying it to somebody who had already joined revoked their
+   * access completely — an INVITED row is not an `activeMembership`, so every
+   * scoped read returned 404 or zero rows — while the save reported "Team member
+   * updated successfully" and the directory showed a friendly yellow "Invited"
+   * badge. Nothing on screen said they had been locked out.
+   *
+   * Revoking access is what INACTIVE is for, and it goes through the owner,
+   * self-edit and last-manager guards below like any other deactivation. The UI
+   * already hides the option for a member who has joined; this is the same rule
+   * for anything talking to the API directly.
+   */
+  private assertNotReInviting(existing: WorkspaceMember, next: string | undefined): void {
+    if (next !== 'INVITED' || existing.status === 'INVITED') return;
+    throw new BadRequestException(
+      'This person has already joined, so their membership cannot go back to "Invited". ' +
+        'Use "Inactive" to revoke their access.',
+    );
+  }
+
+  /**
    * Nobody edits their own role or status — in EITHER direction. A demotion is
    * an orphaning risk; a promotion is a straight escalation for anyone holding
    * `member:update` through a custom role. Deliberately not exempted for
@@ -263,6 +286,7 @@ export class WorkspaceMembersService {
     await this.access.assertPermission(user, existing.workspaceId, Permission.MemberUpdate);
     if (dto.role !== undefined) await this.access.assertValidRole(existing.workspaceId, dto.role);
     if (dto.status !== undefined) this.assertValidStatus(dto.status);
+    this.assertNotReInviting(existing, dto.status);
     // A role change, or any move off ACTIVE, can orphan the workspace exactly
     // as a removal does — so it runs the same owner/self/last-manager guards.
     const changesRole = dto.role !== undefined && dto.role !== existing.role;

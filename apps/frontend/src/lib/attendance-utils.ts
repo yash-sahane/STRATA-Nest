@@ -366,11 +366,21 @@ export function calculateAttendanceSummary(
     ? attendanceRecords.filter((r) => !r.date || countsTowardRate(String(r.date).slice(0, 10)))
     : attendanceRecords;
 
-  // The excluded DAYS, de-duplicated — what the caller is told sits in the
-  // hours but in none of the day counts.
+  // The excluded days that actually CONTRIBUTED HOURS, de-duplicated.
+  //
+  // `workHours > 0` is the whole point: this number exists only to explain why
+  // the hours total and the day counts disagree, and a day with no hours creates
+  // no disagreement to explain. Counting every excluded day instead made the
+  // note fire for approved leave — LeaveApprovalService writes one ON_LEAVE row
+  // per covered working day with `workHours` left null — so an ordinary member
+  // with three days off read "Includes 3 days outside the working calendar …
+  // Those hours count here" about three days that contributed exactly zero
+  // hours, duplicating the leave count already shown in the Monthly Breakdown.
+  // Leave is far more common than working a holiday, so the copy was wrong most
+  // of the time it appeared.
   const uncountedDays = new Set(
     attendanceRecords
-      .filter((r) => r.date && !countedRecords.includes(r))
+      .filter((r) => r.date && !countedRecords.includes(r) && (r.workHours ?? 0) > 0)
       .map((r) => String(r.date).slice(0, 10))
   ).size;
 
