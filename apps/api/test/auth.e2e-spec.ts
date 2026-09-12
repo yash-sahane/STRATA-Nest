@@ -1,5 +1,14 @@
 // Enable strict refresh so the reuse-rejection test verifies a rotated token is rejected.
 process.env.AUTH_STRICT_REFRESH = 'true';
+// This suite logs in more times than the production login limit allows (5/min),
+// and the throttle counter lives in Redis keyed by IP — so it is also shared with
+// any dev server running on the same host. Both made the run fail with 429s that
+// have nothing to do with auth behaviour. Raise the auth limits for the suite;
+// throttling itself is covered by throttling/*.spec.ts.
+process.env.THROTTLE_LOGIN_LIMIT = '1000';
+process.env.THROTTLE_REFRESH_LIMIT = '1000';
+process.env.THROTTLE_REGISTER_LIMIT = '1000';
+process.env.THROTTLE_RESET_LIMIT = '1000';
 
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';

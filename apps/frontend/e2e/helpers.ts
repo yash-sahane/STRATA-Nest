@@ -1,12 +1,31 @@
-import { Page, expect } from '@playwright/test';
+import { BrowserContext, Page, expect } from '@playwright/test';
 
+/**
+ * The account the suite signs in as. These default to the superuser the Prisma
+ * seed actually creates (packages/prisma/src/seed.ts) — the previous hard-coded
+ * admin@test.com/admin123 existed in no seed, so every test in this suite failed
+ * at login on a freshly migrated database. Override via env when pointing the
+ * suite at an environment seeded with different credentials.
+ */
 export const TEST_USER = {
-  email: 'admin@test.com',
-  password: 'admin123',
-  name: 'Test Admin',
+  email: process.env.E2E_EMAIL ?? 'admin@strata.local',
+  password: process.env.E2E_PASSWORD ?? 'ChangeMe123!',
+  name: 'Admin',
 };
 
-export async function login(page: Page) {
+/**
+ * Cookies from the first successful sign-in, replayed into every later context.
+ *
+ * This helper runs in `beforeEach` across the suite, so submitting the form each
+ * time meant ~70 real logins per run against THROTTLE_LOGIN_LIMIT (5/minute per
+ * IP) — the API started answering 429 a few tests in and the rest of the run
+ * failed for reasons that had nothing to do with what they were testing. One real
+ * login per process, reused after that. The auth spec still drives the form
+ * directly where signing in IS the thing under test.
+ */
+let cachedCookies: Awaited<ReturnType<BrowserContext['cookies']>> | null = null;
+
+async function submitLoginForm(page: Page) {
   await page.goto('/login');
   await page.waitForLoadState('networkidle');
   await page.fill('input[type="email"], input[name="email"]', TEST_USER.email);
@@ -14,6 +33,19 @@ export async function login(page: Page) {
   await page.click('button[type="submit"]');
   // Wait for redirect to dashboard or onboarding
   await page.waitForURL(/\/(dashboard|onboarding|tasks|projects)/, { timeout: 15000 });
+}
+
+export async function login(page: Page) {
+  if (cachedCookies) {
+    await page.context().addCookies(cachedCookies);
+    await page.goto('/dashboard');
+    await page.waitForLoadState('networkidle').catch(() => undefined);
+    if (!page.url().includes('/login')) return;
+    cachedCookies = null; // session no longer valid — sign in for real below
+  }
+
+  await submitLoginForm(page);
+  cachedCookies = await page.context().cookies();
 }
 
 export async function ensureOnDashboard(page: Page) {
