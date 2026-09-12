@@ -62,3 +62,13 @@ packages/prisma/generated/
 # Graphify skill artifacts (generated locally, not project source)
 .graphify_*
 graphify-out/
+
+# Playwright MCP persistent browser profile
+.playwright-profile/
+
+# Local blob store (STORAGE_LOCAL_ROOT). Runtime upload data, not source —
+# QA runs leave real attachments and adversarial filenames in here.
+apps/api/.storage/
+
+# Playwright MCP server config: machine-specific absolute paths.
+.mcp.json
