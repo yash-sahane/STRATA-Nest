@@ -35,6 +35,7 @@ export function taskResponse(t: Task) {
     position: t.position,
     blockedBy: t.blockedBy,
     blocks: t.blocks,
+    completedAt: isoOrNull(t.completedAt),
     createdAt: formatApiTimestamp(t.createdAt),
     updatedAt: formatApiTimestamp(t.updatedAt),
   };

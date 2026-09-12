@@ -9,6 +9,8 @@ import {
   CreateLabelDto,
   CreateTaskCommentDto,
   CreateTaskDto,
+  TaskDependencyDto,
+  TaskDependencyQueryDto,
   UpdateKanbanColumnDto,
   UpdateLabelDto,
   UpdateTaskCommentDto,
@@ -32,6 +34,13 @@ export class TasksController {
   @Get(':id') get(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.retrieve(u, id); }
   @Patch(':id') patch(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateTaskDto) { return this.svc.patch(u, id, d); }
   @Put(':id') put(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateTaskDto) { return this.svc.patch(u, id, d); }
+  /**
+   * Dependency edges. Both halves (`blockedBy` on one task, `blocks` on the
+   * other) are written in one transaction and the add is cycle-checked, which
+   * two independent PATCHes from the client could never guarantee.
+   */
+  @Post(':id/dependencies') addDependency(@CurrentUser() u: User, @Param('id') id: string, @Body() d: TaskDependencyDto) { return this.svc.addDependency(u, id, d); }
+  @Delete(':id/dependencies/:targetTaskId') removeDependency(@CurrentUser() u: User, @Param('id') id: string, @Param('targetTaskId') t: string, @Query() q: TaskDependencyQueryDto) { return this.svc.removeDependency(u, id, t, q.type); }
   /** Task aggregate delete → cascades TaskComments (DeletionModule). */
   @Delete(':id') @HttpCode(204) remove(@CurrentUser() u: User, @Param('id') id: string) { return this.deletion.delete(u, id); }
 }

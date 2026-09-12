@@ -59,4 +59,28 @@ export class MailService {
       idempotencyKey: `invite:${email}:${inviteCode}`,
     });
   }
+
+  /**
+   * Task deadline / overdue reminder. Sent by the server-side scan in
+   * DeadlineReminderService — the title and body are already rendered there so
+   * the in-app notification and the mail can never say different things. The
+   * caller supplies the idempotency key (recipient + task + type + day) so a
+   * re-run of the scan re-enqueues the same job id and is ignored.
+   */
+  async sendTaskDeadlineReminder(input: {
+    to: string;
+    name: string;
+    title: string;
+    message: string;
+    idempotencyKey: string;
+  }): Promise<void> {
+    await this.email.enqueue({
+      kind: EmailKind.Notification,
+      to: input.to,
+      subject: input.title,
+      text: `Hi ${input.name}, ${input.message}`,
+      context: { name: input.name, title: input.title },
+      idempotencyKey: input.idempotencyKey,
+    });
+  }
 }

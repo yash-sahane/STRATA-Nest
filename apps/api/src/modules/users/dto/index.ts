@@ -1,12 +1,26 @@
-import { IsEmail, IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsEmail,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
+import { TrimmedText } from '@strata/common';
 
 export class UpdateUserDto {
+  // A 10,000-character display name was accepted here and then rendered in the
+  // header, the sidebar and every avatar tooltip, blowing the page out to
+  // 80,479px wide with a horizontal scrollbar on every route.
+  @TrimmedText()
   @IsOptional()
   @IsString()
+  @IsNotEmpty()
+  @MaxLength(255)
   name?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(50)
   phone?: string;
 
   @IsOptional()
@@ -31,7 +45,9 @@ export class UpdateUserDto {
 }
 
 export class InviteUserDto {
+  @TrimmedText()
   @IsString()
+  @IsNotEmpty()
   @MaxLength(255)
   name!: string;
 

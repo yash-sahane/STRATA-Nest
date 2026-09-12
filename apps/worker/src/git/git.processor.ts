@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Worker, type Job } from 'bullmq';
-import { GIT_JOB, Queues, type GitCommitInput, type GitJob } from '@strata/shared';
+import { Queues, type GitCommitInput, type GitJob } from '@strata/shared';
 import { PrismaService } from '@strata/prisma';
 
 const CLOSE_INTENT = /\b(fix(e[sd])?|close[sd]?|resolve[sd]?)\b/i;

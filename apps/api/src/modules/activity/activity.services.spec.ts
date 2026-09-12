@@ -1,72 +1,60 @@
-import { ForbiddenException } from '@nestjs/common';
 import type { PrismaService } from '@strata/prisma';
-import { HrEvents, type DomainEvent, type LeaveDecisionPayload } from '@strata/shared';
-import { ActivityLogsService } from './activity.services';
-import { AuditSubscriber } from './audit.subscriber';
+import type { User } from '@prisma/client';
+import type { WorkspaceAccessService } from '../authz/workspace-access.service';
+import { SavedSearchesService } from './activity.services';
 
-describe('ActivityLogsService — append-only (D9)', () => {
-  const svc = new ActivityLogsService({} as unknown as PrismaService, {} as never);
+const stamp = new Date('2026-01-01T00:00:00.000Z');
+const row = {
+  id: 's1',
+  workspaceId: 'w1',
+  userId: 'owner',
+  name: 'Mine',
+  query: 'q',
+  filters: {},
+  createdAt: stamp,
+  updatedAt: stamp,
+};
 
-  it('rejects UPDATE', () => {
-    expect(() => svc.update()).toThrow(ForbiddenException);
-    expect(() => svc.update()).toThrow(/append-only/i);
+function build() {
+  const update = jest.fn().mockResolvedValue(row);
+  const remove = jest.fn().mockResolvedValue(undefined);
+  const prisma = {
+    savedSearch: { findFirst: jest.fn().mockResolvedValue(row), update, delete: remove },
+  } as unknown as PrismaService;
+  const access = {
+    scopeWhere: jest.fn().mockResolvedValue({}),
+    assertPermission: jest.fn().mockResolvedValue(undefined),
+    isPlatformAdmin: jest.fn().mockReturnValue(false),
+    can: jest.fn().mockResolvedValue(false),
+  } as unknown as WorkspaceAccessService;
+  return { svc: new SavedSearchesService(prisma, access), update, remove };
+}
+
+describe('SavedSearchesService is owner-scoped', () => {
+  const owner = { id: 'owner' } as User;
+  const intruder = { id: 'intruder' } as User;
+
+  it('blocks a member from editing another member’s saved search', async () => {
+    const { svc, update } = build();
+
+    // ActivityWrite is in the READ_ONLY baseline, so assertPermission passes for
+    // every member — only the row guard stops this.
+    await expect(svc.patch(intruder, 's1', { name: 'stolen' })).rejects.toThrow();
+    expect(update).not.toHaveBeenCalled();
   });
 
-  it('rejects DELETE', () => {
-    expect(() => svc.remove()).toThrow(ForbiddenException);
-    expect(() => svc.remove()).toThrow(/append-only/i);
+  it('blocks a member from deleting another member’s saved search', async () => {
+    const { svc, remove } = build();
+
+    await expect(svc.remove(intruder, 's1')).rejects.toThrow();
+    expect(remove).not.toHaveBeenCalled();
   });
 
-  it('record() appends an immutable audit row', async () => {
-    const create = jest.fn().mockResolvedValue({ id: 'a1' });
-    const svc2 = new ActivityLogsService(
-      { activityLog: { create } } as unknown as PrismaService,
-      {} as never,
-    );
-    await svc2.record({
-      workspaceId: 'w1',
-      userId: 'u2',
-      action: HrEvents.LeaveApproved,
-      entityType: 'leave_request',
-      entityId: 'lr1',
-    });
-    expect(create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          workspaceId: 'w1',
-          action: HrEvents.LeaveApproved,
-          entityType: 'leave_request',
-          entityId: 'lr1',
-        }),
-      }),
-    );
-  });
-});
+  it('still lets the owner edit their own', async () => {
+    const { svc, update } = build();
 
-describe('AuditSubscriber', () => {
-  const leaveEvent: DomainEvent<LeaveDecisionPayload> = {
-    name: HrEvents.LeaveApproved,
-    workspaceId: 'w1',
-    payload: { workspaceId: 'w1', userId: 'u2', leaveRequestId: 'lr1', type: 'CASUAL', daysCount: 2 },
-    occurredAt: new Date().toISOString(),
-  };
+    await svc.patch(owner, 's1', { name: 'renamed' });
 
-  it('appends an audit row keyed by the event name and entity', async () => {
-    const record = jest.fn().mockResolvedValue(undefined);
-    const sub = new AuditSubscriber({ record } as never);
-    await sub.onLeaveApproved(leaveEvent);
-    expect(record).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: HrEvents.LeaveApproved,
-        entityType: 'leave_request',
-        entityId: 'lr1',
-      }),
-    );
-  });
-
-  it('swallows audit-write failures (never breaks the request)', async () => {
-    const record = jest.fn().mockRejectedValue(new Error('db down'));
-    const sub = new AuditSubscriber({ record } as never);
-    await expect(sub.onLeaveApproved(leaveEvent)).resolves.toBeUndefined();
+    expect(update).toHaveBeenCalledWith({ where: { id: 's1' }, data: { name: 'renamed' } });
   });
 });

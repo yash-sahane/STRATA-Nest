@@ -1,4 +1,11 @@
-import { IsObject, IsOptional, IsString } from 'class-validator';
+import {
+  IsNotEmpty,
+  IsObject,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
+import { TrimmedText } from '@strata/common';
 
 export class CreateActivityLogDto {
   @IsString() workspaceId!: string;
@@ -11,7 +18,7 @@ export class CreateActivityLogDto {
 
 export class CreateSavedSearchDto {
   @IsString() workspaceId!: string;
-  @IsString() name!: string;
+  @TrimmedText() @IsString() @IsNotEmpty() @MaxLength(255) name!: string;
   @IsString() query!: string;
   @IsOptional() @IsObject() filters?: Record<string, unknown>;
 }

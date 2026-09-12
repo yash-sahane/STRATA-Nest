@@ -17,6 +17,7 @@ function task(over: Partial<Task> = {}): Task {
     description: '',
     status: 'BACKLOG',
     priority: 'MEDIUM',
+    completedAt: null,
     assigneeIds: ['u1'],
     assignedBy: '',
     assignedByName: '',
@@ -39,7 +40,7 @@ function task(over: Partial<Task> = {}): Task {
 }
 
 describe('taskResponse', () => {
-  it('keeps JSON fields as arrays, maps createdBy, and preserves the 30-field order', () => {
+  it('keeps JSON fields as arrays, maps createdBy, and preserves the 32-field order', () => {
     const r = taskResponse(task({ dueDate: new Date('2026-07-01T09:00:00.000Z') }));
     expect(r.labels).toEqual(['lbl1']);
     expect(r.assigneeIds).toEqual(['u1']);
@@ -52,11 +53,20 @@ describe('taskResponse', () => {
       'functionalRequirementId', 'parentTaskId', 'title', 'description', 'status', 'priority',
       'assigneeIds', 'assignedBy', 'assignedByName', 'assignedTo', 'assignedToNames', 'watcherIds',
       'createdBy', 'createdByName', 'dueDate', 'estimatedHours', 'actualHours', 'labels',
-      'attachments', 'customFields', 'position', 'blockedBy', 'blocks', 'createdAt', 'updatedAt',
+      'attachments', 'customFields', 'position', 'blockedBy', 'blocks', 'completedAt', 'createdAt',
+      'updatedAt',
     ]);
   });
 
   it('emits null for unset dueDate', () => {
     expect(taskResponse(task()).dueDate).toBeNull();
+  });
+
+  it('exposes completedAt so trends can bucket on completion, not updatedAt', () => {
+    expect(taskResponse(task()).completedAt).toBeNull();
+    expect(
+      taskResponse(task({ status: 'DONE', completedAt: new Date('2026-03-02T08:00:00.000Z') }))
+        .completedAt,
+    ).toBe('2026-03-02T08:00:00.000000Z');
   });
 });

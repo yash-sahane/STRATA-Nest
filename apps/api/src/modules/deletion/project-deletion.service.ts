@@ -1,5 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '@strata/prisma';
+import { writeAuditRow } from '../activity/audit-writer';
 import type { User } from '@prisma/client';
 import { Permission } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
@@ -69,6 +70,18 @@ export class ProjectDeletionService {
     await this.sideEffects.deleteBlobs(fileRows as FileRef[]);
     this.sideEffects.revokeWebhooks(integrations);
     this.sideEffects.emitDeletes(deleted);
+    // Aggregate deletes never touch ScopedCrudService.remove, so the trail is
+    // appended here. Only the ROOT is recorded — a cascade can remove hundreds of
+    // rows and one audit entry per child would bury the action that caused them.
+    await writeAuditRow(this.prisma, {
+      workspaceId: workspaceId,
+      userId: user.id,
+      entity: 'project',
+      action: 'deleted',
+      entityId: projectId,
+      row: project as unknown as Record<string, unknown>,
+      extraMetadata: { cascadeRows: deleted.length },
+    });
     await this.sideEffects.purgeGitJobs([projectId]);
     this.logger.log(`project ${projectId} deleted: ${deleted.length} rows removed`);
   }

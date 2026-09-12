@@ -1,10 +1,13 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { type ListQuerySpec } from '@strata/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { PlanningEvents } from '@strata/shared';
 import { PrismaService } from '@strata/prisma';
 import type { Retrospective, Sprint, User } from '@prisma/client';
 import { Permission, type PermissionKey } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { ScopedCrudService } from '../workspaces/scoped-crud.base';
+import { assertLinkInProject, assertProjectInWorkspace } from '../workspaces/workspace-refs';
 import type {
   CreateRetrospectiveDto,
   CreateSprintDto,
@@ -16,6 +19,7 @@ import { retrospectiveResponse, sprintResponse } from './mappers';
 @Injectable()
 export class SprintsService extends ScopedCrudService<Sprint, ReturnType<typeof sprintResponse>> {
   protected readonly model = 'sprint';
+  protected readonly auditEntity = 'sprint';
   protected readonly writePermission: PermissionKey = Permission.PlanningWrite;
   protected readonly spec: ListQuerySpec = {
     filterable: {
@@ -26,35 +30,93 @@ export class SprintsService extends ScopedCrudService<Sprint, ReturnType<typeof 
     sortable: { createdAt: 'createdAt', name: 'name', startDate: 'startDate' },
     defaultOrderBy: { createdAt: 'desc' },
   };
-  constructor(prisma: PrismaService, access: WorkspaceAccessService) {
+  constructor(
+    prisma: PrismaService,
+    access: WorkspaceAccessService,
+    private readonly events: EventEmitter2,
+  ) {
     super(prisma, access);
   }
   protected map(row: Sprint) {
     return sprintResponse(row);
   }
-  create(user: User, dto: CreateSprintDto) {
+  async create(user: User, dto: CreateSprintDto) {
+    const startDate = parseSprintDate(dto.startDate, 'startDate');
+    const endDate = parseSprintDate(dto.endDate, 'endDate');
+    assertRangeOrdered(startDate, endDate);
+    await assertProjectInWorkspace(this.prisma, dto.projectId, dto.workspaceId);
     return this.createIn(user, dto.workspaceId, {
       workspaceId: dto.workspaceId,
       projectId: dto.projectId,
       name: dto.name,
       goal: dto.goal ?? '',
-      startDate: new Date(dto.startDate),
-      endDate: new Date(dto.endDate),
+      startDate,
+      endDate,
       status: dto.status ?? 'PLANNING',
       retrospectiveNotes: dto.retrospectiveNotes ?? '',
       createdById: user.id,
       createdByName: user.name ?? '',
     });
   }
-  patch(user: User, id: string, dto: UpdateSprintDto) {
+  async patch(user: User, id: string, dto: UpdateSprintDto) {
     const data: Record<string, unknown> = {};
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.goal !== undefined) data.goal = dto.goal;
-    if (dto.startDate !== undefined) data.startDate = new Date(dto.startDate);
-    if (dto.endDate !== undefined) data.endDate = new Date(dto.endDate);
+    if (dto.startDate !== undefined) data.startDate = parseSprintDate(dto.startDate, 'startDate');
+    if (dto.endDate !== undefined) data.endDate = parseSprintDate(dto.endDate, 'endDate');
+    // Validate the MERGED range, not just the DTO. A patch carrying one date
+    // short-circuited the guard and could land `endDate` before the sprint's
+    // stored `startDate` — the exact negative span the check exists to reject,
+    // reachable on PATCH while POST was protected.
+    if (data.startDate !== undefined || data.endDate !== undefined) {
+      const row = await this.findScoped(user, id);
+      assertRangeOrdered(
+        (data.startDate as Date | undefined) ?? row.startDate,
+        (data.endDate as Date | undefined) ?? row.endDate,
+      );
+    }
     if (dto.status !== undefined) data.status = dto.status;
     if (dto.retrospectiveNotes !== undefined) data.retrospectiveNotes = dto.retrospectiveNotes;
-    return this.update(user, id, data);
+
+    // `sprint.started` existed in the shared event contract but nothing ever
+    // emitted it — starting a sprint is an ordinary PATCH, so the milestone was
+    // invisible to the audit trail and to realtime while `sprint.completed`
+    // (which has its own service) was not. Read the previous status first so the
+    // event fires on the PLANNING -> ACTIVE transition only, never on a repeat
+    // PATCH of an already-active sprint.
+    const before = dto.status === 'ACTIVE' ? await this.findScoped(user, id) : null;
+    const result = await this.update(user, id, data);
+    if (before && before.status !== 'ACTIVE') {
+      this.events.emit(PlanningEvents.SprintStarted, {
+        name: PlanningEvents.SprintStarted,
+        workspaceId: before.workspaceId,
+        payload: {
+          workspaceId: before.workspaceId,
+          projectId: before.projectId,
+          sprintId: id,
+          actorId: user.id,
+        },
+        occurredAt: new Date().toISOString(),
+      });
+    }
+    return result;
+  }
+}
+
+/** `new Date('garbage')` is an Invalid Date, which Prisma rejects with an opaque
+ *  driver error. Fail as a 400 with the offending field named instead. */
+function parseSprintDate(value: string, field: string): Date {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new BadRequestException(`${field} must be a valid ISO date`);
+  }
+  return parsed;
+}
+
+/** end < start makes every downstream duration/burndown computation negative. */
+function assertRangeOrdered(startDate: Date, endDate: Date): void {
+  if (endDate.getTime() < startDate.getTime()) {
+    throw new BadRequestException('endDate must be on or after startDate');
   }
 }
 
@@ -64,6 +126,7 @@ export class RetrospectivesService extends ScopedCrudService<
   ReturnType<typeof retrospectiveResponse>
 > {
   protected readonly model = 'retrospective';
+  protected readonly auditEntity = 'retrospective';
   protected readonly writePermission: PermissionKey = Permission.PlanningWrite;
   protected readonly spec: ListQuerySpec = {
     filterable: {
@@ -80,7 +143,9 @@ export class RetrospectivesService extends ScopedCrudService<
   protected map(row: Retrospective) {
     return retrospectiveResponse(row);
   }
-  create(user: User, dto: CreateRetrospectiveDto) {
+  async create(user: User, dto: CreateRetrospectiveDto) {
+    await assertProjectInWorkspace(this.prisma, dto.projectId, dto.workspaceId);
+    await assertLinkInProject(this.prisma, 'sprint', 'Sprint', dto.sprintId, dto.projectId);
     return this.createIn(user, dto.workspaceId, {
       workspaceId: dto.workspaceId,
       projectId: dto.projectId,

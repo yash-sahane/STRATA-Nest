@@ -9,14 +9,15 @@ import type {
 
 const asJson = (v: Prisma.JsonValue): unknown => v ?? [];
 
-// accessToken is write-only — NEVER serialized back.
+// Credentials are write-only — NEVER serialized back. accessToken was already
+// omitted; webhookSecret was not, so any member of the workspace could read it
+// from a plain list call and forge signed webhooks against the project.
 export function githubIntegrationResponse(g: GitHubIntegration) {
   return {
     id: String(g.id),
     projectId: g.projectId,
     repoOwner: g.repoOwner,
     repoName: g.repoName,
-    webhookSecret: g.webhookSecret,
     autoUpdateStatus: g.autoUpdateStatus,
     enabledEvents: asJson(g.enabledEvents),
     createdAt: formatApiTimestamp(g.createdAt),
@@ -29,7 +30,6 @@ export function gitlabIntegrationResponse(g: GitLabIntegration) {
     id: String(g.id),
     projectId: g.projectId,
     projectPath: g.projectPath,
-    webhookSecret: g.webhookSecret,
     autoUpdateStatus: g.autoUpdateStatus,
     enabledEvents: asJson(g.enabledEvents),
     createdAt: formatApiTimestamp(g.createdAt),

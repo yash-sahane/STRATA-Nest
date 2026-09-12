@@ -87,6 +87,10 @@ export class ActivityLogsService extends ScopedCrudService<
   }
 }
 
+/**
+ * SavedSearch — a PERSONAL collection: `create` always stamps the caller as
+ * owner and nothing in the product shares a saved search with anyone else.
+ */
 @Injectable()
 export class SavedSearchesService extends ScopedCrudService<
   SavedSearch,
@@ -94,6 +98,15 @@ export class SavedSearchesService extends ScopedCrudService<
 > {
   protected readonly model = 'savedSearch';
   protected readonly writePermission: PermissionKey = Permission.ActivityWrite;
+  /**
+   * Row-level owner guard. `writePermission` alone cannot protect these rows:
+   * ActivityWrite is part of the READ_ONLY member baseline (permissions.ts),
+   * which every member holds so they can save their own searches — so without
+   * this, any member could PATCH or DELETE a colleague's saved search. There is
+   * deliberately no `ownerOverridePermission`: nobody manages another user's
+   * saved searches.
+   */
+  protected readonly ownerField = 'userId';
   protected readonly spec: ListQuerySpec = {
     filterable: { workspaceId: { field: 'workspaceId' }, userId: { field: 'userId' } },
     sortable: { createdAt: 'createdAt', name: 'name' },

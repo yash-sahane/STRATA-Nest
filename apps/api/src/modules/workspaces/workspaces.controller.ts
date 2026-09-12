@@ -32,6 +32,12 @@ export class WorkspacesController {
     return this.invitations.accept(user, dto);
   }
 
+  /** Declared before `:id` — otherwise Nest matches "directory" as a workspace id. */
+  @Get('directory')
+  directory(@CurrentUser() user: User) {
+    return this.workspaces.directory(user);
+  }
+
   @Get(':id')
   retrieve(@CurrentUser() user: User, @Param('id') id: string) {
     return this.workspaces.retrieve(user, id);

@@ -4,6 +4,8 @@ import { generateId, paginate, parseListQuery, type ListQuerySpec } from '@strat
 import type { PaginatedResponse } from '@strata/shared';
 import { PrismaService } from '@strata/prisma';
 import type { Prisma, User } from '@prisma/client';
+import { Permission } from '../authz/permissions';
+import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { MailService } from '../mail/mail.service';
 import { PasswordService } from '../auth/services/password.service';
 import type { InviteUserDto, UpdateUserDto } from './dto';
@@ -18,6 +20,8 @@ const USER_ROLES = new Set([
   'CONTENT_ENGINEER',
   'MEMBER',
 ]);
+
+const USER_STATUSES = new Set(['ACTIVE', 'INACTIVE']);
 
 const USER_LIST_SPEC: ListQuerySpec = {
   filterable: {
@@ -41,6 +45,7 @@ export class UsersService {
     private readonly userMapper: UserMapper,
     private readonly passwords: PasswordService,
     private readonly mail: MailService,
+    private readonly access: WorkspaceAccessService,
   ) {}
 
   private isPlatformAdmin(user: User): boolean {
@@ -99,10 +104,34 @@ export class UsersService {
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.phone !== undefined) data.phone = dto.phone;
     if (dto.avatar !== undefined) data.avatar = dto.avatar;
-    if (dto.role !== undefined) data.role = dto.role;
-    if (dto.status !== undefined) data.status = dto.status;
-    if (dto.workspaceId !== undefined) data.workspaceId = dto.workspaceId;
-    if (dto.email !== undefined) data.email = dto.email;
+    // role/status/workspaceId/email are directory + identity columns, not
+    // profile fields: self-service editing must never write them (an unverified
+    // self-service e-mail change rebinds the login identity), and the values
+    // are constrained rather than free text.
+    const privileged =
+      dto.role !== undefined ||
+      dto.status !== undefined ||
+      dto.workspaceId !== undefined ||
+      dto.email !== undefined;
+    if (privileged) {
+      if (!this.isPlatformAdmin(caller)) {
+        return { softError: { status: 403, message: 'Forbidden' } };
+      }
+      if (dto.role !== undefined) {
+        if (!USER_ROLES.has(dto.role)) {
+          return { softError: { status: 400, message: `Unknown role "${dto.role}".` } };
+        }
+        data.role = dto.role;
+      }
+      if (dto.status !== undefined) {
+        if (!USER_STATUSES.has(dto.status)) {
+          return { softError: { status: 400, message: `Unknown status "${dto.status}".` } };
+        }
+        data.status = dto.status;
+      }
+      if (dto.workspaceId !== undefined) data.workspaceId = dto.workspaceId;
+      if (dto.email !== undefined) data.email = dto.email.toLowerCase();
+    }
     const updated = Object.keys(data).length
       ? await this.prisma.user.update({ where: { id: target.id }, data })
       : target;
@@ -113,14 +142,16 @@ export class UsersService {
     const workspace = await this.prisma.workspace.findUnique({ where: { id: dto.workspaceId } });
     if (!workspace) return { softError: { status: 404, message: 'Workspace not found' } };
 
-    const callerMembership = await this.prisma.workspaceMember.findFirst({
-      where: { workspaceId: workspace.id, userId: caller.id, status: 'ACTIVE' },
-    });
-    if (!callerMembership && !this.isPlatformAdmin(caller) && workspace.ownerId !== caller.id) {
-      return { softError: { status: 403, message: 'Not authorised to invite into this workspace' } };
+    // Inviting mints an ACTIVE membership with the caller-supplied role, so it
+    // requires member:invite — not merely "is a member" — and the role must be
+    // one the workspace actually defines (an unknown one silently resolves to
+    // the read-only floor).
+    if (!this.isPlatformAdmin(caller) && workspace.ownerId !== caller.id) {
+      await this.access.assertPermission(caller, workspace.id, Permission.MemberInvite);
     }
 
     const roleName = dto.roleName ?? 'MEMBER';
+    await this.access.assertValidRole(workspace.id, roleName);
     const workspaceName = dto.workspaceName || workspace.name;
     const email = dto.email.toLowerCase();
     const existing = await this.prisma.user.findFirst({

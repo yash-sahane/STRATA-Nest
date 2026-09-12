@@ -13,6 +13,14 @@ export interface GeneratedNode {
   estimatedHours?: number;
   type?: string;
   parentId?: string;
+  /**
+   * Cross-references the model draws between sections. The prompt asks for an
+   * array index as a string, but the answer is whatever the model finds natural
+   * — a number, "2", "epic-2", or the referenced node's own title — so these
+   * stay `unknown` and the service resolves them.
+   */
+  functionalRequirementIds?: unknown;
+  epicId?: unknown;
 }
 
 export interface GeneratedTree {
@@ -26,6 +34,5 @@ export class BulkSaveDto {
   @IsString() projectId!: string;
   @IsString() workspaceId!: string;
   @IsOptional() @IsString() projectCode?: string;
-  @IsOptional() @IsString() userId?: string;
   @IsOptional() @IsObject() generated?: GeneratedTree;
 }

@@ -10,6 +10,7 @@ import type {
   Prisma,
   User,
 } from '@prisma/client';
+import { writeAuditRow, type AuditAction } from '../activity/audit-writer';
 import { Permission } from '../authz/permissions';
 import { IntegrationAccess } from './integration-access.service';
 import { TokenCipher } from './token-cipher';
@@ -34,6 +35,10 @@ import {
 abstract class ProjectScopedService<TRow extends { projectId: string }, TResponse> {
   protected abstract readonly model: string;
   protected abstract readonly spec: ListQuerySpec;
+  /** Entity name for the audit trail; see ScopedCrudService.auditEntity.
+   *  These rows are project-scoped, so the workspace is resolved from the
+   *  project before the row is written. */
+  protected readonly auditEntity?: string;
   protected abstract map(row: TRow): TResponse;
 
   constructor(
@@ -81,18 +86,61 @@ abstract class ProjectScopedService<TRow extends { projectId: string }, TRespons
     const row = await this.findScoped(user, id);
     await this.ia.assertProjectWrite(user, row.projectId, Permission.IntegrationWrite);
     await this.delegate.delete({ where: { id } });
+    await this.recordAudit(user, row.projectId, 'deleted', id, row as Record<string, unknown>);
+  }
+
+  /** Audit an integration write. The workspace comes from the owning project,
+   *  since these rows carry only a projectId. */
+  protected async recordAudit(
+    user: User,
+    projectId: string,
+    action: AuditAction,
+    entityId: string,
+    row?: Record<string, unknown>,
+    changedFields?: string[],
+  ): Promise<void> {
+    if (!this.auditEntity) return;
+    try {
+      const project = await this.prisma.project.findUnique({
+        where: { id: projectId },
+        select: { workspaceId: true },
+      });
+      await writeAuditRow(this.prisma, {
+        workspaceId: project?.workspaceId,
+        userId: user.id,
+        entity: this.auditEntity,
+        action,
+        entityId,
+        row,
+        changedFields,
+      });
+    } catch {
+      // Same contract as writeAuditRow: the trail never breaks the write it
+      // records — including when the workspace lookup itself fails.
+    }
   }
 
   protected async createRow(user: User, projectId: string, data: Record<string, unknown>): Promise<TResponse> {
     await this.ia.assertProjectWrite(user, projectId, Permission.IntegrationWrite);
-    const row = await this.delegate.create({ data: { id: generateId(), ...data } });
-    return this.map(row as TRow);
+    const row = (await this.delegate.create({ data: { id: generateId(), ...data } })) as TRow;
+    const created = row as Record<string, unknown>;
+    await this.recordAudit(user, projectId, 'created', String(created.id ?? ''), created);
+    return this.map(row);
   }
 
   protected async updateRow(user: User, id: string, data: Record<string, unknown>): Promise<TResponse> {
     const row = await this.findScoped(user, id);
     await this.ia.assertProjectWrite(user, row.projectId, Permission.IntegrationWrite);
-    return this.map((await this.delegate.update({ where: { id }, data })) as TRow);
+    const updated = (await this.delegate.update({ where: { id }, data })) as TRow;
+    await this.recordAudit(
+      user,
+      row.projectId,
+      'updated',
+      id,
+      updated as Record<string, unknown>,
+      Object.keys(data),
+    );
+    return this.map(updated);
   }
 }
 
@@ -102,6 +150,7 @@ export class GitHubIntegrationsService extends ProjectScopedService<
   ReturnType<typeof githubIntegrationResponse>
 > {
   protected readonly model = 'gitHubIntegration';
+  protected readonly auditEntity = 'github_integration';
   protected readonly spec: ListQuerySpec = {
     filterable: { projectId: { field: 'projectId' } },
     sortable: { createdAt: 'createdAt' },
@@ -142,6 +191,7 @@ export class GitLabIntegrationsService extends ProjectScopedService<
   ReturnType<typeof gitlabIntegrationResponse>
 > {
   protected readonly model = 'gitLabIntegration';
+  protected readonly auditEntity = 'gitlab_integration';
   protected readonly spec: ListQuerySpec = {
     filterable: { projectId: { field: 'projectId' } },
     sortable: { createdAt: 'createdAt' },
@@ -180,6 +230,7 @@ export class DiscordIntegrationsService extends ProjectScopedService<
   ReturnType<typeof discordIntegrationResponse>
 > {
   protected readonly model = 'discordIntegration';
+  protected readonly auditEntity = 'discord_integration';
   protected readonly spec: ListQuerySpec = {
     filterable: { projectId: { field: 'projectId' } },
     sortable: { createdAt: 'createdAt' },

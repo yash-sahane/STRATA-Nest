@@ -40,8 +40,10 @@ describe('functionalRequirementResponse', () => {
       epicId: '',
       sprintId: '',
       clientRequirementId: 'cr1',
+      parentRequirementId: '',
       title: 'T',
       description: '',
+      type: 'FUNCTIONAL',
       complexity: 'MEDIUM',
       priority: '',
       status: 'DRAFT',
@@ -58,7 +60,8 @@ describe('functionalRequirementResponse', () => {
     expect(r.createdBy).toBe('u1');
     expect(Object.keys(r)).toEqual([
       'id', 'workspaceId', 'projectId', 'hierarchyId', 'epicId', 'sprintId',
-      'clientRequirementId', 'title', 'description', 'complexity', 'priority', 'status',
+      'clientRequirementId', 'parentRequirementId', 'title', 'description', 'type',
+      'complexity', 'priority', 'status',
       'progress', 'reusable', 'assignedTo', 'assignedToNames', 'tags', 'linkedProjectIds',
       'createdBy', 'createdByName', 'createdAt', 'updatedAt',
     ]);

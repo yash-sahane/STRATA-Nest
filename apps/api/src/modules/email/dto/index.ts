@@ -14,4 +14,8 @@ export class SendGenericEmailDto {
   @IsString() subject!: string;
   @IsString() html!: string;
   @IsOptional() @IsString() text?: string;
+  /** Optional provenance so the recipient's email opt-out for this notification
+   *  type can be honoured server-side. Omitted → nothing to check, send as before. */
+  @IsOptional() @IsString() workspaceId?: string;
+  @IsOptional() @IsString() notificationType?: string;
 }

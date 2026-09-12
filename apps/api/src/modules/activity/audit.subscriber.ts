@@ -2,10 +2,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import {
   HrEvents,
+  PlanningEvents,
   WorkspaceEvents,
   type DomainEvent,
   type JoinRequestHandledPayload,
   type LeaveDecisionPayload,
+  type SprintLifecyclePayload,
   type TimeEntryDecisionPayload,
   type WorkspaceMemberAddedPayload,
   type WorkspaceMemberRoleChangedPayload,
@@ -53,6 +55,48 @@ export class AuditSubscriber {
       entityType: 'workspace_member',
       entityId: e.payload.userId,
       changes: { role: [e.payload.previousRole, e.payload.role] },
+    });
+  }
+
+  /** Emitted by WorkspaceMembersService but previously unhandled anywhere, so
+   *  removing someone from a workspace left no trace at all. There is
+   *  deliberately no notification counterpart: the removed member has just lost
+   *  access to the workspace the notification would be scoped to. */
+  @OnEvent(WorkspaceEvents.MemberRemoved)
+  onMemberRemoved(e: DomainEvent<WorkspaceMemberAddedPayload>): Promise<void> {
+    return this.record({
+      workspaceId: e.payload.workspaceId,
+      userId: e.payload.userId,
+      action: WorkspaceEvents.MemberRemoved,
+      entityType: 'workspace_member',
+      entityId: e.payload.userId,
+      metadata: { role: e.payload.role },
+    });
+  }
+
+  @OnEvent(PlanningEvents.SprintStarted)
+  onSprintStarted(e: DomainEvent<SprintLifecyclePayload>): Promise<void> {
+    return this.record({
+      workspaceId: e.payload.workspaceId,
+      userId: e.payload.actorId ?? '',
+      action: PlanningEvents.SprintStarted,
+      entityType: 'sprint',
+      entityId: e.payload.sprintId,
+      metadata: { projectId: e.payload.projectId },
+    });
+  }
+
+  /** Sprint completion runs in its own service, so no generic `sprint.updated`
+   *  row covers it — without this the milestone was never recorded. */
+  @OnEvent(PlanningEvents.SprintCompleted)
+  onSprintCompleted(e: DomainEvent<SprintLifecyclePayload>): Promise<void> {
+    return this.record({
+      workspaceId: e.payload.workspaceId,
+      userId: e.payload.actorId ?? '',
+      action: PlanningEvents.SprintCompleted,
+      entityType: 'sprint',
+      entityId: e.payload.sprintId,
+      metadata: { projectId: e.payload.projectId },
     });
   }
 

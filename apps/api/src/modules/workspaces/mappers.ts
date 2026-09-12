@@ -92,13 +92,34 @@ export function emailInvitationResponse(i: EmailInvitation) {
   };
 }
 
-export function joinRequestResponse(j: JoinRequest) {
+/**
+ * `requester` is what makes the approve/decline queue answerable: the person
+ * asking is by definition NOT a member of the target workspace, so no client
+ * roster can ever resolve `userId` — every card read "Unknown user". The keys
+ * are always emitted (blank when the account is gone) so the hydrating
+ * overrides in JoinRequestsService can fill them in without disturbing the
+ * frozen field order.
+ *
+ * `alreadyMember` is the same idea for a request that reality has overtaken:
+ * the requester can have been let in by another door (an invitation, an invite
+ * code, a direct add) since they asked. Emitted `false` here and filled in by
+ * the same hydration, so a manager is never offered an approve/decline decision
+ * without being told it has already been settled.
+ */
+export function joinRequestResponse(
+  j: JoinRequest,
+  requester?: Pick<User, 'name' | 'email' | 'avatar'> | null,
+) {
   return {
     id: String(j.id),
     workspaceId: j.workspaceId,
     userId: j.userId,
+    userName: requester?.name ?? '',
+    userEmail: requester?.email ?? '',
+    userAvatar: requester?.avatar ?? '',
     message: j.message,
     status: j.status,
+    alreadyMember: false,
     handledBy: j.handledById,
     createdAt: formatApiTimestamp(j.createdAt),
     updatedAt: formatApiTimestamp(j.updatedAt),

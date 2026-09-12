@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { DeletionModule } from '../deletion/deletion.module';
 import {
   ClientRequirementsController,
   FunctionalRequirementsController,
@@ -9,6 +10,7 @@ import {
 } from './requirements.services';
 
 @Module({
+  imports: [DeletionModule],
   controllers: [ClientRequirementsController, FunctionalRequirementsController],
   providers: [ClientRequirementsService, FunctionalRequirementsService],
 })

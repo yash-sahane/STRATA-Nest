@@ -54,7 +54,12 @@ export class SprintCompletionService {
     this.events.emit(PlanningEvents.SprintCompleted, {
       name: PlanningEvents.SprintCompleted,
       workspaceId: sprint.workspaceId,
-      payload: { workspaceId: sprint.workspaceId, projectId: sprint.projectId, sprintId },
+      payload: {
+        workspaceId: sprint.workspaceId,
+        projectId: sprint.projectId,
+        sprintId,
+        actorId: user.id,
+      },
       occurredAt: new Date().toISOString(),
     });
     return sprintResponse(updated as Sprint);

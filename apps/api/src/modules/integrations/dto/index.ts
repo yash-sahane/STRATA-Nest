@@ -1,4 +1,5 @@
 import { IsArray, IsBoolean, IsOptional, IsString } from 'class-validator';
+import { IsStrictBoolean } from '@strata/common';
 
 export class CreateGitHubIntegrationDto {
   @IsString() projectId!: string;
@@ -6,7 +7,7 @@ export class CreateGitHubIntegrationDto {
   @IsString() repoName!: string;
   @IsString() accessToken!: string;
   @IsOptional() @IsString() webhookSecret?: string;
-  @IsOptional() @IsBoolean() autoUpdateStatus?: boolean;
+  @IsOptional() @IsStrictBoolean() @IsBoolean() autoUpdateStatus?: boolean;
   @IsOptional() @IsArray() enabledEvents?: unknown[];
 }
 export class UpdateGitHubIntegrationDto {
@@ -14,7 +15,7 @@ export class UpdateGitHubIntegrationDto {
   @IsOptional() @IsString() repoName?: string;
   @IsOptional() @IsString() accessToken?: string;
   @IsOptional() @IsString() webhookSecret?: string;
-  @IsOptional() @IsBoolean() autoUpdateStatus?: boolean;
+  @IsOptional() @IsStrictBoolean() @IsBoolean() autoUpdateStatus?: boolean;
   @IsOptional() @IsArray() enabledEvents?: unknown[];
 }
 
@@ -23,14 +24,14 @@ export class CreateGitLabIntegrationDto {
   @IsString() projectPath!: string;
   @IsString() accessToken!: string;
   @IsOptional() @IsString() webhookSecret?: string;
-  @IsOptional() @IsBoolean() autoUpdateStatus?: boolean;
+  @IsOptional() @IsStrictBoolean() @IsBoolean() autoUpdateStatus?: boolean;
   @IsOptional() @IsArray() enabledEvents?: unknown[];
 }
 export class UpdateGitLabIntegrationDto {
   @IsOptional() @IsString() projectPath?: string;
   @IsOptional() @IsString() accessToken?: string;
   @IsOptional() @IsString() webhookSecret?: string;
-  @IsOptional() @IsBoolean() autoUpdateStatus?: boolean;
+  @IsOptional() @IsStrictBoolean() @IsBoolean() autoUpdateStatus?: boolean;
   @IsOptional() @IsArray() enabledEvents?: unknown[];
 }
 

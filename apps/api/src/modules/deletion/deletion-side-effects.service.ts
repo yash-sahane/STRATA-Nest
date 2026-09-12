@@ -3,6 +3,7 @@ import { StorageService } from '../storage/storage.service';
 import { GitQueueService } from '../integrations/git-queue.service';
 import { RealtimeService } from '../realtime/realtime.service';
 
+/** A (collection, id) reference to one row a cascade removed or detached. */
 export interface DeletedEntity {
   collection: string; // realtime slug, e.g. 'tasks'
   id: string;
@@ -35,6 +36,24 @@ export class DeletionSideEffectsService {
     for (const e of entities) {
       try {
         this.realtime.emitEvent(e.collection, `${e.collection}.delete`, e.id, e.workspaceId ?? '', {
+          id: e.id,
+        });
+      } catch (err) {
+        this.logger.warn(`realtime emit failed for ${e.collection}.${e.id}: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  /**
+   * Emit a `<collection>.update` frame per row a cascade DETACHED. Bulk
+   * `updateMany` bypasses the write-hook the same way `deleteMany` does, so
+   * without this a task moved back to the backlog (or unlinked from a deleted
+   * requirement) changes silently for every client except the one that asked.
+   */
+  emitUpdates(entities: DeletedEntity[]): void {
+    for (const e of entities) {
+      try {
+        this.realtime.emitEvent(e.collection, `${e.collection}.update`, e.id, e.workspaceId ?? '', {
           id: e.id,
         });
       } catch (err) {

@@ -10,6 +10,14 @@ import { Queues, type EmailJob } from '@strata/shared';
  * error triggers BullMQ's configured retries/backoff; a permanent condition
  * (no key / no SDK) resolves as a log so the job doesn't retry forever.
  */
+/** The slice of the Resend SDK this processor uses. `send` RESOLVES with an
+ *  `error` rather than rejecting, which is why the result is inspected. */
+interface ResendLike {
+  emails: {
+    send: (options: unknown) => Promise<{ error?: { message?: string; name?: string } | null } | null>;
+  };
+}
+
 @Injectable()
 export class EmailProcessor implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger('EmailProcessor');
@@ -53,19 +61,30 @@ export class EmailProcessor implements OnModuleInit, OnModuleDestroy {
       this.logger.warn(`resend SDK unavailable; logged ${email.kind} → ${email.to}`);
       return { delivered: 'log' };
     }
-    await resend.emails.send({
+    const result = await resend.emails.send({
       from: this.config.get<string>('EMAIL_FROM', 'noreply@example.com'),
       to: email.to,
       subject: email.subject,
       text: email.text,
       html: email.html,
     });
+    /**
+     * The SDK RESOLVES with `{ data, error }` instead of throwing, so an
+     * unchecked call reported a refusal as a successful send: a 403 for an
+     * unverified sending domain still logged "sent" and BullMQ marked the job
+     * complete, so it was never retried and nothing surfaced the failure.
+     * Throwing hands the job back to BullMQ's retry/failed handling.
+     */
+    if (result?.error) {
+      const { message, name } = result.error;
+      throw new Error(`resend refused the message: ${message ?? name ?? 'unknown error'}`);
+    }
     return { delivered: 'resend' };
   }
 
   /** Lazy-load the optional Resend SDK; null if it is not installed. The
    *  specifier is computed so the build does not require the package present. */
-  private async loadResend(apiKey: string): Promise<{ emails: { send: (o: unknown) => Promise<unknown> } } | null> {
+  private async loadResend(apiKey: string): Promise<ResendLike | null> {
     try {
       const specifier = 'resend';
       const mod = (await import(specifier)) as { Resend: new (k: string) => never };

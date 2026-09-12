@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { randomBytes } from 'node:crypto';
 import { generateId, paginate, parseListQuery, type ListQuerySpec } from '@strata/common';
@@ -43,6 +43,45 @@ export class WorkspacesService {
     return map;
   }
 
+  /**
+   * Workspaces the caller could ask to join — id and name only.
+   *
+   * `list()` is scoped to workspaces you are already in, which is correct for
+   * every other screen but made POST /join_requests unusable: it requires a
+   * `workspaceId` and nothing let a non-member discover one, so the whole
+   * request-to-join flow was unreachable from the client.
+   *
+   * DISCLOSURE: this deliberately shows workspace NAMES to any authenticated
+   * user, which is what a request-access flow requires. Nothing else is
+   * exposed — no members, no settings, no counts — and workspaces the caller
+   * already belongs to are filtered out, so it reveals only "these are the
+   * teams you could ask to join".
+   */
+  async directory(user: User): Promise<Array<{ id: string; name: string; requested: boolean }>> {
+    const [memberships, pending] = await Promise.all([
+      this.prisma.workspaceMember.findMany({
+        where: { userId: user.id },
+        select: { workspaceId: true },
+      }),
+      this.prisma.joinRequest.findMany({
+        where: { userId: user.id, status: 'PENDING' },
+        select: { workspaceId: true },
+      }),
+    ]);
+    const mine = new Set(memberships.map((m) => m.workspaceId));
+    const asked = new Set(pending.map((r) => r.workspaceId));
+
+    const rows = await this.prisma.workspace.findMany({
+      where: { id: { notIn: [...mine] } },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+      take: 200,
+    });
+    // `requested` lets the client disable a workspace the user has already
+    // asked about rather than letting them queue duplicates the API refuses.
+    return rows.map((w) => ({ ...w, requested: asked.has(w.id) }));
+  }
+
   async list(
     user: User,
     query: Record<string, string | string[] | undefined>,
@@ -83,9 +122,14 @@ export class WorkspacesService {
     return workspaceResponse(ws, members.get(ws.id) ?? []);
   }
 
-  /** Any authenticated user may create a workspace; the creator becomes the
-   *  owner and an ACTIVE MANAGER member, transactionally. */
+  /** Workspace creation is a platform-admin action — every client surface says
+   *  so (onboarding, the workspace guard, the switcher), and the creator is
+   *  stamped as owner and ACTIVE MANAGER, so leaving it open let any account
+   *  mint itself a tenant it fully controls. Enforced here, not in the UI. */
   async create(user: User, dto: CreateWorkspaceDto) {
+    if (!this.access.isPlatformAdmin(user)) {
+      throw new ForbiddenException('Only administrators can create workspaces');
+    }
     const workspaceId = generateId();
     const [ws] = await this.prisma.$transaction([
       this.prisma.workspace.create({

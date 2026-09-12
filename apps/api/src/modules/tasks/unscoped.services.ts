@@ -1,8 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { generateId, paginate, parseListQuery, type ListQuerySpec } from '@strata/common';
 import type { PaginatedResponse } from '@strata/shared';
 import { PrismaService } from '@strata/prisma';
-import type { KanbanColumn, Prisma, TaskComment, User } from '@prisma/client';
+import type { Prisma, User } from '@prisma/client';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import type {
   CreateKanbanColumnDto,
@@ -79,6 +79,7 @@ export class TaskCommentsService {
 
   async update(user: User, id: string, dto: UpdateTaskCommentDto) {
     const c = await this.ensureAccess(user, id);
+    this.assertAuthor(user, c);
     const data: Prisma.TaskCommentUpdateInput = {};
     if (dto.content !== undefined) data.content = dto.content;
     if (dto.mentions !== undefined) data.mentions = dto.mentions as Prisma.InputJsonValue;
@@ -88,17 +89,37 @@ export class TaskCommentsService {
 
   async remove(user: User, id: string): Promise<void> {
     const c = await this.ensureAccess(user, id);
+    this.assertAuthor(user, c);
     await this.prisma.taskComment.delete({ where: { id: c.id } });
   }
 
-  private async ensureAccess(user: User, id: string): Promise<{ id: string; taskId: string }> {
+  private async ensureAccess(
+    user: User,
+    id: string,
+  ): Promise<{ id: string; taskId: string; userId: string }> {
     const c = await this.prisma.taskComment.findUnique({
       where: { id },
-      select: { id: true, taskId: true },
+      select: { id: true, taskId: true, userId: true },
     });
     if (!c) throw new NotFoundException('Not found.');
     await this.assertTaskAccess(user, c.taskId);
     return c;
+  }
+
+  /**
+   * Editing or deleting a comment is the AUTHOR's right alone.
+   *
+   * Seeing the parent task is not enough: `ensureAccess` only proves the caller
+   * is in the workspace, so without this any member could rewrite or delete
+   * anyone else's comment through the API. The UI has always hidden those
+   * controls for other people's comments — this makes the server agree, rather
+   * than trusting a client that an attacker does not have to use.
+   */
+  private assertAuthor(user: User, comment: { userId: string }): void {
+    if (this.access.isPlatformAdmin(user)) return;
+    if (comment.userId !== user.id) {
+      throw new ForbiddenException('You can only change your own comments.');
+    }
   }
 
   /** Resolve the task's workspace and require the caller to be a member (else 404). */

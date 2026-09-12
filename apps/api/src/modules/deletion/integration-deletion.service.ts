@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '@strata/prisma';
+import { writeAuditRow } from '../activity/audit-writer';
 import type { User } from '@prisma/client';
 import { Permission } from '../authz/permissions';
 import { IntegrationAccess } from '../integrations/integration-access.service';
@@ -37,5 +38,19 @@ export class IntegrationDeletionService {
     this.sideEffects.revokeWebhooks([{ provider: label, projectId: row.projectId }]);
     // Delete the encrypted credential + row (fires realtime .delete via write-hook).
     await delegate.delete({ where: { id } });
+
+    // Integration rows carry only a projectId, so the workspace is resolved for
+    // the trail. Removing a credential-bearing integration is worth recording.
+    const project = await this.prisma.project
+      .findUnique({ where: { id: row.projectId }, select: { workspaceId: true } })
+      .catch(() => null);
+    await writeAuditRow(this.prisma, {
+      workspaceId: project?.workspaceId,
+      userId: user.id,
+      entity: `${label.toLowerCase()}_integration`,
+      action: 'deleted',
+      entityId: id,
+      extraMetadata: { projectId: row.projectId },
+    });
   }
 }
