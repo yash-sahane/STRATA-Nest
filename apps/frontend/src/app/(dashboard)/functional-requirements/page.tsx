@@ -2,6 +2,7 @@
 
 import { PageHeader } from '@/components/layout/page-header';
 import { ErrorState } from '@/components/ui/error-state';
+import { Skeleton } from '@/components/ui/skeleton';
 import {
   FUNCTIONAL_REQUIREMENT_STATUSES,
   getFunctionalRequirementStatusConfig,
@@ -54,7 +55,7 @@ import { Permission } from '@/lib/permissions';
 function FunctionalRequirementsPageContent() {
   const { user } = useAuth();
   const { currentWorkspace } = useCurrentWorkspace();
-  const { data: projects = [] } = useProjects(currentWorkspace?.id);
+  const { data: projects = [], isLoading: projectsLoading } = useProjects(currentWorkspace?.id);
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -305,7 +306,14 @@ function FunctionalRequirementsPageContent() {
       />
 
       {/* Nothing below the picker renders without a project, so say why. */}
-      {projects.length === 0 && (
+      {/* While the projects query is in flight we do not KNOW whether this
+          workspace has any, and `data = []` is what React Query holds either
+          way — so the empty state below waits for an answer rather than
+          asserting one. Telling a workspace that plainly has projects to
+          "create a project" was a straight lie for as long as the request took. */}
+      {projectsLoading && <Skeleton className="h-40 w-full" />}
+
+      {!projectsLoading && projects.length === 0 && (
         <EmptyState
           icon={FolderPlus}
           title="No projects yet"

@@ -4,6 +4,7 @@ import * as React from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCreateActionParam } from '@/hooks/use-create-action-param';
 import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
 import {
   Select,
   SelectContent,
@@ -110,7 +111,7 @@ function TasksPageContent() {
     previous: Array<{ field: string; direction: 'asc' | 'desc' }>;
   } | null>(null);
 
-  const { data: projects } = useProjects(currentWorkspace?.id);
+  const { data: projects, isLoading: projectsLoading } = useProjects(currentWorkspace?.id);
   const {
     data: tasks = [],
     isLoading: isLoadingTasks,
@@ -765,7 +766,14 @@ function TasksPageContent() {
       {/* Header */}
       <PageHeader
         title="My Tasks"
-        description={`Tasks assigned to you or created by you (${myTasks.length} total)`}
+        description={
+          // Not "(0 total)" while the count is unknown: neither the project list
+          // nor the task list has answered yet, so a zero here is a claim rather
+          // than a count.
+          projectsLoading || isLoadingTasks
+            ? 'Tasks assigned to you or created by you'
+            : `Tasks assigned to you or created by you (${myTasks.length} total)`
+        }
       />
 
       {/* Filters and Actions */}
@@ -1118,6 +1126,14 @@ function TasksPageContent() {
             onTaskDelete={handleTaskDelete}
           />
         )
+      ) : projectsLoading ? (
+        // "Choose a project from the dropdown" is not actionable while the
+        // dropdown is still empty, and the header's "(0 total)" is not true yet
+        // either — so say what is actually happening instead.
+        <div className="space-y-3">
+          <Skeleton className="h-9 w-full md:w-[320px]" />
+          <Skeleton className="h-96 w-full" />
+        </div>
       ) : (
         <div className="flex items-center justify-center h-96 border-2 border-dashed rounded-lg">
           <div className="text-center">

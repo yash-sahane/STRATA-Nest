@@ -7,6 +7,7 @@ import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useProjects } from '@/hooks/use-project';
 import { useClientRequirements } from '@/hooks/use-client-requirement';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -61,7 +62,7 @@ const statusIcons: Record<RequirementStatus, React.ComponentType<{ className?: s
 function RequirementsPageContent() {
   const { user } = useAuth();
   const { currentWorkspace } = useCurrentWorkspace();
-  const { data: projects = [] } = useProjects(currentWorkspace?.id);
+  const { data: projects = [], isLoading: projectsLoading } = useProjects(currentWorkspace?.id);
   const router = useRouter();
   const searchParams = useSearchParams();
   const frIdFromUrl = searchParams.get('frId');
@@ -215,8 +216,15 @@ function RequirementsPageContent() {
         }
       />
 
+      {/* While the projects query is in flight we do not KNOW whether this
+          workspace has any, and `data = []` is what React Query holds either
+          way — so the empty state below waits for an answer rather than
+          asserting one. Telling a workspace that plainly has projects to
+          "create a project" was a straight lie for as long as the request took. */}
+      {projectsLoading && <Skeleton className="h-40 w-full" />}
+
       {/* Nothing below the picker renders without a project, so say why. */}
-      {projects.length === 0 && (
+      {!projectsLoading && projects.length === 0 && (
         <EmptyState
           icon={FolderPlus}
           title="No projects yet"
