@@ -36,7 +36,6 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { useAuth } from '@/components/providers/auth-provider';
 import { NotificationCenter } from '@/components/notifications/notification-center';
-import { useNotificationsRealtime } from '@/hooks/use-realtime';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useGlobalSearch, type SearchResult } from '@/hooks/use-global-search';
 import { SearchHighlight } from '@/components/search/search-highlight';
@@ -58,9 +57,6 @@ export function Header() {
   const [isSearchOpen, setIsSearchOpen] = React.useState(false);
   const searchInputRef = React.useRef<HTMLInputElement>(null);
   const searchDropdownRef = React.useRef<HTMLDivElement>(null);
-
-  // Enable real-time notifications
-  useNotificationsRealtime(user?.id);
 
   // Get workspace for search
   const { currentWorkspace } = useCurrentWorkspace();
@@ -137,10 +133,13 @@ export function Header() {
         router.push(`/epics?epicId=${result.id}`);
         break;
       case 'sprint':
-        router.push(`/sprints/${result.id}`);
+        // /sprints/[id] has no page of its own — only /board, /backlog, /analytics.
+        router.push(`/sprints/${result.id}/board`);
         break;
       case 'requirement':
-        router.push(`/requirements?reqId=${result.id}`);
+        // The 'requirement' corpus is functional_requirements (use-global-search),
+        // so the id belongs to /functional-requirements — `reqId` was read by no page.
+        router.push(`/functional-requirements?frId=${result.id}`);
         break;
     }
   };
@@ -241,6 +240,7 @@ export function Header() {
             <Button
               variant="ghost"
               size="icon"
+              aria-label="Clear search"
               className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2"
               onClick={() => {
                 setSearchQuery('');
@@ -306,8 +306,25 @@ export function Header() {
                         return (
                           <div
                             key={result.id}
-                            className="flex items-start gap-3 rounded-lg p-3 hover:bg-accent cursor-pointer transition-colors"
+                            /* A bare <div onClick> was unreachable: Tab went
+                               from the clear button straight out of the
+                               dropdown, and Enter did nothing — so the search
+                               box accepted keyboard input, showed results, and
+                               then offered no keyboard way to act on any of
+                               them. Not a <button>: the row carries a Badge and
+                               nested interactives are what the drag-handle
+                               split elsewhere exists to avoid. */
+                            role="button"
+                            tabIndex={0}
+                            aria-label={`Open ${result.type}: ${result.title}`}
+                            className="flex items-start gap-3 rounded-lg p-3 hover:bg-accent cursor-pointer transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
                             onClick={() => handleResultClick(result)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                handleResultClick(result);
+                              }
+                            }}
                           >
                             <div className={`rounded-md p-2 ${getTypeColor(result.type)}`}>
                               <Icon className="h-4 w-4" />
@@ -380,7 +397,13 @@ export function Header() {
         )}
 
         {/* Notifications */}
-        <NotificationCenter />
+        {/* Mounted only once the user id is known.
+            Rendering it earlier made its queries start with `enabled: false` and
+            flip to true in the same commit, and TanStack fetches twice across
+            that transition — once from the observer subscribing, once from
+            setOptions in useBaseQuery's effect. That was every header query
+            firing twice on a full page load. */}
+        {user?.id && <NotificationCenter />}
 
         {/* User Menu */}
         <DropdownMenu>
@@ -408,16 +431,18 @@ export function Header() {
               </div>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
+            {/* /profile is a read-only summary; all editing lives in Settings →
+                Profile, so the label says so rather than implying a second editor. */}
             <DropdownMenuItem onClick={() => router.push('/profile')} className="cursor-pointer">
               <User className="mr-2 h-4 w-4" />
-              Profile
+              View profile
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => router.push('/settings')} className="cursor-pointer">
               <Settings className="mr-2 h-4 w-4" />
               Settings
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={handleLogout} className="cursor-pointer text-destructive">
+            <DropdownMenuItem onClick={handleLogout} className="cursor-pointer text-destructive-text">
               <LogOut className="mr-2 h-4 w-4" />
               Log out
             </DropdownMenuItem>

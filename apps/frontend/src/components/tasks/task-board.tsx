@@ -49,7 +49,17 @@ interface TaskBoardProps {
   sortCriteria?: Array<{ field: string; direction: 'asc' | 'desc' }>;
   canEdit?: boolean; // Permission to edit tasks (managers/assistant managers)
   canDelete?: boolean; // Permission to delete tasks (managers/assistant managers)
-  onTaskMove: (taskId: string, newStatus: TaskStatus, newPosition: number) => void;
+  /**
+   * `beforeTaskId` is the card the dropped one has to land in FRONT of, or null
+   * for the end of the column. A raw drop index would be meaningless to the
+   * caller: it counts rows in the order this component rendered (`sortCriteria`),
+   * which only this component knows.
+   */
+  onTaskMove: (
+    taskId: string,
+    newStatus: TaskStatus,
+    beforeTaskId: string | null
+  ) => void | Promise<void>;
   onTaskClick: (task: Task) => void;
   onTaskEdit: (task: Task) => void;
   onTaskDelete: (taskId: string) => void;
@@ -117,6 +127,11 @@ export function TaskBoard({
           const dateB = b.dueDate ? new Date(b.dueDate).getTime() : Infinity;
           return dateA - dateB;
         }
+        case 'status':
+          // Every card in a column already shares its status, so this field can
+          // never order them. Without the case it fell through to `position`
+          // and a "Status" sort silently reversed every column.
+          return 0;
         case 'title':
           return a.title.localeCompare(b.title);
         case 'hierarchyId':
@@ -140,13 +155,13 @@ export function TaskBoard({
   // Sort tasks within each column using multi-field sorting
   const sortTasksInColumn = React.useCallback(
     (tasksToSort: Task[]): Task[] => {
-      if (
-        sortCriteria.length === 0 ||
-        (sortCriteria.length === 1 && sortCriteria[0].field === 'position')
-      ) {
+      if (sortCriteria.length === 0) {
         return [...tasksToSort].sort((a, b) => a.position - b.position);
       }
 
+      // `position` used to short-circuit here ignoring `direction`, which made
+      // the board render ascending while the caller's own copy of the sort ran
+      // descending — the two orders have to agree for a drop to mean anything.
       return [...tasksToSort].sort((a, b) => {
         for (const criterion of sortCriteria) {
           const comparison = compareByField(a, b, criterion.field);
@@ -184,8 +199,23 @@ export function TaskBoard({
     return grouped;
   }, [tasks, sortTasksInColumn]);
 
+  /**
+   * Cards rendered per column before a "show more".
+   *
+   * The board used to render every task in the DOM. Measured on a project with
+   * 5,000 tasks that is 105k DOM nodes and a 215MB heap — the board took ~13s to
+   * appear and ~5s to open a card. A column rarely needs more than this on
+   * screen at once, and the count in the header still reports the true total.
+   */
+  const COLUMN_RENDER_LIMIT = 100;
+  const [expandedColumns, setExpandedColumns] = React.useState<Record<string, boolean>>({});
+
   const handleDragEnd = (result: DropResult) => {
     const { source, destination, draggableId } = result;
+
+    // Belt and braces: isDragDisabled already stops the drag starting, but the
+    // move must never be issued by a viewer the API would refuse.
+    if (!canEdit) return;
 
     // Dropped outside a droppable area
     if (!destination) return;
@@ -196,17 +226,34 @@ export function TaskBoard({
     }
 
     const newStatus = destination.droppableId as TaskStatus;
-    const newPosition = destination.index;
 
-    onTaskMove(draggableId, newStatus, newPosition);
+    // `destination.index` counts rows in the order THIS component rendered, and
+    // that order is `sortCriteria`, not `position`. Resolve it to the card the
+    // drop landed in front of before handing it on: anchoring the raw index in
+    // the position-sorted column (what the caller used to do) dropped the card
+    // wherever the two orders happened to disagree. The full column is used
+    // rather than the render-limited slice — the slice is a prefix of it, so the
+    // indices line up, and a drop at the tail of a capped column still anchors.
+    const renderedColumn = tasksByStatus[newStatus].filter((task) => task.id !== draggableId);
+    const beforeTaskId = renderedColumn[destination.index]?.id ?? null;
+
+    // onTaskMove is async: an unawaited rejection here surfaces as a full-screen
+    // runtime error even though the mutation hook already toasted the failure.
+    void Promise.resolve(onTaskMove(draggableId, newStatus, beforeTaskId)).catch(() => {});
   };
 
   return (
     <DragDropContext onDragEnd={handleDragEnd}>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
         {COLUMNS.map((column) => {
-          const columnTasks = tasksByStatus[column.id];
-          const hasItems = columnTasks.length > 0;
+          const allColumnTasks = tasksByStatus[column.id];
+          const expanded = expandedColumns[column.id] === true;
+          const columnTasks =
+            expanded || allColumnTasks.length <= COLUMN_RENDER_LIMIT
+              ? allColumnTasks
+              : allColumnTasks.slice(0, COLUMN_RENDER_LIMIT);
+          const hiddenCount = allColumnTasks.length - columnTasks.length;
+          const hasItems = allColumnTasks.length > 0;
 
           return (
             <div key={column.id} className="flex flex-col min-h-50">
@@ -215,9 +262,7 @@ export function TaskBoard({
                 <div className="flex items-center justify-between">
                   <h3 className="font-semibold text-sm">
                     {column.title}
-                    <span className="ml-2 text-xs text-muted-foreground">
-                      ({columnTasks.length})
-                    </span>
+                    <span className="ml-2 text-xs font-normal">({allColumnTasks.length})</span>
                   </h3>
                 </div>
               </div>
@@ -235,21 +280,88 @@ export function TaskBoard({
                     )}
                   >
                     {columnTasks.map((task, index) => (
-                      <Draggable key={task.id} draggableId={task.id} index={index}>
+                      <Draggable
+                        key={task.id}
+                        draggableId={task.id}
+                        index={index}
+                        isDragDisabled={!canEdit}
+                      >
                         {(provided, snapshot) => (
                           <Card
                             ref={provided.innerRef}
                             {...provided.draggableProps}
-                            {...provided.dragHandleProps}
                             className={cn(
-                              'cursor-pointer transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md border-l-4',
+                              'relative cursor-pointer transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md border-l-4',
                               getPriorityConfig(task.priority).borderLeft,
                               snapshot.isDragging && 'shadow-xl ring-2 ring-primary'
                             )}
                             onClick={() => onTaskClick(task)}
                           >
+                            {/* Outside the drag handle on purpose: a role="button"
+                                handle must not contain focusable descendants, which is what
+                                made every card an axe "nested-interactive" violation. */}
+                            <div className="absolute right-1 top-1 z-10">
+                                  {showMenu === true && (canEdit || canDelete) && (
+                                    <DropdownMenu>
+                                      <DropdownMenuTrigger
+                                        asChild
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        <Button variant="ghost" size="icon" className="h-6 w-6">
+                                          <MoreVertical className="h-4 w-4" />
+                                          <span className="sr-only">Task actions</span>
+                                        </Button>
+                                      </DropdownMenuTrigger>
+                                      <DropdownMenuContent align="end">
+                                        {canEdit && (
+                                          <DropdownMenuItem
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              onTaskEdit(task);
+                                            }}
+                                          >
+                                            Edit Task
+                                          </DropdownMenuItem>
+                                        )}
+                                        {canEdit && canDelete && <DropdownMenuSeparator />}
+                                        {canDelete && (
+                                          <DropdownMenuItem
+                                            className="text-destructive-text"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              onTaskDelete(task.id);
+                                            }}
+                                          >
+                                            Delete Task
+                                          </DropdownMenuItem>
+                                        )}
+                                      </DropdownMenuContent>
+                                    </DropdownMenu>
+                                  )}
+                            </div>
+                            {/* Everything else IS the drag handle, so the card still drags
+                                from almost anywhere and keyboard drag still works. */}
+                            {/* The card's click target IS this element, so it
+                                carries the keyboard contract too: Enter/Space
+                                open the details dialog, and a visible ring
+                                replaces the bare `outline-none` that left
+                                tabbing across a board with no feedback at all.
+                                Space still reaches react-beautiful-dnd's drag
+                                handle when a drag is in progress. */}
+                            <div
+                              {...provided.dragHandleProps}
+                              aria-label={`Open task: ${task.title}`}
+                              onKeyDown={(event) => {
+                                if (snapshot.isDragging) return;
+                                if (event.key === 'Enter') {
+                                  event.preventDefault();
+                                  onTaskClick(task);
+                                }
+                              }}
+                              className="rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                            >
                             <CardHeader className="p-3 pb-2">
-                              <div className="flex items-start justify-between gap-2">
+                              <div className="flex items-start gap-2 pr-7">
                                 <div className="flex-1 space-y-1">
                                   <div className="flex items-center gap-2">
                                     {/* <Badge variant="outline" className="font-mono text-xs">
@@ -273,43 +385,6 @@ export function TaskBoard({
                                     {task.title}
                                   </h4>
                                 </div>
-
-                                {showMenu === true && (canEdit || canDelete) && (
-                                  <DropdownMenu>
-                                    <DropdownMenuTrigger
-                                      asChild
-                                      onClick={(e) => e.stopPropagation()}
-                                    >
-                                      <Button variant="ghost" size="icon" className="h-6 w-6">
-                                        <MoreVertical className="h-4 w-4" />
-                                      </Button>
-                                    </DropdownMenuTrigger>
-                                    <DropdownMenuContent align="end">
-                                      {canEdit && (
-                                        <DropdownMenuItem
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            onTaskEdit(task);
-                                          }}
-                                        >
-                                          Edit Task
-                                        </DropdownMenuItem>
-                                      )}
-                                      {canEdit && canDelete && <DropdownMenuSeparator />}
-                                      {canDelete && (
-                                        <DropdownMenuItem
-                                          className="text-destructive"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            onTaskDelete(task.id);
-                                          }}
-                                        >
-                                          Delete Task
-                                        </DropdownMenuItem>
-                                      )}
-                                    </DropdownMenuContent>
-                                  </DropdownMenu>
-                                )}
                               </div>
                             </CardHeader>
 
@@ -356,7 +431,11 @@ export function TaskBoard({
                                       <span>{formatDate(task.dueDate)}</span>
                                     </div>
                                   )}
-                                  {task.estimatedHours && task.estimatedHours > 0 && (
+                                  {/* `task.estimatedHours && …` short-circuits to the
+                                      NUMBER 0 when there is no estimate, and React
+                                      renders 0 — a bare "0" under the clock icon.
+                                      Compare rather than test truthiness. */}
+                                  {(task.estimatedHours ?? 0) > 0 && (
                                     <div className="flex items-center gap-1">
                                       <Clock className="h-3 w-3" />
                                       <span>{task.estimatedHours}h</span>
@@ -387,11 +466,24 @@ export function TaskBoard({
                                 </div>
                               </div>
                             </CardContent>
+                            </div>
                           </Card>
                         )}
                       </Draggable>
                     ))}
                     {provided.placeholder}
+
+                    {hiddenCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpandedColumns((prev) => ({ ...prev, [column.id]: true }))
+                        }
+                        className="w-full rounded-md border border-dashed border-border py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        Show {hiddenCount} more
+                      </button>
+                    )}
 
                     {/* Empty state */}
                     {columnTasks.length === 0 && (

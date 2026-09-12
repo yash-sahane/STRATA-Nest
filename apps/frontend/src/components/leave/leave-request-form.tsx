@@ -21,16 +21,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Checkbox } from '@/components/ui/checkbox';
-import { useCreateLeaveRequest, useLeaveBalance } from '@/hooks/use-leave';
+import { useCreateLeaveRequest, useLeaveAvailability } from '@/hooks/use-leave';
 import {
-  LEAVE_TYPES,
+  SELECTABLE_LEAVE_TYPES,
   type LeaveType,
   calculateLeaveDays,
+  leaveDateBounds,
   validateLeaveDates,
   hasEnoughBalance,
 } from '@/lib/leave-utils';
 import { getBalanceFieldForLeaveType } from '@/lib/leave-balance-mapper';
+import { parseDateOnly } from '@/lib/utils/working-days';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
 interface LeaveRequestFormProps {
@@ -45,59 +46,76 @@ export function LeaveRequestForm({ open, onOpenChange, userId, workspaceId }: Le
   const [startDate, setStartDate] = React.useState('');
   const [endDate, setEndDate] = React.useState('');
   const [reason, setReason] = React.useState('');
-  const [halfDay, setHalfDay] = React.useState(false);
-  const [emergencyContact, setEmergencyContact] = React.useState('');
   const [validationError, setValidationError] = React.useState('');
+  const [submitError, setSubmitError] = React.useState('');
 
   const createLeaveRequest = useCreateLeaveRequest();
-  const { data: leaveBalance } = useLeaveBalance(userId, workspaceId);
+  // The balance is charged to the year the leave STARTS in, so validate against
+  // that year's row rather than whichever year it happens to be today.
+  const targetYear = /^\d{4}-\d{2}-\d{2}$/.test(startDate)
+    ? parseDateOnly(startDate).getFullYear()
+    : undefined;
+  // Availability, not the raw balance row: approval is what debits the row, so
+  // days already committed to the member's own PENDING requests are still
+  // sitting in `paidLeave`. The server subtracts them before it decides
+  // (assertAffordable), and reading the row directly is what made this form
+  // green-tick "✓ Sufficient balance available" for a request the submit then
+  // refused with "Insufficient leave balance: 5 day(s) requested, 2 available."
+  const {
+    balance: leaveBalance,
+    committed,
+    available,
+    isLoading: balanceLoading,
+    isError: balanceError,
+  } = useLeaveAvailability(workspaceId, targetYear);
 
   // Calculate days when dates change
   const calculatedDays = React.useMemo(() => {
     if (!startDate || !endDate) return 0;
-    return calculateLeaveDays(startDate, endDate, halfDay, leaveType);
-  }, [startDate, endDate, halfDay, leaveType]);
+    return calculateLeaveDays(startDate, endDate, leaveType);
+  }, [startDate, endDate, leaveType]);
 
-  // Reset halfDay when leave type changes to non-HALF_DAY
+  // A half-day is a single session; keep the range collapsed so the preview and
+  // the server agree.
   React.useEffect(() => {
-    if (leaveType !== 'HALF_DAY') {
-      setHalfDay(false);
+    if (leaveType === 'HALF_DAY' && startDate) {
+      setEndDate(startDate);
     }
-  }, [leaveType]);
+  }, [leaveType, startDate]);
 
-  // Get available balance for selected leave type using the mapper
+  // Get bookable balance for selected leave type using the mapper
+  const balanceField = getBalanceFieldForLeaveType(leaveType);
   const availableBalance = React.useMemo(() => {
-    if (!leaveBalance) return 0;
-    
-    // Use mapper to get correct DB field
-    const balanceField = getBalanceFieldForLeaveType(leaveType);
-    return leaveBalance[balanceField] || 0;
-  }, [leaveBalance, leaveType]);
+    if (!leaveBalance) return null;
+    return Math.max(0, available[balanceField]);
+  }, [leaveBalance, available, balanceField]);
+  const committedUnits = leaveBalance ? committed[balanceField] : 0;
 
-  // Check if user has enough balance
+  // Check if user has enough balance. Unknown until the balance has loaded —
+  // `null` keeps the form from claiming either "sufficient" or "insufficient".
   const sufficientBalance = React.useMemo(() => {
-    if (!leaveBalance || calculatedDays === 0) return true;
-    
-    // Use mapper-aware balance checking
-    const dbBalance = {
-      paidLeave: leaveBalance.paidLeave || 0,
-      unpaidLeave: leaveBalance.unpaidLeave || 0,
-      halfDay: leaveBalance.halfDay || 0,
-      compOff: leaveBalance.compOff || 0,
-    };
-    
-    return hasEnoughBalance(leaveType, calculatedDays, dbBalance);
-  }, [leaveType, calculatedDays, leaveBalance]);
+    if (!leaveBalance) return null;
+    if (calculatedDays === 0) return true;
+
+    // `available` is already the mapper-keyed record hasEnoughBalance expects,
+    // with the pending commitments taken out.
+    return hasEnoughBalance(leaveType, calculatedDays, available);
+  }, [leaveType, calculatedDays, leaveBalance, available]);
 
   // Validate dates
   React.useEffect(() => {
     if (startDate && endDate) {
-      const validation = validateLeaveDates(startDate, endDate);
+      const validation = validateLeaveDates(startDate, endDate, leaveType);
       if (!validation.valid) {
         setValidationError(validation.error || '');
-      } else if (!sufficientBalance) {
+      } else if (sufficientBalance === false) {
+        // Same arithmetic the server reports back, so a user who submits anyway
+        // does not get two different numbers for the same refusal.
         setValidationError(
-          `Insufficient balance. You need ${calculatedDays} days but have ${availableBalance} days remaining.`
+          `Insufficient balance. You need ${calculatedDays} days but only ${availableBalance ?? 0} are available` +
+            (committedUnits > 0
+              ? ` — ${committedUnits} are already committed to requests awaiting approval.`
+              : '.')
         );
       } else {
         setValidationError('');
@@ -105,10 +123,19 @@ export function LeaveRequestForm({ open, onOpenChange, userId, workspaceId }: Le
     } else {
       setValidationError('');
     }
-  }, [startDate, endDate, sufficientBalance, calculatedDays, availableBalance]);
+  }, [
+    startDate,
+    endDate,
+    leaveType,
+    sufficientBalance,
+    calculatedDays,
+    availableBalance,
+    committedUnits,
+  ]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSubmitError('');
 
     if (validationError) {
       return;
@@ -119,37 +146,33 @@ export function LeaveRequestForm({ open, onOpenChange, userId, workspaceId }: Le
       return;
     }
 
-    await createLeaveRequest.mutateAsync({
-      workspaceId,
-      userId,
-      leaveType,
-      startDate,
-      endDate,
-      reason,
-      halfDay,
-      emergencyContact: emergencyContact || undefined,
-    });
+    try {
+      await createLeaveRequest.mutateAsync({
+        workspaceId,
+        userId,
+        leaveType,
+        startDate,
+        endDate,
+        reason,
+      });
+    } catch (error) {
+      // The mutation already toasts; keep the dialog open with the reason
+      // inline so the user can correct and retry.
+      setSubmitError(error instanceof Error ? error.message : 'Failed to submit leave request');
+      return;
+    }
 
     // Reset form
     setLeaveType('CASUAL');
     setStartDate('');
     setEndDate('');
     setReason('');
-    setHalfDay(false);
-    setEmergencyContact('');
     setValidationError('');
     onOpenChange(false);
   };
 
-  // Get minimum date (today)
-  const minDate = new Date().toISOString().split('T')[0];
-
-  // Get maximum date (1 year from now)
-  const maxDate = new Date(
-    new Date().setFullYear(new Date().getFullYear() + 1)
-  )
-    .toISOString()
-    .split('T')[0];
+  // Selectable range, on the LOCAL calendar (today .. one year out).
+  const { min: minDate, max: maxDate } = leaveDateBounds();
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -173,7 +196,7 @@ export function LeaveRequestForm({ open, onOpenChange, userId, workspaceId }: Le
                   <SelectValue placeholder="Select leave type" />
                 </SelectTrigger>
                 <SelectContent>
-                  {Object.entries(LEAVE_TYPES).map(([key, label]) => (
+                  {Object.entries(SELECTABLE_LEAVE_TYPES).map(([key, label]) => (
                     <SelectItem key={key} value={key}>
                       {label}
                     </SelectItem>
@@ -183,7 +206,21 @@ export function LeaveRequestForm({ open, onOpenChange, userId, workspaceId }: Le
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Info className="h-4 w-4" />
                 <span>
-                  Available: <strong>{availableBalance}</strong> days
+                  {leaveType === 'UNPAID' ? (
+                    <>Unpaid leave has no balance limit</>
+                  ) : balanceLoading ? (
+                    <>Loading your balance…</>
+                  ) : balanceError || availableBalance === null ? (
+                    <>Balance unavailable</>
+                  ) : (
+                    <>
+                      Available: <strong>{availableBalance}</strong>{' '}
+                      {leaveType === 'HALF_DAY' ? 'half-day sessions' : 'days'}
+                      {committedUnits > 0 && (
+                        <> ({committedUnits} awaiting approval)</>
+                      )}
+                    </>
+                  )}
                 </span>
               </div>
             </div>
@@ -199,7 +236,7 @@ export function LeaveRequestForm({ open, onOpenChange, userId, workspaceId }: Le
                   onChange={(e) => {
                     setStartDate(e.target.value);
                     // Auto-set end date to same as start date
-                    if (!endDate) {
+                    if (!endDate || leaveType === 'HALF_DAY') {
                       setEndDate(e.target.value);
                     }
                   }}
@@ -217,52 +254,46 @@ export function LeaveRequestForm({ open, onOpenChange, userId, workspaceId }: Le
                   onChange={(e) => setEndDate(e.target.value)}
                   min={startDate || minDate}
                   max={maxDate}
+                  disabled={leaveType === 'HALF_DAY'}
                   required
                 />
+                {leaveType === 'HALF_DAY' && (
+                  <p className="text-xs text-muted-foreground">
+                    A half-day is a single session on the start date.
+                  </p>
+                )}
               </div>
             </div>
-
-            {/* Half Day Option - Only for HALF_DAY leave type */}
-            {startDate && endDate && startDate === endDate && leaveType === 'HALF_DAY' && (
-              <div className="flex items-center space-x-2">
-                <Checkbox
-                  id="halfDay"
-                  checked={halfDay}
-                  onCheckedChange={(checked) => setHalfDay(checked as boolean)}
-                />
-                <Label
-                  htmlFor="halfDay"
-                  className="text-sm font-normal cursor-pointer"
-                >
-                  This is a half-day leave
-                </Label>
-              </div>
-            )}
 
             {/* Calculated Days */}
             {calculatedDays > 0 && (
               <Alert>
                 <Info className="h-4 w-4" />
                 <AlertDescription>
-                  This leave request is for <strong>{calculatedDays}</strong>{' '}
-                  {calculatedDays === 1 ? 'working day' : 'working days'}.
-                  {sufficientBalance ? (
-                    <span className="text-green-600 ml-1">
-                      ✓ Sufficient balance available
-                    </span>
+                  {leaveType === 'HALF_DAY' ? (
+                    <>
+                      This leave request is for <strong>one half-day session</strong>.
+                    </>
                   ) : (
-                    <span className="text-red-600 ml-1">
-                      ✗ Insufficient balance
-                    </span>
+                    <>
+                      This leave request is for <strong>{calculatedDays}</strong>{' '}
+                      {calculatedDays === 1 ? 'working day' : 'working days'}.
+                    </>
+                  )}
+                  {sufficientBalance === true && leaveType !== 'UNPAID' && (
+                    <span className="text-success-text ml-1">✓ Sufficient balance available</span>
+                  )}
+                  {sufficientBalance === false && (
+                    <span className="text-destructive-text ml-1">✗ Insufficient balance</span>
                   )}
                 </AlertDescription>
               </Alert>
             )}
 
             {/* Validation Error */}
-            {validationError && (
+            {(validationError || submitError) && (
               <Alert variant="destructive">
-                <AlertDescription>{validationError}</AlertDescription>
+                <AlertDescription>{validationError || submitError}</AlertDescription>
               </Alert>
             )}
 
@@ -283,21 +314,6 @@ export function LeaveRequestForm({ open, onOpenChange, userId, workspaceId }: Le
                 {reason.length}/500 characters (minimum 10)
               </p>
             </div>
-
-            {/* Emergency Contact */}
-            <div className="space-y-2">
-              <Label htmlFor="emergencyContact">Emergency Contact (Optional)</Label>
-              <Input
-                id="emergencyContact"
-                type="tel"
-                placeholder="+1 234 567 8900"
-                value={emergencyContact}
-                onChange={(e) => setEmergencyContact(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">
-                A phone number where you can be reached during your leave
-              </p>
-            </div>
           </div>
           <DialogFooter>
             <Button
@@ -306,6 +322,7 @@ export function LeaveRequestForm({ open, onOpenChange, userId, workspaceId }: Le
               onClick={() => {
                 onOpenChange(false);
                 setValidationError('');
+                setSubmitError('');
               }}
             >
               Cancel
@@ -314,6 +331,8 @@ export function LeaveRequestForm({ open, onOpenChange, userId, workspaceId }: Le
               type="submit"
               disabled={
                 createLeaveRequest.isPending ||
+                balanceLoading ||
+                !leaveBalance ||
                 !!validationError ||
                 calculatedDays === 0 ||
                 reason.length < 10

@@ -31,6 +31,10 @@ interface TaskDependenciesProps {
   allTasks: Task[];
   onAddDependency: (taskId: string, type: 'blocks' | 'blockedBy') => Promise<void>;
   onRemoveDependency: (taskId: string, type: 'blocks' | 'blockedBy') => Promise<void>;
+  /** Adding or removing an edge PATCHes the task, so it needs the same
+   *  `task:write` the API demands. Defaults to false so a caller that omits it
+   *  renders the read-only view rather than a control that 403s on click. */
+  canEdit?: boolean;
 }
 
 export function TaskDependencies({
@@ -38,6 +42,7 @@ export function TaskDependencies({
   allTasks,
   onAddDependency,
   onRemoveDependency,
+  canEdit = false,
 }: TaskDependenciesProps) {
   const router = useRouter();
   const [addDialogOpen, setAddDialogOpen] = React.useState(false);
@@ -89,6 +94,10 @@ export function TaskDependencies({
   const handleAddDependency = async () => {
     if (!selectedTaskId) return;
 
+    // Fast local feedback only, over the tasks this client happens to hold. The
+    // authoritative check is the server's (tasks.services.ts assertNoCycle),
+    // which walks the whole workspace graph and so also catches an edge added by
+    // someone else since this list was fetched.
     if (wouldCreateCircular(selectedTaskId, dependencyType)) {
       toast.error('Cannot add dependency', {
         description: 'This would create a circular dependency.',
@@ -96,20 +105,33 @@ export function TaskDependencies({
       return;
     }
 
-    await onAddDependency(selectedTaskId, dependencyType);
+    try {
+      await onAddDependency(selectedTaskId, dependencyType);
+    } catch {
+      // The mutation's own onError already surfaced the reason (a rejected
+      // cycle, a cross-workspace edge, a permission failure). Swallow the
+      // rejection so it is not unhandled, and leave the dialog open with the
+      // selection intact so another target can be picked.
+      return;
+    }
     setSelectedTaskId('');
     setAddDialogOpen(false);
+  };
+
+  /** Same reasoning: the remove buttons fire-and-forget, so catch here too. */
+  const handleRemoveDependency = (targetTaskId: string, type: 'blocks' | 'blockedBy') => {
+    void onRemoveDependency(targetTaskId, type).catch(() => undefined);
   };
 
   const getTaskStatusIcon = (taskStatus: string) => {
     switch (taskStatus) {
       case 'DONE':
-        return <CheckCircle2 className="h-3 w-3 text-green-600" />;
+        return <CheckCircle2 className="h-3 w-3 text-green-600 dark:text-green-400" />;
       case 'IN_PROGRESS':
       case 'IN_REVIEW':
-        return <Clock className="h-3 w-3 text-blue-600" />;
+        return <Clock className="h-3 w-3 text-blue-600 dark:text-blue-400" />;
       default:
-        return <AlertTriangle className="h-3 w-3 text-orange-600" />;
+        return <AlertTriangle className="h-3 w-3 text-orange-600 dark:text-orange-400" />;
     }
   };
 
@@ -123,7 +145,7 @@ export function TaskDependencies({
           <div className="flex items-center justify-between">
             <div>
               <CardTitle className="text-base flex items-center gap-2">
-                <AlertTriangle className="h-4 w-4 text-orange-600" />
+                <AlertTriangle className="h-4 w-4 text-orange-600 dark:text-orange-400" />
                 Blocked By
                 {isBlocked && (
                   <Badge variant="destructive" className="ml-2">
@@ -142,12 +164,14 @@ export function TaskDependencies({
                 setAddDialogOpen(open);
               }}
             >
-              <DialogTrigger asChild>
-                <Button variant="outline" size="sm">
-                  <Link2 className="mr-2 h-3 w-3" />
-                  Add
-                </Button>
-              </DialogTrigger>
+              {canEdit && (
+                <DialogTrigger asChild>
+                  <Button variant="outline" size="sm">
+                    <Link2 className="mr-2 h-3 w-3" />
+                    Add
+                  </Button>
+                </DialogTrigger>
+              )}
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>Add Blocking Dependency</DialogTitle>
@@ -223,19 +247,23 @@ export function TaskDependencies({
                     <Button
                       variant="ghost"
                       size="icon"
+                      aria-label={`Open task ${depTask.hierarchyId}`}
                       className="h-7 w-7"
                       onClick={() => router.push(`/tasks?taskId=${depTask.id}`)}
                     >
                       <ExternalLink className="h-3 w-3" />
                     </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 text-destructive"
-                      onClick={() => onRemoveDependency(depTask.id, 'blockedBy')}
-                    >
-                      <X className="h-3 w-3" />
-                    </Button>
+                    {canEdit && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={`Remove the dependency on ${depTask.hierarchyId}`}
+                        className="h-7 w-7 text-destructive-text"
+                        onClick={() => handleRemoveDependency(depTask.id, 'blockedBy')}
+                      >
+                        <X className="h-3 w-3" />
+                      </Button>
+                    )}
                   </div>
                 </div>
               ))}
@@ -254,7 +282,7 @@ export function TaskDependencies({
           <div className="flex items-center justify-between">
             <div>
               <CardTitle className="text-base flex items-center gap-2">
-                <Link2 className="h-4 w-4 text-blue-600" />
+                <Link2 className="h-4 w-4 text-blue-600 dark:text-blue-400" />
                 Blocks
               </CardTitle>
               <CardDescription className="text-xs mt-1">
@@ -268,12 +296,14 @@ export function TaskDependencies({
                 setAddDialogOpen(open);
               }}
             >
-              <DialogTrigger asChild>
-                <Button variant="outline" size="sm">
-                  <Link2 className="mr-2 h-3 w-3" />
-                  Add
-                </Button>
-              </DialogTrigger>
+              {canEdit && (
+                <DialogTrigger asChild>
+                  <Button variant="outline" size="sm">
+                    <Link2 className="mr-2 h-3 w-3" />
+                    Add
+                  </Button>
+                </DialogTrigger>
+              )}
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>Add Blocked Task</DialogTitle>
@@ -347,19 +377,23 @@ export function TaskDependencies({
                     <Button
                       variant="ghost"
                       size="icon"
+                      aria-label={`Open task ${depTask.hierarchyId}`}
                       className="h-7 w-7"
                       onClick={() => router.push(`/tasks?taskId=${depTask.id}`)}
                     >
                       <ExternalLink className="h-3 w-3" />
                     </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 text-destructive"
-                      onClick={() => onRemoveDependency(depTask.id, 'blocks')}
-                    >
-                      <X className="h-3 w-3" />
-                    </Button>
+                    {canEdit && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={`Stop ${depTask.hierarchyId} being blocked by this task`}
+                        className="h-7 w-7 text-destructive-text"
+                        onClick={() => handleRemoveDependency(depTask.id, 'blocks')}
+                      >
+                        <X className="h-3 w-3" />
+                      </Button>
+                    )}
                   </div>
                 </div>
               ))}

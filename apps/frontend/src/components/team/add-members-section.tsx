@@ -48,16 +48,9 @@ interface AddMembersSectionProps {
   currentUserId: string;
 }
 
-// Simple role mapping - maps role codes to display names
-const ROLE_MAPPING: Record<string, string> = {
-  MANAGER: 'Manager (Admin)',
-  ASSISTANT_MANAGER: 'Assistant Manager',
-  SOFTWARE_DEVELOPER: 'Software Developer',
-  DEVELOPER_INTERN: 'Software Developer Intern',
-  TESTER: 'Tester',
-  CONTENT_ENGINEER: 'Content Engineer',
-  MEMBER: 'Member',
-};
+// `roleName` is the value persisted on the membership and resolved against the
+// API's role matrix, so it must stay the canonical role KEY — a display label
+// such as 'Manager (Admin)' matches no role and is rejected by the API.
 
 export function AddMembersSection({
   workspaceId,
@@ -109,13 +102,12 @@ export function AddMembersSection({
 
     const formData = new FormData(e.currentTarget);
     const roleId = formData.get('role') as string;
-    const roleName = ROLE_MAPPING[roleId] || roleId;
 
     const userData = {
       name: formData.get('name') as string,
       email: formData.get('email') as string,
       roleId,
-      roleName,
+      roleName: roleId,
       workspaceId,
       workspaceName,
       createdBy: currentUserId,
@@ -177,14 +169,13 @@ export function AddMembersSection({
     for (let i = 0; i < parsedUsers.length; i++) {
       const parsedUser = parsedUsers[i];
       const roleId = parsedUser.role;
-      const roleName = ROLE_MAPPING[roleId] || roleId;
 
       try {
         await createUser.mutateAsync({
           name: parsedUser.name,
           email: parsedUser.email,
           roleId,
-          roleName,
+          roleName: roleId,
           workspaceId,
           workspaceName,
           createdBy: currentUserId,
@@ -329,7 +320,7 @@ export function AddMembersSection({
                     value={selectedRoleId}
                     onValueChange={setSelectedRoleId}
                   >
-                    <SelectTrigger>
+                    <SelectTrigger id="role">
                       <SelectValue placeholder="Select a role" />
                     </SelectTrigger>
                     <SelectContent>
@@ -506,14 +497,14 @@ export function AddMembersSection({
               <CardContent className="space-y-4">
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="flex items-center gap-3 p-4 border rounded-lg bg-green-50 dark:bg-green-950/20">
-                    <CheckCircle2 className="h-8 w-8 text-green-600" />
+                    <CheckCircle2 className="h-8 w-8 text-success-text" />
                     <div>
                       <div className="text-2xl font-bold">{importResults.success}</div>
                       <div className="text-sm text-muted-foreground">Successfully added</div>
                     </div>
                   </div>
                   <div className="flex items-center gap-3 p-4 border rounded-lg bg-red-50 dark:bg-red-950/20">
-                    <XCircle className="h-8 w-8 text-red-600" />
+                    <XCircle className="h-8 w-8 text-destructive-text" />
                     <div>
                       <div className="text-2xl font-bold">{importResults.failed}</div>
                       <div className="text-sm text-muted-foreground">Failed</div>
@@ -538,7 +529,7 @@ export function AddMembersSection({
                             <TableRow key={index}>
                               <TableCell>{error.row}</TableCell>
                               <TableCell>{error.email}</TableCell>
-                              <TableCell className="text-red-600 text-sm">{error.error}</TableCell>
+                              <TableCell className="text-destructive-text text-sm">{error.error}</TableCell>
                             </TableRow>
                           ))}
                         </TableBody>

@@ -31,16 +31,28 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { DatePicker } from '@/components/ui/date-picker';
+import { parseDateOnly } from '@/components/projects/project-dates';
+import { startOfDay } from 'date-fns';
 import type { Project } from '@/types';
 
-const projectSchema = z.object({
-  name: z.string().min(3, 'Name must be at least 3 characters'),
-  description: z.string().optional(),
-  methodology: z.enum(['SCRUM']),
-  status: z.enum(['PLANNING', 'ACTIVE', 'ON_HOLD', 'COMPLETED', 'ARCHIVED']),
-  startDate: z.date().optional(),
-  endDate: z.date().optional(),
-});
+const projectSchema = z
+  .object({
+    name: z.string().min(3, 'Name must be at least 3 characters'),
+    description: z.string().optional(),
+    clientName: z.string().optional(),
+    methodology: z.enum(['SCRUM']),
+    status: z.enum(['PLANNING', 'ACTIVE', 'ON_HOLD', 'COMPLETED', 'ARCHIVED']),
+    // Nullable, not merely optional: `null` is how this form says "cleared".
+    // react-hook-form resolves a field whose value is `undefined` back to the
+    // default it captured when the control mounted, so a deselect written as
+    // `undefined` left the old date on the button and in the payload.
+    startDate: z.date().nullish(),
+    endDate: z.date().nullish(),
+  })
+  .refine((v) => !v.startDate || !v.endDate || v.endDate >= v.startDate, {
+    message: 'End date must be on or after the start date',
+    path: ['endDate'],
+  });
 
 type ProjectFormValues = z.infer<typeof projectSchema>;
 
@@ -64,8 +76,11 @@ export function EditProjectDialog({
     defaultValues: {
       name: '',
       description: '',
+      clientName: '',
       methodology: 'SCRUM',
       status: 'PLANNING',
+      startDate: null,
+      endDate: null,
     },
   });
 
@@ -75,10 +90,11 @@ export function EditProjectDialog({
       form.reset({
         name: project.name,
         description: project.description || '',
+        clientName: project.clientName || '',
         methodology: project.methodology,
         status: project.status,
-        startDate: project.startDate ? new Date(project.startDate) : undefined,
-        endDate: project.endDate ? new Date(project.endDate) : undefined,
+        startDate: parseDateOnly(project.startDate) ?? null,
+        endDate: parseDateOnly(project.endDate) ?? null,
       });
     }
   }, [project, form]);
@@ -130,6 +146,22 @@ export function EditProjectDialog({
                       className="min-h-[100px] resize-none"
                       {...field}
                     />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            {/* Client Name — stamped onto every requirement created for the
+                project, so a typo has to be fixable after creation. */}
+            <FormField
+              control={form.control}
+              name="clientName"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Client Name</FormLabel>
+                  <FormControl>
+                    <Input placeholder="Client or stakeholder name" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -195,8 +227,10 @@ export function EditProjectDialog({
                   <FormItem className="flex flex-col">
                     <FormLabel>Start Date</FormLabel>
                     <DatePicker
-                      date={field.value ? new Date(field.value) : undefined}
-                      onSelect={field.onChange}
+                      date={field.value ?? undefined}
+                      // `?? null` so clicking the selected day actually clears the
+                      // field — see the schema note on `undefined`.
+                      onSelect={(date) => field.onChange(date ?? null)}
                       placeholder="Pick a date"
                       buttonClassName="w-full"
                     />
@@ -213,9 +247,13 @@ export function EditProjectDialog({
                   <FormItem className="flex flex-col">
                     <FormLabel>End Date (Optional)</FormLabel>
                     <DatePicker
-                      date={field.value ? new Date(field.value) : undefined}
-                      onSelect={field.onChange}
+                      date={field.value ?? undefined}
+                      onSelect={(date) => field.onChange(date ?? null)}
                       placeholder="Pick a date"
+                      disabled={(date: Date) => {
+                        const start = form.getValues('startDate');
+                        return start ? date < startOfDay(start) : false;
+                      }}
                       buttonClassName="w-full"
                     />
                     <FormMessage />

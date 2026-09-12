@@ -126,11 +126,15 @@ export function CloneProjectDialog({
                     >
                       Project Settings
                     </label>
+                    {/* Labels are named here because they are what this box
+                        actually carries besides the settings object — they were
+                        being cloned whether or not it was ticked. */}
                     <p className="text-xs text-muted-foreground">
-                      Time tracking, custom fields, and other project configurations
+                      Time tracking, custom fields, the project&apos;s labels, and other project
+                      configuration
                     </p>
                   </div>
-                  <CheckCircle2 className="h-4 w-4 text-green-600" />
+                  <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400" />
                 </div>
 
                 {/* Tasks */}
@@ -153,7 +157,7 @@ export function CloneProjectDialog({
                     </p>
                   </div>
                   {includeTasks ? (
-                    <CheckCircle2 className="h-4 w-4 text-green-600" />
+                    <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400" />
                   ) : (
                     <XCircle className="h-4 w-4 text-muted-foreground" />
                   )}
@@ -179,7 +183,7 @@ export function CloneProjectDialog({
                     </p>
                   </div>
                   {includeMembers ? (
-                    <CheckCircle2 className="h-4 w-4 text-green-600" />
+                    <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400" />
                   ) : (
                     <XCircle className="h-4 w-4 text-muted-foreground" />
                   )}
@@ -200,12 +204,16 @@ export function CloneProjectDialog({
                     >
                       Sprints
                     </label>
+                    {/* Not "dates will be cleared": a sprint's start and end are
+                        NOT NULL and the API refuses a sprint without them, so
+                        they are copied. Saying otherwise described a clone the
+                        product cannot produce. */}
                     <p className="text-xs text-muted-foreground">
-                      Clone sprint structure (dates will be cleared)
+                      Clone sprint structure — names, goals and dates (status resets to Planning)
                     </p>
                   </div>
                   {includeSprints ? (
-                    <CheckCircle2 className="h-4 w-4 text-green-600" />
+                    <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400" />
                   ) : (
                     <XCircle className="h-4 w-4 text-muted-foreground" />
                   )}

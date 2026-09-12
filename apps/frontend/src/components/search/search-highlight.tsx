@@ -48,39 +48,3 @@ export function SearchHighlight({ text, query, className = '' }: SearchHighlight
     </>
   );
 }
-
-// Alternative component that uses HTML string (for more complex highlighting)
-interface SearchHighlightHTMLProps {
-  text: string;
-  query: string;
-  className?: string;
-}
-
-export function SearchHighlightHTML({
-  text,
-  query,
-  className = '',
-}: SearchHighlightHTMLProps) {
-  const highlightedHTML = React.useMemo(() => {
-    if (!query || !text) return text;
-
-    const escapeRegex = (str: string) => {
-      return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    };
-
-    const escapedQuery = escapeRegex(query.trim());
-    const regex = new RegExp(`(${escapedQuery})`, 'gi');
-
-    return text.replace(
-      regex,
-      '<mark class="bg-yellow-200 dark:bg-yellow-900/50 font-medium rounded px-0.5">$1</mark>'
-    );
-  }, [text, query]);
-
-  return (
-    <span
-      className={className}
-      dangerouslySetInnerHTML={{ __html: highlightedHTML }}
-    />
-  );
-}

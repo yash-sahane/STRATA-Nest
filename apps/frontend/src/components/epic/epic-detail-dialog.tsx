@@ -1,6 +1,9 @@
 'use client';
 
-import { getEpicStatusConfig } from '@/lib/semantic/status';
+import {
+  getEpicStatusConfig,
+  getFunctionalRequirementStatusConfig,
+} from '@/lib/semantic/status';
 
 import * as React from 'react';
 import {
@@ -24,12 +27,18 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { Separator } from '@/components/ui/separator';
-import { Trash2, Calendar, CheckCircle2, FileText } from 'lucide-react';
+import { Trash2, Calendar, CheckCircle2, FileText, Pencil } from 'lucide-react';
 import { formatDate } from '@/lib/utils';
-import { useDeleteEpic } from '@/hooks/use-epic';
+import { format, parseISO } from 'date-fns';
+import { deriveEpicMetrics, useDeleteEpic } from '@/hooks/use-epic';
+import { EditEpicDialog } from '@/components/epic/edit-epic-dialog';
 import { useFunctionalRequirementsByEpic } from '@/hooks/use-functional-requirement';
 import type { Epic, Task } from '@/types';
 
+// Cancelling the Edit dialog or the delete confirm used to close this dialog
+// with it (Escape did not). The guard for that now lives in DialogContent
+// itself — `guardNestedOverlays` in components/ui/dialog.tsx — so every dialog
+// in the app gets it and no per-dialog copy can drift out of step.
 interface EpicDetailDialogProps {
   epic: Epic;
   open: boolean;
@@ -37,6 +46,7 @@ interface EpicDetailDialogProps {
   projectId: string;
   tasks: Task[];
   canDelete?: boolean; // Permission to delete epics (managers/assistant managers)
+  canEdit?: boolean; // Permission to change an epic after it exists
 }
 
 export function EpicDetailDialog({
@@ -46,64 +56,38 @@ export function EpicDetailDialog({
   projectId,
   tasks,
   canDelete = false,
+  canEdit = false,
 }: EpicDetailDialogProps) {
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
+  const [editDialogOpen, setEditDialogOpen] = React.useState(false);
   const deleteEpic = useDeleteEpic();
+
+  // Epic dates are date-only wire values ("2026-08-11"). `new Date(...)` reads
+  // those as UTC midnight and renders the previous day west of UTC.
+  const formatEpicDate = (value: string) => format(parseISO(value), 'MMM d, yyyy');
 
   // ✅ Load FRs linked to this epic
   const { data: linkedFRs = [] } = useFunctionalRequirementsByEpic(epic.id);
 
-  // ✅ Calculate metrics from FRs (primary) and tasks (secondary)
+  // Progress is TASK-derived, matching the epic card and the persisted rollup in
+  // useUpdateTask. This dialog used to prefer an FR-derived number with different
+  // thresholds, so clicking a card changed the percentage and status badge in
+  // front of the user. FRs are still summarised below as context.
   const metrics = React.useMemo(() => {
-    // If we have FRs, calculate from them
-    if (linkedFRs.length > 0) {
-      const completedFRs = linkedFRs.filter(
-        (fr) => fr.status === 'DEPLOYED' || fr.status === 'TESTED'
-      ).length;
-      const inProgressFRs = linkedFRs.filter(
-        (fr) => fr.status === 'APPROVED' || fr.status === 'IMPLEMENTED' || fr.status === 'REVIEW'
-      ).length;
-      const progress =
-        linkedFRs.length > 0 ? Math.round((completedFRs / linkedFRs.length) * 100) : 0;
-
-      // Calculate auto status
-      let autoStatus: Epic['status'] = 'TODO';
-      if (completedFRs === linkedFRs.length && linkedFRs.length > 0) {
-        autoStatus = 'DONE';
-      } else if (inProgressFRs > 0 || completedFRs > 0) {
-        autoStatus = 'IN_PROGRESS';
-      }
-
-      return {
-        totalFRs: linkedFRs.length,
-        completedFRs,
-        inProgressFRs,
-        progress,
-        autoStatus,
-        totalTasks: tasks.length,
-        completedTasks: tasks.filter((t) => t.status === 'DONE').length,
-      };
-    }
-
-    // Fallback to task-based calculation
-    const completedTasks = tasks.filter((t) => t.status === 'DONE').length;
-    const progress = tasks.length > 0 ? Math.round((completedTasks / tasks.length) * 100) : 0;
-
-    let autoStatus: Epic['status'] = 'TODO';
-    if (completedTasks === tasks.length && tasks.length > 0) {
-      autoStatus = 'DONE';
-    } else if (completedTasks > 0) {
-      autoStatus = 'IN_PROGRESS';
-    }
+    const completedFRs = linkedFRs.filter(
+      (fr) => fr.status === 'DEPLOYED' || fr.status === 'TESTED'
+    ).length;
+    const inProgressFRs = linkedFRs.filter(
+      (fr) => fr.status === 'APPROVED' || fr.status === 'IMPLEMENTED' || fr.status === 'REVIEW'
+    ).length;
 
     return {
-      totalFRs: 0,
-      completedFRs: 0,
-      inProgressFRs: 0,
-      progress,
-      autoStatus,
-      totalTasks: tasks.length,
-      completedTasks,
+      totalFRs: linkedFRs.length,
+      completedFRs,
+      inProgressFRs,
+      // deriveEpicMetrics, not a local copy: the card on /epics renders the same
+      // numbers, and the two derivations drifted apart.
+      ...deriveEpicMetrics(tasks),
     };
   }, [linkedFRs, tasks]);
 
@@ -143,11 +127,11 @@ export function EpicDetailDialog({
               <label className="text-sm font-medium">Status</label>
               <div className="flex items-center gap-2 px-3 py-2 bg-secondary/30 rounded-md">
                 <div
-                  className={`w-2 h-2 rounded-full ${getEpicStatusConfig(metrics.autoStatus).dot}`}
+                  className={`w-2 h-2 rounded-full ${getEpicStatusConfig(metrics.status).dot}`}
                 />
-                <span className="text-sm">{getEpicStatusConfig(metrics.autoStatus).label}</span>
+                <span className="text-sm">{getEpicStatusConfig(metrics.status).label}</span>
                 <span className="text-xs text-muted-foreground ml-auto">
-                  (Auto-calculated from {metrics.totalFRs > 0 ? 'FRs' : 'tasks'})
+                  (Auto-calculated from tasks)
                 </span>
               </div>
             </div>
@@ -162,27 +146,19 @@ export function EpicDetailDialog({
               </div>
               <Progress value={metrics.progress} className="h-3" />
               <div className="grid grid-cols-2 gap-4 text-sm">
-                {metrics.totalFRs > 0 ? (
-                  <>
-                    <div className="flex items-center gap-2">
-                      <FileText className="h-4 w-4 text-muted-foreground" />
-                      <span className="text-muted-foreground">FRs:</span>
-                      <span className="font-medium">
-                        {metrics.completedFRs} / {metrics.totalFRs}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
-                      <span className="text-muted-foreground">In Progress:</span>
-                      <span className="font-medium">{metrics.inProgressFRs}</span>
-                    </div>
-                  </>
-                ) : (
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-muted-foreground">Tasks:</span>
+                  <span className="font-medium">
+                    {metrics.completedTasks} / {metrics.totalTasks}
+                  </span>
+                </div>
+                {metrics.totalFRs > 0 && (
                   <div className="flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-muted-foreground">Tasks:</span>
+                    <FileText className="h-4 w-4 text-muted-foreground" />
+                    <span className="text-muted-foreground">FRs:</span>
                     <span className="font-medium">
-                      {metrics.completedTasks} / {metrics.totalTasks}
+                      {metrics.completedFRs} / {metrics.totalFRs}
                     </span>
                   </div>
                 )}
@@ -199,16 +175,20 @@ export function EpicDetailDialog({
                     <FileText className="h-4 w-4" />
                     Linked Functional Requirements ({linkedFRs.length})
                   </label>
-                  <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                  <div
+                    role="region"
+                    aria-label="Linked functional requirements"
+                    tabIndex={0}
+                    className="space-y-2 max-h-[300px] overflow-y-auto rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
                     {linkedFRs.map((fr) => {
-                      const statusColor = {
-                        DRAFT: 'bg-gray-500',
-                        REVIEW: 'bg-yellow-500',
-                        APPROVED: 'bg-blue-500',
-                        IMPLEMENTED: 'bg-purple-500',
-                        TESTED: 'bg-indigo-500',
-                        DEPLOYED: 'bg-green-500',
-                      }[fr.status];
+                      // Resolve the FR status through the design system, exactly
+                      // as the FR table and the sprint cards do. The private
+                      // `bg-*-500` map that used to live here was a fifth status
+                      // palette nobody else shared, and Badge's default variant
+                      // paints near-white text on it: REVIEW measured 1.83:1 and
+                      // DEPLOYED 2.12:1 in light theme, i.e. unreadable blobs.
+                      const status = getFunctionalRequirementStatusConfig(fr.status);
 
                       return (
                         <div
@@ -228,7 +208,9 @@ export function EpicDetailDialog({
                               </p>
                             )}
                           </div>
-                          <Badge className={statusColor}>{fr.status}</Badge>
+                          <Badge variant={status.badgeVariant} className={status.badgeClassName}>
+                            {status.label}
+                          </Badge>
                         </div>
                       );
                     })}
@@ -250,13 +232,13 @@ export function EpicDetailDialog({
                     {epic.startDate && (
                       <div>
                         <div className="text-muted-foreground">Start Date</div>
-                        <div className="font-medium">{formatDate(epic.startDate)}</div>
+                        <div className="font-medium">{formatEpicDate(epic.startDate)}</div>
                       </div>
                     )}
                     {epic.endDate && (
                       <div>
                         <div className="text-muted-foreground">Target End Date</div>
-                        <div className="font-medium">{formatDate(epic.endDate)}</div>
+                        <div className="font-medium">{formatEpicDate(epic.endDate)}</div>
                       </div>
                     )}
                   </div>
@@ -273,7 +255,12 @@ export function EpicDetailDialog({
                   No tasks linked to this epic yet
                 </p>
               ) : (
-                <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                <div
+                  role="region"
+                  aria-label="Linked tasks"
+                  tabIndex={0}
+                  className="space-y-2 max-h-[300px] overflow-y-auto rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
                   {tasks.map((task) => (
                     <div
                       key={task.id}
@@ -308,18 +295,34 @@ export function EpicDetailDialog({
           </div>
 
           <Separator />
-          {canDelete && (
-            <Button
-              variant="destructive"
-              onClick={() => setDeleteDialogOpen(true)}
-              className="text-white"
-            >
-              <Trash2 className="h-4 w-4" />
-              Delete
-            </Button>
+          {/* Until now an epic could be created and deleted but never changed —
+              the update hook existed with no control behind it. */}
+          {(canEdit || canDelete) && (
+            <div className="flex justify-end gap-2">
+              {canEdit && (
+                <Button variant="outline" onClick={() => setEditDialogOpen(true)}>
+                  <Pencil className="h-4 w-4" />
+                  Edit
+                </Button>
+              )}
+              {canDelete && (
+                <Button
+                  variant="destructive"
+                  onClick={() => setDeleteDialogOpen(true)}
+                  className="text-white"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Delete
+                </Button>
+              )}
+            </div>
           )}
         </DialogContent>
       </Dialog>
+
+      {canEdit && (
+        <EditEpicDialog epic={epic} open={editDialogOpen} onOpenChange={setEditDialogOpen} />
+      )}
 
       {/* Delete Confirmation */}
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
@@ -327,8 +330,9 @@ export function EpicDetailDialog({
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Epic?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete &ldquo;{epic.name}&rquo;. Tasks linked to this epic will
-              not be deleted, but they will be unlinked. This action cannot be undone.
+              This will permanently delete &ldquo;{epic.name}&rdquo;. Linked functional
+              requirements and tasks are not deleted; they are unlinked from this epic. This
+              action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="flex-col-reverse sm:flex-row sm:justify-between sm:space-x-0">

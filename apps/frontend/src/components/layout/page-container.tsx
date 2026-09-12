@@ -32,7 +32,7 @@ export function PageContainer({ children, size = 'default', className }: PageCon
         'mx-auto w-full px-4 py-6 sm:px-6 lg:px-8',
         // One page-entrance animation for every route, so content doesn't
         // appear instantly on some pages and animate in on others.
-        'animate-in fade-in duration-500',
+        'animate-in fade-in duration-(--duration-layout)',
         MAX_WIDTH[size],
         className
       )}

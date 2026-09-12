@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useMonthlyAttendance } from '@/hooks/use-attendance';
+import { useHolidays } from '@/hooks/use-holidays';
 import {
   getCalendarMonth,
   isWeekend,
@@ -13,14 +14,17 @@ import {
   isSaturdayWorking,
   getWeekOfMonth,
   getCurrentDate,
+  getMonthDateRange,
   ATTENDANCE_STATUS,
   getUserLeaveDates,
 } from '@/lib/attendance-utils';
+import { formatDateOnly } from '@/lib/utils/working-days';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ChevronLeft, ChevronRight, Info } from 'lucide-react';
 import { InlineLoader } from '@/components/ui/page-loader';
+import { ErrorState } from '@/components/ui/error-state';
 
 interface AttendanceRecord {
   id: string;
@@ -34,11 +38,14 @@ interface AttendanceRecord {
 export function AttendanceCalendar() {
   const { user } = useAuth();
   const { currentWorkspace } = useCurrentWorkspace();
+  // A public holiday is not a working day, so a past holiday with no check-in
+  // must not be painted ABSENT.
+  const { data: holidays = [] } = useHolidays(currentWorkspace?.id);
   const [currentMonth, setCurrentMonth] = useState(new Date().getMonth());
   const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
   const [leaveDates, setLeaveDates] = useState<Set<string>>(new Set());
 
-  const { data: attendanceData, isLoading } = useMonthlyAttendance(
+  const { data: attendanceData, isLoading, isError, refetch } = useMonthlyAttendance(
     user?.id || '',
     currentWorkspace?.id || '',
     currentYear,
@@ -51,22 +58,31 @@ export function AttendanceCalendar() {
     year: 'numeric',
   });
 
-  // Fetch leave dates when month/year changes
+  // Fetch leave dates when month/year (or workspace) changes.
+  const workspaceId = currentWorkspace?.id;
   useEffect(() => {
+    if (!user?.id) return;
+
+    // Guard against out-of-order responses: paging quickly through months must
+    // not leave a slower earlier request painting the wrong month's leave.
+    let cancelled = false;
+
     const fetchLeaveDates = async () => {
-      if (!user?.id) return;
+      const { start: startDate, end: endDate } = getMonthDateRange(currentYear, currentMonth);
 
-      const firstDay = new Date(currentYear, currentMonth, 1);
-      const lastDay = new Date(currentYear, currentMonth + 1, 0);
-      const startDate = firstDay.toISOString().split('T')[0];
-      const endDate = lastDay.toISOString().split('T')[0];
-
-      const dates = await getUserLeaveDates(user.id, startDate, endDate);
-      setLeaveDates(dates);
+      // workspaceId keeps the read inside this workspace — leave reads are
+      // scoped server-side, and leave taken in another workspace must not paint
+      // this workspace's calendar.
+      const dates = await getUserLeaveDates(user.id, startDate, endDate, workspaceId);
+      if (!cancelled) setLeaveDates(dates);
     };
 
     fetchLeaveDates();
-  }, [user?.id, currentYear, currentMonth]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, workspaceId, currentYear, currentMonth]);
 
   const handlePreviousMonth = () => {
     if (currentMonth === 0) {
@@ -88,20 +104,14 @@ export function AttendanceCalendar() {
 
   const getAttendanceForDate = (date: Date): AttendanceRecord | undefined => {
     // Use local date string to avoid timezone issues
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    const dateString = `${year}-${month}-${day}`;
+    const dateString = formatDateOnly(date);
 
     return attendanceData?.find((record) => record.date === dateString);
   };
 
   const getDayStatus = (date: Date): string => {
     // Use local date string to avoid timezone issues
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    const dateString = `${year}-${month}-${day}`;
+    const dateString = formatDateOnly(date);
 
     const attendance = getAttendanceForDate(date);
 
@@ -115,13 +125,19 @@ export function AttendanceCalendar() {
       return 'WEEKEND';
     }
 
+    // A configured public holiday — the office is shut, so it is neither an
+    // attended day nor a missed one.
+    if (holidays.includes(dateString)) {
+      return 'HOLIDAY';
+    }
+
     // Check if user is on approved leave
     if (leaveDates.has(dateString)) {
       return 'ON_LEAVE';
     }
 
     // If date is in the past and no attendance record and not on leave, mark as absent
-    if (new Date(dateString) < new Date(getCurrentDate()) && isWorkingDay(dateString)) {
+    if (dateString < getCurrentDate() && isWorkingDay(dateString, holidays)) {
       return 'ABSENT';
     }
 
@@ -129,10 +145,12 @@ export function AttendanceCalendar() {
   };
 
   const getDayCellClass = (date: Date): string => {
-    const dateString = date.toISOString().split('T')[0];
+    // Local date string, like every other site in this file — toISOString()
+    // would draw the ring and the shading on tomorrow's cell.
+    const dateString = formatDateOnly(date);
     const status = getDayStatus(date);
     const isToday = dateString === getCurrentDate();
-    const isPast = new Date(dateString) < new Date(getCurrentDate());
+    const isPast = dateString < getCurrentDate();
     const isSaturday = date.getDay() === 6;
     const saturdayWorking = isSaturday && isSaturdayWorking(dateString);
 
@@ -162,6 +180,20 @@ export function AttendanceCalendar() {
   // Get the first day of the month to calculate padding
   const firstDayOfMonth = new Date(currentYear, currentMonth, 1).getDay();
 
+  // Summary over the SAME statuses the cells are painted with — counting only
+  // persisted rows would print "0 absent" next to a wall of red cells.
+  const monthSummary = calendarDates.reduce(
+    (acc, date) => {
+      const status = getDayStatus(date);
+      if (status === 'PRESENT') acc.present += 1;
+      else if (status === 'LATE') acc.late += 1;
+      else if (status === 'ABSENT') acc.absent += 1;
+      else if (status === 'ON_LEAVE') acc.leave += 1;
+      return acc;
+    },
+    { present: 0, late: 0, absent: 0, leave: 0 }
+  );
+
   if (isLoading) {
     return (
       <Card>
@@ -175,17 +207,46 @@ export function AttendanceCalendar() {
     );
   }
 
+  // An empty month and a failed month look identical once rendered, so the
+  // failure has to say so rather than imply perfect absence.
+  if (isError) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Attendance Calendar</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ErrorState
+            title="Couldn't load this month"
+            description="Your attendance for this month could not be fetched."
+            onRetry={() => refetch()}
+          />
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <Card>
       <CardHeader>
         <div className="flex items-center justify-between">
           <CardTitle>Attendance Calendar</CardTitle>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="icon" onClick={handlePreviousMonth}>
+            <Button
+              variant="outline"
+              size="icon"
+              aria-label="Previous month"
+              onClick={handlePreviousMonth}
+            >
               <ChevronLeft className="h-4 w-4" />
             </Button>
             <span className="min-w-[180px] text-center font-semibold">{monthName}</span>
-            <Button variant="outline" size="icon" onClick={handleNextMonth}>
+            <Button
+              variant="outline"
+              size="icon"
+              aria-label="Next month"
+              onClick={handleNextMonth}
+            >
               <ChevronRight className="h-4 w-4" />
             </Button>
           </div>
@@ -198,7 +259,7 @@ export function AttendanceCalendar() {
           <div className="text-sm text-blue-800 dark:text-blue-200">
             <p className="font-medium">Working Schedule</p>
             <p className="text-blue-700 dark:text-blue-300">
-              Saturdays on Week 1 and Week 3 are working days. Week 2 and Week 4 Saturdays are off.
+              Saturdays on Week 1 and Week 3 are working days. All other Saturdays are off.
             </p>
           </div>
         </div>
@@ -260,10 +321,7 @@ export function AttendanceCalendar() {
           {/* Date cells */}
           {calendarDates.map((date) => {
             // Use local date string to avoid timezone issues
-            const year = date.getFullYear();
-            const month = String(date.getMonth() + 1).padStart(2, '0');
-            const day = String(date.getDate()).padStart(2, '0');
-            const dateString = `${year}-${month}-${day}`;
+            const dateString = formatDateOnly(date);
 
             const status = getDayStatus(date);
             const attendance = getAttendanceForDate(date);
@@ -312,25 +370,19 @@ export function AttendanceCalendar() {
         {attendanceData && attendanceData.length > 0 && (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-4 border-t">
             <div className="text-center">
-              <p className="text-2xl font-bold text-green-600">
-                {attendanceData.filter((r) => r.status === 'PRESENT').length}
-              </p>
+              <p className="text-2xl font-bold text-green-600 dark:text-green-400">{monthSummary.present}</p>
               <p className="text-xs text-muted-foreground">Present Days</p>
             </div>
             <div className="text-center">
-              <p className="text-2xl font-bold text-orange-600">
-                {attendanceData.filter((r) => r.status === 'LATE').length}
-              </p>
+              <p className="text-2xl font-bold text-orange-600 dark:text-orange-400">{monthSummary.late}</p>
               <p className="text-xs text-muted-foreground">Late Days</p>
             </div>
             <div className="text-center">
-              <p className="text-2xl font-bold text-red-600">
-                {attendanceData.filter((r) => r.status === 'ABSENT').length}
-              </p>
+              <p className="text-2xl font-bold text-red-600 dark:text-red-400">{monthSummary.absent}</p>
               <p className="text-xs text-muted-foreground">Absent Days</p>
             </div>
             <div className="text-center">
-              <p className="text-2xl font-bold text-blue-600">
+              <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">
                 {attendanceData
                   .filter((r) => r.workHours)
                   .reduce((sum, r) => sum + (r.workHours || 0), 0)

@@ -78,6 +78,8 @@ export function CreateFunctionalRequirementDialog({
       type: 'FUNCTIONAL',
       priority: 'MEDIUM',
       complexity: 'MEDIUM',
+      epicId: '',
+      parentRequirementId: '',
       isReusable: false,
     },
   });
@@ -87,32 +89,47 @@ export function CreateFunctionalRequirementDialog({
     const selectedEpic = epics.find((e) => e.id === values.epicId);
     const clientReqId = selectedEpic?.requirementId || '';
 
-    await createRequirement.mutateAsync({
-      projectId,
-      projectCode,
-      workspaceId,
-      createdBy: userId,
-      title: values.title,
-      description: values.description || '',
-      type: values.type,
-      priority: values.priority,
-      complexity: values.complexity,
-      status: 'DRAFT',
-      epicId: values.epicId, // ✅ FIXED: Epic is now mandatory
-      clientRequirementId: clientReqId, // ✅ FIX: Derived from epic's linked client requirement
-      parentRequirementId: values.parentRequirementId, // For sub-requirements
-      reusable: values.isReusable || false,
-    });
+    try {
+      await createRequirement.mutateAsync({
+        projectId,
+        projectCode,
+        workspaceId,
+        createdBy: userId,
+        title: values.title,
+        description: values.description || '',
+        type: values.type,
+        priority: values.priority,
+        complexity: values.complexity,
+        status: 'DRAFT',
+        epicId: values.epicId, // ✅ FIXED: Epic is now mandatory
+        clientRequirementId: clientReqId, // ✅ FIX: Derived from epic's linked client requirement
+        parentRequirementId: values.parentRequirementId, // For sub-requirements
+        reusable: values.isReusable || false,
+      });
+    } catch {
+      // The mutation's onError already toasted. Swallow the rejection so it does
+      // not escape react-hook-form's handleSubmit as an unhandled rejection.
+      return;
+    }
 
     form.reset();
     onOpenChange(false);
   };
 
-  // Filter parent requirements (only top-level for now)
-  const parentRequirements = functionalRequirements.filter((fr) => !fr.clientRequirementId);
+  // A parent candidate is an FR that is itself top-level — i.e. one with no
+  // parentRequirementId. The old predicate used clientRequirementId, which every
+  // FR created through this dialog has, so the picker was always empty and
+  // nesting was unreachable.
+  const parentRequirements = functionalRequirements.filter((fr) => !fr.parentRequirementId);
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) form.reset(); // Cancel / X / Escape must not leave a half-filled form behind
+        onOpenChange(next);
+      }}
+    >
       <DialogContent size="xl" className="max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Create Functional Requirement</DialogTitle>
@@ -270,7 +287,9 @@ export function CreateFunctionalRequirementDialog({
                     </SelectContent>
                   </Select>
                   <FormDescription>
-                    Functional requirements must be linked to an epic
+                    {epics.length === 0
+                      ? 'This project has no epics yet — create one first, otherwise this form cannot be submitted.'
+                      : 'Functional requirements must be linked to an epic'}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
@@ -278,39 +297,37 @@ export function CreateFunctionalRequirementDialog({
             />
 
             {/* Parent Requirement (for sub-requirements) */}
-            {parentRequirements.length > 0 && (
-              <FormField
-                control={form.control}
-                name="parentRequirementId"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Parent Requirement (Optional)</FormLabel>
-                    <Select
-                      onValueChange={(value) => field.onChange(value === 'none' ? '' : value)}
-                      value={field.value || 'none'}
-                    >
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select parent requirement" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="none">Top-level requirement</SelectItem>
-                        {parentRequirements.map((fr) => (
-                          <SelectItem key={fr.id} value={fr.id}>
-                            {fr.hierarchyId} - {fr.title}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <FormDescription>
-                      Create nested requirement under a parent (e.g., REQ-01.01)
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            )}
+            <FormField
+              control={form.control}
+              name="parentRequirementId"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Parent Requirement (Optional)</FormLabel>
+                  <Select
+                    onValueChange={(value) => field.onChange(value === 'none' ? '' : value)}
+                    value={field.value || 'none'}
+                  >
+                    <FormControl>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select parent requirement" />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      <SelectItem value="none">Top-level requirement</SelectItem>
+                      {parentRequirements.map((fr) => (
+                        <SelectItem key={fr.id} value={fr.id}>
+                          {fr.hierarchyId} - {fr.title}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <FormDescription>
+                    Create nested requirement under a parent (e.g., REQ-01.01)
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
             {/* Reusable Checkbox */}
             <FormField
@@ -343,7 +360,7 @@ export function CreateFunctionalRequirementDialog({
               >
                 Cancel
               </Button>
-              <Button type="submit" disabled={createRequirement.isPending}>
+              <Button type="submit" disabled={createRequirement.isPending || epics.length === 0}>
                 {createRequirement.isPending ? 'Creating...' : 'Create Requirement'}
               </Button>
             </div>

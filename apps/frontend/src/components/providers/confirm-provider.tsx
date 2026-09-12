@@ -33,10 +33,17 @@ const ConfirmContext = React.createContext<ConfirmFn | null>(null);
  */
 export function ConfirmProvider({ children }: { children: React.ReactNode }) {
   const [options, setOptions] = React.useState<ConfirmOptions | null>(null);
+  // Open state is tracked separately from `options` so the content survives the
+  // exit animation — clearing both at once made the dialog fade out blank.
+  const [open, setOpen] = React.useState(false);
   const resolverRef = React.useRef<((value: boolean) => void) | null>(null);
 
   const confirm = React.useCallback<ConfirmFn>((opts) => {
+    // A second confirm() before the first settles would otherwise overwrite the
+    // pending resolver and leave the first `await` hanging forever.
+    resolverRef.current?.(false);
     setOptions(opts);
+    setOpen(true);
     return new Promise<boolean>((resolve) => {
       resolverRef.current = resolve;
     });
@@ -45,20 +52,24 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
   const settle = React.useCallback((result: boolean) => {
     resolverRef.current?.(result);
     resolverRef.current = null;
-    setOptions(null);
+    setOpen(false);
   }, []);
 
   return (
     <ConfirmContext.Provider value={confirm}>
       {children}
       <AlertDialog
-        open={options !== null}
-        onOpenChange={(open) => {
+        open={open}
+        onOpenChange={(next) => {
           // Closing via overlay/escape counts as cancel.
-          if (!open) settle(false);
+          if (!next) settle(false);
         }}
       >
-        <AlertDialogContent>
+        <AlertDialogContent
+          onAnimationEnd={() => {
+            if (!open) setOptions(null);
+          }}
+        >
           <AlertDialogHeader>
             <AlertDialogTitle>{options?.title}</AlertDialogTitle>
             {options?.description && (

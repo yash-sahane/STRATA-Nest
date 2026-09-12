@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   FolderKanban,
   CheckSquare,
+  Timer,
   Users,
   Calendar,
   CalendarOff,
@@ -29,6 +30,8 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useSidebar } from '@/components/layout/sidebar-context';
+import { useNavigationPermissions } from '@/hooks/use-permissions';
+import { Permission } from '@/lib/permissions';
 import { WorkspaceSwitcher } from '@/components/workspace/workspace-switcher';
 
 interface SidebarProps {
@@ -40,6 +43,17 @@ export interface NavItem {
   href: string;
   icon: typeof LayoutDashboard;
   description: string;
+  /**
+   * Permission required to see this destination at all. Omitted means "always"
+   * (Dashboard, Settings — every member has somewhere to land and somewhere to
+   * change their own profile).
+   *
+   * Navigation used to be identical for every role, so gating happened only
+   * AFTER the page loaded and rendered its own denial — the user was invited
+   * into a room and turned away at the door. These are the same VIEW_*
+   * permissions the destination pages themselves check.
+   */
+  permission?: Permission;
 }
 
 export interface NavGroup {
@@ -57,34 +71,37 @@ export const navigationGroups: NavGroup[] = [
     label: 'Overview',
     items: [
       { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, description: 'Overview and analytics' },
-      { name: 'Analytics', href: '/analytics', icon: BarChart3, description: 'Reports and insights' },
-      { name: 'Activity', href: '/activity', icon: Activity, description: 'Recent project activities' },
+      { name: 'Analytics', href: '/analytics', icon: BarChart3, description: 'Reports and insights', permission: Permission.VIEW_ANALYTICS },
+      { name: 'Activity', href: '/activity', icon: Activity, description: 'Recent workspace activity', permission: Permission.VIEW_WORKSPACE },
     ],
   },
   {
     label: 'Work',
     items: [
-      { name: 'Projects', href: '/projects', icon: FolderKanban, description: 'Manage your projects' },
-      { name: 'Requirements', href: '/requirements', icon: FileText, description: 'Client requirements' },
-      { name: 'Epics', href: '/epics', icon: Target, description: 'Large features & initiatives' },
-      { name: 'Functional Reqs', href: '/functional-requirements', icon: List, description: 'Technical specifications' },
-      { name: 'Sprints', href: '/sprints', icon: GitBranch, description: 'Sprint planning & tracking' },
-      { name: 'Tasks', href: '/tasks', icon: CheckSquare, description: 'View and manage tasks' },
+      { name: 'Projects', href: '/projects', icon: FolderKanban, description: 'Manage your projects', permission: Permission.VIEW_PROJECTS },
+      { name: 'Requirements', href: '/requirements', icon: FileText, description: 'Client requirements', permission: Permission.VIEW_REQUIREMENTS },
+      { name: 'Epics', href: '/epics', icon: Target, description: 'Large features & initiatives', permission: Permission.VIEW_EPICS },
+      { name: 'Functional Reqs', href: '/functional-requirements', icon: List, description: 'Technical specifications', permission: Permission.VIEW_FUNCTIONAL_REQUIREMENTS },
+      { name: 'Sprints', href: '/sprints', icon: GitBranch, description: 'Sprint planning & tracking', permission: Permission.VIEW_SPRINTS },
+      { name: 'Tasks', href: '/tasks', icon: CheckSquare, description: 'View and manage tasks', permission: Permission.VIEW_TASKS },
     ],
   },
   {
     label: 'Team & Time',
     items: [
-      { name: 'Team', href: '/team', icon: Users, description: 'Team members & roles' },
-      { name: 'Attendance', href: '/attendance', icon: Clock, description: 'Check-in & time tracking' },
-      { name: 'Leave', href: '/leave', icon: CalendarOff, description: 'Leave requests & balances' },
-      { name: 'Calendar', href: '/calendar', icon: Calendar, description: 'Events and deadlines' },
+      { name: 'Team', href: '/team', icon: Users, description: 'Team members & roles', permission: Permission.VIEW_TEAM },
+      { name: 'Attendance', href: '/attendance', icon: Clock, description: 'Check-in & time tracking', permission: Permission.VIEW_TEAM },
+      // No permission gate: logging your own time is part of the member
+      // baseline (hr:write). The Approvals tab inside is gated separately.
+      { name: 'Time Tracking', href: '/time-tracking', icon: Timer, description: 'Timesheet & approvals' },
+      { name: 'Leave', href: '/leave', icon: CalendarOff, description: 'Leave requests & balances', permission: Permission.REQUEST_LEAVE },
+      { name: 'Calendar', href: '/calendar', icon: Calendar, description: 'Events and deadlines', permission: Permission.VIEW_TASKS },
     ],
   },
   {
     label: 'Workspace',
     items: [
-      { name: 'Workspaces', href: '/workspaces', icon: Building2, description: 'Switch or manage workspaces' },
+      { name: 'Workspaces', href: '/workspaces', icon: Building2, description: 'Switch or manage workspaces', permission: Permission.VIEW_WORKSPACE },
       { name: 'Settings', href: '/settings', icon: Settings, description: 'Workspace settings' },
     ],
   },
@@ -97,13 +114,33 @@ export function Sidebar({ className }: SidebarProps) {
   const pathname = usePathname();
   const { user } = useAuth();
   const { collapsed, toggle } = useSidebar();
+  const { permissions, isLoading: permissionsLoading } = useNavigationPermissions();
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + '/');
+
+  /**
+   * Filter, then drop groups the filter emptied.
+   *
+   * Fails OPEN while the membership request is in flight: `permissions` is empty
+   * until it resolves, so filtering eagerly would render an almost-blank sidebar
+   * on every cold load and then pop the real one in. A link the user cannot use
+   * for a few hundred milliseconds is a far smaller harm than navigation that
+   * flickers — and the destination page enforces its own access regardless.
+   */
+  const visibleGroups = React.useMemo(() => {
+    if (permissionsLoading) return navigationGroups;
+    return navigationGroups
+      .map((group) => ({
+        ...group,
+        items: group.items.filter((item) => !item.permission || permissions.has(item.permission)),
+      }))
+      .filter((group) => group.items.length > 0);
+  }, [permissions, permissionsLoading]);
 
   return (
     <div
       className={cn(
-        'relative flex h-screen flex-col border-r bg-background transition-all duration-300',
+        'relative flex h-screen flex-col border-r bg-background transition-[width] duration-(--duration-layout)',
         collapsed ? 'w-16' : 'w-64',
         className
       )}
@@ -131,10 +168,10 @@ export function Sidebar({ className }: SidebarProps) {
 
       {/* Navigation */}
       <nav className="flex-1 space-y-4 overflow-y-auto p-2 scrollbar-thin scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-700">
-        {navigationGroups.map((group) => (
+        {visibleGroups.map((group) => (
           <div key={group.label} className="space-y-1">
             {!collapsed && (
-              <p className="px-3 pb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">
+              <p className="px-3 pb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 {group.label}
               </p>
             )}
@@ -178,7 +215,9 @@ export function Sidebar({ className }: SidebarProps) {
         <>
           <Separator />
           <div className="shrink-0 p-4">
-            <div className="flex cursor-pointer items-center gap-3 rounded-lg p-2 transition-colors hover:bg-accent/50">
+            {/* Static identity block — the account menu lives in the header, so
+                this must not look clickable. */}
+            <div className="flex items-center gap-3 rounded-lg p-2">
               <Avatar className="h-10 w-10 shadow-md ring-2 ring-background">
                 <AvatarFallback className="bg-gradient-to-br from-primary to-primary/80 font-semibold text-primary-foreground">
                   {getInitials(user.name || 'User')}

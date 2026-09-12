@@ -2,18 +2,11 @@
 
 import * as React from 'react';
 import { Button } from '@/components/ui/button';
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/components/ui/popover';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
-import { Clock, X, TrendingUp, Search } from 'lucide-react';
-import { formatDistanceToNow } from 'date-fns';
+import { TrendingUp, Search } from 'lucide-react';
 import { logger } from '@/lib/logger';
 
-export interface SearchHistoryItem {
+interface SearchHistoryItem {
   id: string;
   query: string;
   timestamp: number;
@@ -23,6 +16,21 @@ export interface SearchHistoryItem {
 const MAX_HISTORY_ITEMS = 20;
 const STORAGE_KEY = 'search-history';
 
+/** localStorage is untrusted input: valid JSON that is not an array of items
+ *  (schema drift, a tampered value) would otherwise reach `history.map` and
+ *  `formatDistanceToNow`, crashing the header on every page. */
+function isSearchHistoryItem(value: unknown): value is SearchHistoryItem {
+  const item = value as SearchHistoryItem | null;
+  return (
+    !!item &&
+    typeof item === 'object' &&
+    typeof item.id === 'string' &&
+    typeof item.query === 'string' &&
+    typeof item.timestamp === 'number' &&
+    Number.isFinite(item.timestamp)
+  );
+}
+
 export function useSearchHistory() {
   const [history, setHistory] = React.useState<SearchHistoryItem[]>([]);
 
@@ -31,8 +39,8 @@ export function useSearchHistory() {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
-        const parsed = JSON.parse(stored) as SearchHistoryItem[];
-        setHistory(parsed);
+        const parsed: unknown = JSON.parse(stored);
+        setHistory(Array.isArray(parsed) ? parsed.filter(isSearchHistoryItem) : []);
       }
     } catch (error) {
       logger.error('Failed to load search history', { error });
@@ -116,98 +124,6 @@ export function useSearchHistory() {
     removeFromHistory,
     clearHistory,
   };
-}
-
-interface SearchHistoryProps {
-  onSelect: (query: string) => void;
-}
-
-export function SearchHistory({ onSelect }: SearchHistoryProps) {
-  const { history, removeFromHistory, clearHistory } = useSearchHistory();
-  const [open, setOpen] = React.useState(false);
-
-  if (history.length === 0) {
-    return null;
-  }
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button variant="ghost" size="sm" className="h-9 gap-2">
-          <Clock className="h-4 w-4" />
-          Recent
-          <Badge variant="secondary" className="ml-1">
-            {history.length}
-          </Badge>
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-[400px] p-0" align="start">
-        <div className="flex items-center justify-between p-4 border-b">
-          <div className="flex items-center gap-2">
-            <Clock className="h-4 w-4" />
-            <h3 className="font-semibold text-sm">Search History</h3>
-          </div>
-          {history.length > 0 && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={clearHistory}
-              className="h-8 text-xs"
-            >
-              Clear All
-            </Button>
-          )}
-        </div>
-
-        <ScrollArea className="max-h-[300px]">
-          <div className="p-2">
-            {history.map((item) => (
-              <div
-                key={item.id}
-                onClick={() => {
-                  onSelect(item.query);
-                  setOpen(false);
-                }}
-                className="group flex items-center gap-3 px-3 py-2 rounded-md hover:bg-accent cursor-pointer"
-              >
-                <Search className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{item.query}</p>
-                  <div className="flex items-center gap-2 mt-0.5">
-                    <p className="text-xs text-muted-foreground">
-                      {formatDistanceToNow(item.timestamp, { addSuffix: true })}
-                    </p>
-                    {item.resultCount !== undefined && (
-                      <span className="text-xs text-muted-foreground">
-                        • {item.resultCount} results
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    removeFromHistory(item.id);
-                  }}
-                  className="h-8 w-8 p-0 opacity-0 group-hover:opacity-100"
-                >
-                  <X className="h-3 w-3" />
-                </Button>
-              </div>
-            ))}
-          </div>
-        </ScrollArea>
-
-        <div className="flex items-center justify-between p-3 border-t bg-muted/50">
-          <p className="text-xs text-muted-foreground">
-            Showing {history.length} of {MAX_HISTORY_ITEMS} max
-          </p>
-        </div>
-      </PopoverContent>
-    </Popover>
-  );
 }
 
 // Top Searches Component (for displaying most frequent/recent)

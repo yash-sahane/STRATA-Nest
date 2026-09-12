@@ -33,6 +33,7 @@ import { Button } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
+import { syncBadInput } from '@/lib/number-field';
 import { format } from 'date-fns';
 import { CalendarIcon, Loader2, X } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -50,12 +51,39 @@ const LABEL_COLORS = [
   { name: 'Gray', value: 'gray', class: 'bg-gray-500' },
 ];
 
+// Estimated hours is optional, and "blank" has to survive the trip to the
+// resolver as blank: z.coerce.number() turns '' (what a cleared number input
+// reports) into a real 0h estimate. Normalise every flavour of "nothing was
+// typed" to undefined before coercion, and keep an explicit 0 meaningful for
+// anyone who really does mean a zero-hour task.
+//
+// NaN is deliberately NOT normalised away any more — it is the sentinel the
+// Estimated Hours input stores when the browser reports validity.badInput.
+// Letting it fall through to z.coerce.number() is what turns "e", "-" and
+// "1e-" into a visible message instead of a silently dropped estimate.
+const optionalEstimatedHours = z.preprocess(
+  (value) => {
+    if (value === null) return undefined;
+    if (typeof value === 'string' && value.trim() === '') return undefined;
+    return value;
+  },
+  z.coerce
+    .number({ invalid_type_error: 'Estimated hours must be a number' })
+    .min(0, 'Estimated hours cannot be negative')
+    .max(1000, 'Estimated hours cannot exceed 1000')
+    .optional()
+);
+
 const taskSchema = z.object({
   title: z.string().min(3, 'Title must be at least 3 characters'),
   description: z.string().optional(),
   status: z.enum(['BACKLOG', 'TODO', 'IN_PROGRESS', 'REVIEW', 'DONE']),
   priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']),
   dueDate: z.date().optional(),
+  // Blank stays blank: see optionalEstimatedHours above. Without an input for
+  // this the value was always 0, which made the "Estimated Hours" sort, the
+  // board's clock badge and the time-efficiency analytics dead.
+  estimatedHours: optionalEstimatedHours,
   epicId: z.string().optional(),
   functionalRequirementId: z.string().optional(), // NEW: Link to FR
   labels: z.array(z.string()).optional(),
@@ -92,19 +120,43 @@ export function CreateTaskDialog({
   const [selectedColor, setSelectedColor] = React.useState('blue');
   const [showLabelInput, setShowLabelInput] = React.useState(false);
 
-  const form = useForm<TaskFormValues>({
-    resolver: zodResolver(taskSchema),
-    defaultValues: {
+  const emptyForm = React.useMemo<TaskFormValues>(
+    () => ({
       title: '',
       description: '',
       status: defaultStatus,
       priority: 'MEDIUM',
       labels: [],
       assignedTo: [],
-    },
+    }),
+    [defaultStatus]
+  );
+
+  const form = useForm<TaskFormValues>({
+    resolver: zodResolver(taskSchema),
+    defaultValues: emptyForm,
   });
 
   const labels = form.watch('labels') || [];
+
+  // The label composer is component state, not form state, so form.reset() on
+  // its own leaves a half-typed label name and an open composer behind.
+  const resetDialog = React.useCallback(() => {
+    form.reset(emptyForm);
+    setNewLabel('');
+    setSelectedColor('blue');
+    setShowLabelInput(false);
+  }, [form, emptyForm]);
+
+  // Closing DISCARDS. The tasks page mounts this dialog once and only flips
+  // `open`, so the draft is not thrown away for us: without this, cancelling
+  // left the abandoned title, estimate and labels sitting in the fields the
+  // next time New Task was clicked. Cancel, Escape, the X and an outside click
+  // all come through here.
+  const closeDialog = React.useCallback(() => {
+    resetDialog();
+    onOpenChange(false);
+  }, [resetDialog, onOpenChange]);
 
   const handleAddLabel = () => {
     if (newLabel.trim()) {
@@ -120,12 +172,18 @@ export function CreateTaskDialog({
   };
 
   const handleSubmit = async (values: TaskFormValues) => {
-    await onSubmit(values);
-    form.reset();
+    try {
+      await onSubmit(values);
+    } catch {
+      // The mutation hook already toasted; keep the dialog open with the input
+      // rather than letting react-hook-form re-throw into an unhandled rejection.
+      return;
+    }
+    resetDialog();
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(next) => (next ? onOpenChange(true) : closeDialog())}>
       <DialogContent size="lg" className="max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Create New Task</DialogTitle>
@@ -135,7 +193,12 @@ export function CreateTaskDialog({
         </DialogHeader>
 
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-4">
+          {/* noValidate: the browser ran its own constraint check first and, when
+              it failed, cancelled the submit with nothing but a transient native
+              bubble — no request, no FormMessage, no toast, nothing left on screen.
+              zod owns validation end to end here so a rejection can actually be
+              rendered next to the field that caused it. */}
+          <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-4" noValidate>
             {/* Title */}
             <FormField
               control={form.control}
@@ -267,6 +330,55 @@ export function CreateTaskDialog({
                       />
                     </PopoverContent>
                   </Popover>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            {/* Estimated Hours */}
+            <FormField
+              control={form.control}
+              name="estimatedHours"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Estimated Hours</FormLabel>
+                  <FormControl>
+                    <Input
+                      type="number"
+                      min={0}
+                      // Quarter hours are an ordinary estimate. With noValidate on
+                      // the form the browser no longer refuses an off-step 7.25 —
+                      // zod owns the bounds and this only sizes the spinner arrows.
+                      step={0.25}
+                      placeholder="e.g., 8"
+                      {...field}
+                      // NaN is the badInput sentinel set below; React has to be
+                      // handed a string here or it warns and wipes the characters
+                      // the user can still see in the field.
+                      value={
+                        typeof field.value === 'number' && Number.isNaN(field.value)
+                          ? ''
+                          : field.value ?? ''
+                      }
+                      onChange={(event) => {
+                        // Chrome reports "e", "-" and "1e-" as value="" with
+                        // validity.badInput set — indistinguishable from a cleared
+                        // field, so a typo was filed as "no estimate" while native
+                        // validation silently cancelled the submit. Store NaN and
+                        // let the resolver put the reason on the field.
+                        field.onChange(event.target.validity.badInput ? NaN : event.target.value);
+                      }}
+                      // onChange alone is not enough: React suppresses it when the
+                      // value string does not change, and on an EMPTY field the
+                      // first bad keystroke is "" -> "". keyup and blur always
+                      // fire. See lib/number-field.ts.
+                      onKeyUp={syncBadInput(field)}
+                      onBlur={(event) => {
+                        syncBadInput(field)(event);
+                        field.onBlur();
+                      }}
+                    />
+                  </FormControl>
                   <FormMessage />
                 </FormItem>
               )}
@@ -463,12 +575,7 @@ export function CreateTaskDialog({
             </div>
 
             <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => onOpenChange(false)}
-                disabled={isLoading}
-              >
+              <Button type="button" variant="outline" onClick={closeDialog} disabled={isLoading}>
                 Cancel
               </Button>
               <Button type="submit" disabled={isLoading}>

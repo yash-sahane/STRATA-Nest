@@ -38,7 +38,7 @@ const methodologies = [
       "Sprint retrospectives",
     ],
     bestFor: "Teams with predictable release cycles and defined goals",
-    color: "text-blue-600",
+    color: "text-info-text",
     bgColor: "bg-blue-50 dark:bg-blue-950",
     borderColor: "border-blue-200 dark:border-blue-800",
   },
@@ -120,7 +120,7 @@ export function MethodologySelector({
                           {methodology.label}
                         </Label>
                         {isSelected && (
-                          <CheckCircle2 className="h-5 w-5 text-green-600 ml-auto" />
+                          <CheckCircle2 className="h-5 w-5 text-success-text ml-auto" />
                         )}
                       </div>
 

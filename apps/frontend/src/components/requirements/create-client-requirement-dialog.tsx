@@ -67,29 +67,34 @@ export function CreateClientRequirementDialog({
     },
   });
 
-  // ✅ NEW: Update form when clientName prop changes
+  // Seed the form every time the dialog opens, not only when the prop changes.
+  // A bare reset() restores defaultValues (clientName: ''), which left the
+  // auto-filled — and therefore disabled — Client Name field empty and the
+  // dialog permanently unsubmittable after the first successful create.
   React.useEffect(() => {
-    if (clientName) {
-      reset({
-        title: '',
-        description: '',
-        clientName: clientName,
-      });
-    }
-  }, [clientName, reset]);
+    if (!open) return;
+    reset({ title: '', description: '', clientName });
+    setPriority('MEDIUM');
+  }, [open, clientName, reset]);
 
   const onSubmit = async (data: FormData) => {
-    await createRequirement.mutateAsync({
-      workspaceId,
-      projectId,
-      title: data.title,
-      description: data.description,
-      clientName: data.clientName,
-      priority: priority,
-      createdBy: userId,
-    });
+    try {
+      await createRequirement.mutateAsync({
+        workspaceId,
+        projectId,
+        title: data.title,
+        description: data.description,
+        clientName: data.clientName,
+        priority: priority,
+        createdBy: userId,
+      });
+    } catch {
+      // The mutation's onError already toasted. Swallow the rejection so it does
+      // not escape react-hook-form's handleSubmit as an unhandled rejection.
+      return;
+    }
 
-    reset();
+    reset({ title: '', description: '', clientName });
     setPriority('MEDIUM');
     onOpenChange(false);
   };
@@ -113,7 +118,7 @@ export function CreateClientRequirementDialog({
               placeholder="E.g., User Authentication System"
             />
             {errors.title && (
-              <p className="text-sm text-destructive">{errors.title.message}</p>
+              <p className="text-sm text-destructive-text">{errors.title.message}</p>
             )}
           </div>
 
@@ -132,14 +137,14 @@ export function CreateClientRequirementDialog({
               </p>
             )}
             {errors.clientName && (
-              <p className="text-sm text-destructive">{errors.clientName.message}</p>
+              <p className="text-sm text-destructive-text">{errors.clientName.message}</p>
             )}
           </div>
 
           <div className="space-y-2">
             <Label htmlFor="priority">Priority *</Label>
             <Select value={priority} onValueChange={(value) => setPriority(value as RequirementPriority)}>
-              <SelectTrigger>
+              <SelectTrigger id="priority">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -160,7 +165,7 @@ export function CreateClientRequirementDialog({
               className="min-h-[150px]"
             />
             {errors.description && (
-              <p className="text-sm text-destructive">{errors.description.message}</p>
+              <p className="text-sm text-destructive-text">{errors.description.message}</p>
             )}
           </div>
 

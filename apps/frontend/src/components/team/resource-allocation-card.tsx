@@ -30,7 +30,7 @@ export function ResourceAllocationCard({
   averageWorkload,
 }: ResourceAllocationCardProps) {
   return (
-    <Card className="overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-500">
+    <Card className="overflow-hidden">
       <CardHeader>
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>

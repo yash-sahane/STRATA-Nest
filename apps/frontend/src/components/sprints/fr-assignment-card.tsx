@@ -16,7 +16,8 @@ import {
 } from '@/components/ui/select';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { X, UserPlus, FileText } from 'lucide-react';
-import type { FunctionalRequirement, User } from '@/types';
+import type { FunctionalRequirement } from '@/types';
+import type { WorkspaceMemberUser } from '@/hooks/use-workspace';
 import { useUpdateFunctionalRequirement } from '@/hooks/use-functional-requirement';
 import { useTasksByFunctionalRequirement, useUpdateTask } from '@/hooks/use-task';
 import { toast } from '@/hooks/use-toast';
@@ -24,12 +25,26 @@ import { getInitials } from '@/lib/utils';
 import { logger } from '@/lib/logger';
 
 interface FRAssignmentCardProps {
+  /** Assigning or unassigning PATCHes the FR and its tasks, so it needs
+   *  `requirement:write`. Defaults to false: an omitted prop shows the roster
+   *  read-only rather than a control the API will refuse. */
+  canEdit?: boolean;
   fr: FunctionalRequirement;
-  teamMembers: User[];
+  /**
+   * The workspace roster as `useWorkspaceMembers` returns it — `id` is the USER
+   * id, which is what `fr.assignedTo` holds. Typed as the roster row rather than
+   * `User` so the only call site (the sprint backlog) no longer needs `as any`.
+   */
+  teamMembers: WorkspaceMemberUser[];
   projectId: string;
 }
 
-export function FRAssignmentCard({ fr, teamMembers, projectId }: FRAssignmentCardProps) {
+export function FRAssignmentCard({
+  fr,
+  teamMembers,
+  projectId,
+  canEdit = false,
+}: FRAssignmentCardProps) {
   const updateFR = useUpdateFunctionalRequirement();
   const updateTask = useUpdateTask();
   const { data: linkedTasks = [] } = useTasksByFunctionalRequirement(fr.id);
@@ -71,6 +86,9 @@ export function FRAssignmentCard({ fr, teamMembers, projectId }: FRAssignmentCar
             updateTask.mutateAsync({
               taskId: task.id,
               projectId,
+              // silent: this handler emits ONE toast at the end covering the FR
+              // and the whole fan-out. Without it each linked task added its own.
+              silent: true,
               updates: {
                 assignedTo: newAssignedTo,
                 assignedToNames: newAssignedToNames,
@@ -79,10 +97,6 @@ export function FRAssignmentCard({ fr, teamMembers, projectId }: FRAssignmentCar
             })
           )
         );
-        toast({
-          title: 'Success',
-          description: `Assigned ${member.name} to ${fr.hierarchyId} and ${linkedTasks.length} linked task(s)`,
-        });
       } catch (error) {
         logger.error('Failed to update linked tasks', { error });
         toast({
@@ -90,13 +104,21 @@ export function FRAssignmentCard({ fr, teamMembers, projectId }: FRAssignmentCar
           description: `Assigned ${member.name} to FR but failed to update some linked tasks.`,
           variant: 'destructive',
         });
+        setIsAssigning(false);
+        return;
       }
-    } else {
-      toast({
-        title: 'Success',
-        description: `Assigned ${member.name} to ${fr.hierarchyId}`,
-      });
     }
+
+    // The only success feedback on this path: useUpdateFunctionalRequirement is
+    // deliberately silent and the per-task updates are silenced above, so
+    // without this the click looked like a no-op until the invalidation
+    // round-tripped and users re-clicked.
+    toast({
+      title: 'Success',
+      description: linkedTasks.length
+        ? `Assigned ${member.name} to ${fr.hierarchyId} and ${linkedTasks.length} linked task(s)`
+        : `Assigned ${member.name} to ${fr.hierarchyId}`,
+    });
 
     setIsAssigning(false);
   };
@@ -108,6 +130,7 @@ export function FRAssignmentCard({ fr, teamMembers, projectId }: FRAssignmentCar
 
     if (index === -1) return;
 
+    const removedName = currentAssignedToNames[index] ?? 'member';
     const newAssignedTo = currentAssignedTo.filter((id) => id !== userId);
     const newAssignedToNames = currentAssignedToNames.filter((_, i) => i !== index);
 
@@ -128,6 +151,7 @@ export function FRAssignmentCard({ fr, teamMembers, projectId }: FRAssignmentCar
             updateTask.mutateAsync({
               taskId: task.id,
               projectId,
+              silent: true, // one toast for the whole fan-out, emitted below
               updates: {
                 assignedTo: newAssignedTo,
                 assignedToNames: newAssignedToNames,
@@ -136,10 +160,6 @@ export function FRAssignmentCard({ fr, teamMembers, projectId }: FRAssignmentCar
             })
           )
         );
-        toast({
-          title: 'Success',
-          description: `Removed team member from ${fr.hierarchyId} and ${linkedTasks.length} linked task(s)`,
-        });
       } catch (error) {
         logger.error('Failed to update linked tasks', { error });
         toast({
@@ -147,24 +167,20 @@ export function FRAssignmentCard({ fr, teamMembers, projectId }: FRAssignmentCar
           description: `Removed from FR but failed to update some linked tasks.`,
           variant: 'destructive',
         });
+        return;
       }
-    } else {
-      toast({
-        title: 'Success',
-        description: `Removed team member from ${fr.hierarchyId}`,
-      });
     }
+
+    toast({
+      title: 'Success',
+      description: linkedTasks.length
+        ? `Removed ${removedName} from ${fr.hierarchyId} and ${linkedTasks.length} linked task(s)`
+        : `Removed ${removedName} from ${fr.hierarchyId}`,
+    });
   };
 
   const status = getFunctionalRequirementStatusConfig(fr.status);
   const complexity = getComplexityConfig(fr.complexity);
-
-  const complexityColor = {
-    LOW: 'bg-green-500',
-    MEDIUM: 'bg-yellow-500',
-    HIGH: 'bg-orange-500',
-    VERY_HIGH: 'bg-red-500',
-  };
 
   return (
     <Card className="transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
@@ -176,7 +192,7 @@ export function FRAssignmentCard({ fr, teamMembers, projectId }: FRAssignmentCar
               <Badge variant="outline" className="font-mono text-xs">
                 {fr.hierarchyId}
               </Badge>
-              <Badge className={complexityColor[fr.complexity]}>
+              <Badge variant={complexity.badgeVariant}>
                 Complexity: {complexity.label}
               </Badge>
             </div>
@@ -204,14 +220,17 @@ export function FRAssignmentCard({ fr, teamMembers, projectId }: FRAssignmentCar
                     <AvatarFallback className="text-xs">{getInitials(member.name)}</AvatarFallback>
                   </Avatar>
                   <span className="text-sm">{member.name}</span>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-4 w-4 rounded-full hover:bg-destructive hover:text-destructive-foreground"
-                    onClick={() => handleUnassignMember(member.id)}
-                  >
-                    <X className="h-3 w-3" />
-                  </Button>
+                  {canEdit && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Unassign ${member.name}`}
+                      className="h-4 w-4 rounded-full hover:bg-destructive hover:text-destructive-foreground"
+                      onClick={() => handleUnassignMember(member.id)}
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
+                  )}
                 </div>
               ))}
             </div>
@@ -221,7 +240,7 @@ export function FRAssignmentCard({ fr, teamMembers, projectId }: FRAssignmentCar
         </div>
 
         {/* Assign New Member */}
-        {unassignedMembers.length > 0 && (
+        {canEdit && unassignedMembers.length > 0 && (
           <div className="space-y-2">
             {isAssigning ? (
               <div className="flex gap-2">
@@ -264,7 +283,7 @@ export function FRAssignmentCard({ fr, teamMembers, projectId }: FRAssignmentCar
 
         {/* FR Metadata */}
         <div className="flex items-center gap-3 pt-2 border-t text-xs text-muted-foreground">
-          <Badge variant={status.badgeVariant}>
+          <Badge variant={status.badgeVariant} className={status.badgeClassName}>
             Status: {status.label}
           </Badge>
           {fr.priority && (

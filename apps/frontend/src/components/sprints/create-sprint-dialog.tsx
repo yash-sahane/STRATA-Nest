@@ -27,7 +27,7 @@ import { Button } from '@/components/ui/button';
 import { Calendar as CalendarIcon, Loader2 } from 'lucide-react';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { format } from 'date-fns';
+import { format, startOfDay } from 'date-fns';
 import { cn } from '@/lib/utils';
 
 const formSchema = z.object({
@@ -40,9 +40,10 @@ const formSchema = z.object({
     required_error: 'End date is required',
   }),
 }).refine(
-  (data) => data.endDate > data.startDate,
+  // >=, not >: a one-day sprint (start === end) is legitimate.
+  (data) => data.endDate >= data.startDate,
   {
-    message: 'End date must be after start date',
+    message: 'End date must be on or after the start date',
     path: ['endDate'],
   }
 );
@@ -57,7 +58,7 @@ interface CreateSprintDialogProps {
     goal?: string;
     startDate: string;
     endDate: string;
-  }) => void;
+  }) => void | Promise<void>;
   isLoading?: boolean;
   initialData?: {
     name: string;
@@ -82,21 +83,39 @@ export function CreateSprintDialog({
     },
   });
 
-  // Update form when initialData changes
+  // Update form when initialData changes. Callers must pass a STABLE reference
+  // (memoize it) or this resets the form on every parent render.
   React.useEffect(() => {
     if (initialData) {
       form.reset(initialData);
     }
   }, [initialData, form]);
 
-  const handleSubmit = (data: FormData) => {
-    onSubmit({
-      name: data.name,
-      goal: data.goal,
-      startDate: data.startDate.toISOString(),
-      endDate: data.endDate.toISOString(),
-    });
-    form.reset();
+  // An already-running sprint keeps its stored start day selectable, otherwise
+  // editing it would disable the very value the form is showing.
+  const minSelectableDate = React.useMemo(() => {
+    const today = startOfDay(new Date());
+    const existing = initialData ? startOfDay(initialData.startDate) : null;
+    return existing && existing < today ? existing : today;
+  }, [initialData]);
+
+  const handleSubmit = async (data: FormData) => {
+    try {
+      await onSubmit({
+        name: data.name,
+        goal: data.goal,
+        // Calendar cells are LOCAL midnight; toISOString() would shift them into
+        // the previous UTC day for any zone ahead of UTC and the sprint would be
+        // stored (and redisplayed) one day early. Send the calendar day itself.
+        startDate: format(data.startDate, 'yyyy-MM-dd'),
+        endDate: format(data.endDate, 'yyyy-MM-dd'),
+      });
+      // Only clear once the write succeeded — resetting eagerly wipes the user's
+      // input while the dialog stays open on a rejected save.
+      form.reset();
+    } catch {
+      // The mutation hook already surfaced the error; keep the entered values.
+    }
   };
 
   return (
@@ -177,7 +196,9 @@ export function CreateSprintDialog({
                           mode="single"
                           selected={field.value}
                           onSelect={field.onChange}
-                          disabled={(date) => date < new Date()}
+                          // Compare against midnight, not `now` — calendar cells
+                          // are local midnight, so `new Date()` disables today.
+                          disabled={(date) => date < minSelectableDate}
                           initialFocus
                         />
                       </PopoverContent>
@@ -219,7 +240,8 @@ export function CreateSprintDialog({
                           onSelect={field.onChange}
                           disabled={(date) => {
                             const startDate = form.getValues('startDate');
-                            return startDate ? date <= startDate : date < new Date();
+                            // `<`, not `<=`: the sprint may end on its start day.
+                            return startDate ? date < startDate : date < minSelectableDate;
                           }}
                           initialFocus
                         />

@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -47,6 +48,140 @@ const formSchema = z.object({
 
 type FormData = z.infer<typeof formSchema>;
 
+/** A generated node before it has been checked — every field is really unknown. */
+type RawNode = Record<string, unknown>;
+
+/**
+ * One value the preview drops straight into JSX. Anything that is not a string
+ * or a number throws "Objects are not valid as a React child" from the RENDER
+ * pass, which is outside onSubmit's try/catch and therefore fatal to the route.
+ */
+const str = (value: unknown): string =>
+  typeof value === 'string' || typeof value === 'number' ? String(value) : '';
+
+/**
+ * A number the API stores in a numeric column, so "8" has to become 8 — a
+ * string reaches Prisma as a Float and fails the whole bulk-save.
+ */
+const num = (value: unknown): number | undefined => {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  const parsed = Number(value.trim());
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+/**
+ * Elements that are actually objects. The model sometimes emits a `null` (or a
+ * bare string) where a node belongs, and `node.title` throws on it — inside
+ * this normalizer that is only a "Generation Failed" toast, but a survivor
+ * reaching the preview kills the route. Dropping the element loses nothing:
+ * there was no node there to show.
+ */
+const nodes = (value: unknown): RawNode[] =>
+  Array.isArray(value)
+    ? value.filter(
+        (v): v is RawNode => typeof v === 'object' && v !== null && !Array.isArray(v)
+      )
+    : [];
+
+/** Leaf arrays are rendered one item per <li>/<Badge>, so they must be scalars. */
+const strings = (value: unknown): string[] =>
+  Array.isArray(value) ? value.map(str).filter(Boolean) : [];
+
+/**
+ * A cross-reference, kept EXACTLY as the model wrote it when it is already a
+ * scalar. bulk-save's resolver reads a number as an array index but a string as
+ * a title first, so flattening 2 to "2" could re-point the link at an epic that
+ * merely happens to be named "2". Anything non-scalar is dropped: it can only
+ * resolve to null anyway.
+ */
+const isRef = (value: unknown): value is string | number =>
+  typeof value === 'string' || typeof value === 'number';
+const refs = (value: unknown): (string | number)[] =>
+  Array.isArray(value) ? value.filter(isRef) : [];
+
+/**
+ * The prompt's JSON schema is advisory, not enforced: the model regularly drops
+ * an optional array on an individual node even when every top-level section is
+ * perfect, and just as regularly answers with the wrong TYPE for a field.
+ * ai-generator only defends the TOP-LEVEL arrays, so one missing
+ * `acceptanceCriteria` / `labels` / `milestones` — or one null element, or one
+ * object where a title belongs — threw inside this dialog's render, which
+ * unmounts the dialog AND replaces the whole /requirements route with the error
+ * boundary, throwing away a generation the user already paid ~25s and one API
+ * call for. This is the single arrival point for model output: make the shape
+ * true here rather than guarding every read site in the preview.
+ *
+ * Cross-references (`functionalRequirementIds`, `epicId`, `parentId`) are the
+ * one thing NOT rewritten: bulk-save resolves them to rebuild the epic→FR and
+ * task→epic links, so they pass through exactly as the model wrote them.
+ */
+function normalizeGenerated(raw: GeneratedHierarchy): GeneratedHierarchy {
+  const g = (raw ?? {}) as Partial<GeneratedHierarchy>;
+  const normalized = {
+    ...g,
+    // Every field here is rendered unconditionally in the preview header.
+    analysis: {
+      summary: str(g.analysis?.summary),
+      complexity: str(g.analysis?.complexity),
+      estimatedDuration: str(g.analysis?.estimatedDuration),
+      // Displayed, never computed with — and the model answers "3-5" as often
+      // as 4, so keep whatever it said rather than rounding it away to 0.
+      recommendedTeamSize: str(g.analysis?.recommendedTeamSize),
+    },
+    clientRequirements: nodes(g.clientRequirements).map((req) => ({
+      ...req,
+      title: str(req.title),
+      clientName: str(req.clientName),
+      description: str(req.description),
+      priority: str(req.priority),
+    })),
+    functionalRequirements: nodes(g.functionalRequirements).map((req) => ({
+      ...req,
+      title: str(req.title),
+      description: str(req.description),
+      type: str(req.type),
+      priority: str(req.priority),
+      complexity: str(req.complexity),
+      parentId: str(req.parentId),
+      acceptanceCriteria: strings(req.acceptanceCriteria),
+      businessRules: strings(req.businessRules),
+    })),
+    epics: nodes(g.epics).map((epic) => ({
+      ...epic,
+      name: str(epic.name),
+      description: str(epic.description),
+      color: str(epic.color),
+      startDate: str(epic.startDate),
+      endDate: str(epic.endDate),
+      functionalRequirementIds: refs(epic.functionalRequirementIds),
+    })),
+    tasks: nodes(g.tasks).map((task) => ({
+      ...task,
+      title: str(task.title),
+      description: str(task.description),
+      priority: str(task.priority),
+      epicId: isRef(task.epicId) ? task.epicId : undefined,
+      estimatedHours: num(task.estimatedHours),
+      labels: strings(task.labels),
+    })),
+    timeline: {
+      projectDuration: str(g.timeline?.projectDuration) || str(g.analysis?.estimatedDuration),
+      milestones: nodes(g.timeline?.milestones).map((milestone) => ({
+        name: str(milestone.name),
+        date: str(milestone.date),
+        description: str(milestone.description),
+      })),
+    },
+  };
+  // The declared type was always a lie — ai-generator hands back a bare
+  // JSON.parse of the model's answer. It is true of `normalized` by
+  // construction, but the enum-shaped fields ("HIGH", "FUNCTIONAL", ...) are
+  // whatever the model typed, so re-assert it here rather than pretend a
+  // per-field cast validated them; the API upper-cases and defaults them.
+  return normalized as unknown as GeneratedHierarchy;
+}
+
 interface AIGenerateDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -72,8 +207,10 @@ export function AIGenerateDialog({
   const [progress, setProgress] = React.useState(0);
   const [generatedData, setGeneratedData] = React.useState<GeneratedHierarchy | null>(null);
   const [analysis, setAnalysis] = React.useState<DocumentAnalysis | null>(null);
-  const [charCount, setCharCount] = React.useState(0);
   const [saveProgress, setSaveProgress] = React.useState(0);
+  /** Stable per generated tree: makes an accidental second "Confirm & Save All" a no-op server-side. */
+  const [saveKey, setSaveKey] = React.useState<string | null>(null);
+  const queryClient = useQueryClient();
 
   const form = useForm<FormData>({
     resolver: zodResolver(formSchema),
@@ -82,11 +219,36 @@ export function AIGenerateDialog({
     },
   });
 
+  // Derived, not duplicated state: file upload and form.reset() both go through
+  // setValue, which never reached a separate charCount counter.
+  const charCount = form.watch('documentText')?.length ?? 0;
+
+  /**
+   * The planned timeline, but only when it is genuinely a SECOND answer.
+   *
+   * `timeline.projectDuration` is seeded from `analysis.estimatedDuration`
+   * whenever the model omits it — in ai-generator when the whole `timeline`
+   * block is missing, and in normalizeGenerated when only the field is — so the
+   * two are usually the identical string, and the preview header printed it
+   * twice under two badges that both read "Duration:". They are different
+   * claims only when the model answers both: the estimate is how long the
+   * DOCUMENT looks like it needs, the timeline is the span the generated
+   * milestones actually cover. So label them apart, and drop the second badge
+   * when it would only echo the first.
+   */
+  const plannedTimeline = React.useMemo(() => {
+    if (!generatedData || !analysis) return '';
+    const planned = str(generatedData.timeline.projectDuration).trim();
+    const estimate = str(analysis.estimatedDuration).trim();
+    return planned.toLowerCase() === estimate.toLowerCase() ? '' : planned;
+  }, [generatedData, analysis]);
+
   const resetDialog = () => {
     setStep('input');
     setProgress(0);
     setGeneratedData(null);
     setAnalysis(null);
+    setSaveKey(null);
     form.reset();
   };
 
@@ -94,29 +256,35 @@ export function AIGenerateDialog({
     const file = event.target.files?.[0];
     if (!file) return;
 
-    // Check file type
-    const validTypes = [
-      'text/plain',
-      'application/pdf',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    ];
+    // Only these are actually readable: PDFs go through /api/parse-pdf and the
+    // rest are read as plain text. .docx used to be offered here too, but
+    // nothing unzips it — `file.text()` handed the raw archive bytes to the
+    // model as the "requirements document".
+    const validTypes = ['text/plain', 'text/markdown', 'application/pdf'];
+    const name = file.name.toLowerCase();
+    const isPdf = file.type === 'application/pdf' || name.endsWith('.pdf');
+    // Some platforms report an empty `type`, so the extension has to count too.
     if (
       !validTypes.includes(file.type) &&
-      !file.name.endsWith('.txt') &&
-      !file.name.endsWith('.md')
+      !name.endsWith('.txt') &&
+      !name.endsWith('.md') &&
+      !isPdf
     ) {
       toast({
         title: 'Invalid File Type',
-        description: 'Please upload a .txt, .md, .pdf, or .docx file',
+        description: 'Please upload a .txt, .md, or .pdf file',
         variant: 'destructive',
       });
+      // Let the same file be re-picked after a correction; without this the
+      // input keeps its value and the next identical choice fires no change.
+      event.target.value = '';
       return;
     }
 
     try {
       let text = '';
 
-      if (file.type === 'application/pdf') {
+      if (isPdf) {
         // Handle PDF files properly using API route
         const formData = new FormData();
         formData.append('file', file);
@@ -126,12 +294,13 @@ export function AIGenerateDialog({
           body: formData,
         });
 
+        const data = await response.json().catch(() => null);
         if (!response.ok) {
-          throw new Error('Failed to parse PDF');
+          // The route answers 401 (session expired) and 413 (too large) with a
+          // reason; "Failed to parse PDF" hid both.
+          throw new Error(data?.error || 'Failed to parse PDF');
         }
-
-        const data = await response.json();
-        text = data.text;
+        text = data?.text ?? '';
       } else {
         // Handle text files
         text = await file.text();
@@ -149,6 +318,9 @@ export function AIGenerateDialog({
           (error instanceof Error ? error.message : String(error)) || 'Failed to read file',
         variant: 'destructive',
       });
+    } finally {
+      // Re-picking the same file after a failure must re-fire onChange.
+      event.target.value = '';
     }
   };
 
@@ -163,7 +335,9 @@ export function AIGenerateDialog({
         setProgress((prev) => Math.min(prev + 10, 90));
       }, 800);
 
-      const generated = await generateProjectHierarchyUnified(values.documentText);
+      const generated = normalizeGenerated(
+        await generateProjectHierarchyUnified(values.documentText)
+      );
 
       clearInterval(progressInterval);
       setProgress(100);
@@ -171,6 +345,7 @@ export function AIGenerateDialog({
       // Extract analysis from unified response
       setAnalysis(generated.analysis);
       setGeneratedData(generated);
+      setSaveKey(crypto.randomUUID());
 
       // Show preview
       setStep('preview');
@@ -208,13 +383,15 @@ export function AIGenerateDialog({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          // Retry-safe: the server returns the first response for a repeated key
+          // instead of building a second copy of the whole tree.
+          ...(saveKey ? { 'Idempotency-Key': saveKey } : {}),
         },
         body: JSON.stringify({
           generated: generatedData,
           projectId,
           projectCode,
           workspaceId,
-          userId,
         }),
       });
 
@@ -224,24 +401,34 @@ export function AIGenerateDialog({
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to save generated data');
+        throw new Error(data?.error?.message || data?.error || 'Failed to save generated data');
       }
 
       // Call onGenerated callback for any additional handling
       onGenerated(generatedData);
 
-      // Show success toast with counts
+      // The API response is FLAT ({ success, clientRequirements, ... }) — there
+      // is no `result` wrapper, and reading one made every SUCCESSFUL save
+      // report 'Save Failed' and invite a duplicating retry.
       toast({
         title: 'Successfully Saved!',
-        description: `Added ${data.result.clientRequirements.length} client requirements, ${data.result.functionalRequirements.length} FRs, ${data.result.epics.length} epics, and ${data.result.tasks.length} tasks`,
+        description: `Added ${data.clientRequirements?.length ?? 0} client requirements, ${data.functionalRequirements?.length ?? 0} FRs, ${data.epics?.length ?? 0} epics, and ${data.tasks?.length ?? 0} tasks`,
       });
+
+      // Refetch instead of window.location.reload(): a reload destroys the
+      // document — and sonner's toast store — in the same tick as the toast.
+      for (const key of [
+        ['client-requirements', projectId],
+        ['functional-requirements', projectId],
+        ['epics', projectId],
+        ['tasks', projectId],
+      ]) {
+        queryClient.invalidateQueries({ queryKey: key });
+      }
 
       // Close dialog and reset
       onOpenChange(false);
       resetDialog();
-
-      // Refresh the page to show new data
-      window.location.reload();
     } catch (error: any) {
       toast({
         title: 'Save Failed',
@@ -294,12 +481,24 @@ export function AIGenerateDialog({
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
+                  {/* The control had no label of any kind, so tabbing the dialog
+                      reached a completely unnamed file-upload button. The
+                      sr-only <label> names it and the description is wired up
+                      so the accepted formats are announced with it. */}
+                  <label htmlFor="ai-generate-file" className="sr-only">
+                    Upload a requirements document
+                  </label>
                   <input
+                    id="ai-generate-file"
                     type="file"
-                    accept=".txt,.md,.pdf,.docx"
+                    accept=".txt,.md,.pdf"
+                    aria-describedby="ai-generate-file-hint"
                     onChange={handleFileUpload}
                     className="block w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-primary file:text-primary-foreground hover:file:bg-primary/90"
                   />
+                  <p id="ai-generate-file-hint" className="sr-only">
+                    Accepted formats: .txt, .md, .pdf
+                  </p>
                 </CardContent>
               </Card>
 
@@ -318,10 +517,6 @@ Example:
 We need a mobile app for our e-commerce business that allows customers to browse products, add to cart, make payments, and track orders. The app should support both iOS and Android platforms..."
                         className="min-h-[300px] font-mono text-sm"
                         {...field}
-                        onChange={(e) => {
-                          field.onChange(e);
-                          setCharCount(e.target.value.length);
-                        }}
                       />
                     </FormControl>
                     <div className="flex justify-between items-start">
@@ -330,7 +525,7 @@ We need a mobile app for our e-commerce business that allows customers to browse
                         details about features, requirements, and business goals.
                       </FormDescription>
                       <span
-                        className={`text-sm font-medium ${charCount >= 100 ? 'text-green-600' : charCount >= 50 ? 'text-yellow-600' : 'text-red-600'}`}
+                        className={`text-sm font-medium ${charCount >= 100 ? 'text-green-600 dark:text-green-400' : charCount >= 50 ? 'text-yellow-600 dark:text-yellow-400' : 'text-red-600 dark:text-red-400'}`}
                       >
                         {charCount} / 100
                       </span>
@@ -413,13 +608,15 @@ We need a mobile app for our e-commerce business that allows customers to browse
                 <p className="text-sm">{analysis.summary}</p>
                 <div className="flex flex-wrap gap-2">
                   <Badge variant="outline">Complexity: {analysis.complexity}</Badge>
-                  <Badge variant="outline">Duration: {analysis.estimatedDuration}</Badge>
+                  <Badge variant="outline">
+                    Estimated Duration: {analysis.estimatedDuration}
+                  </Badge>
                   <Badge variant="outline">
                     Team Size: {analysis.recommendedTeamSize} developers
                   </Badge>
-                  <Badge variant="outline">
-                    Duration: {generatedData.timeline.projectDuration}
-                  </Badge>
+                  {plannedTimeline && (
+                    <Badge variant="outline">Planned Timeline: {plannedTimeline}</Badge>
+                  )}
                 </div>
               </CardContent>
             </Card>

@@ -26,7 +26,6 @@ import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCreateWorkspace } from '@/hooks/use-workspace';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
-import { useIsAdmin } from '@/hooks/use-permissions';
 
 interface WorkspaceSwitcherProps {
   className?: string;
@@ -36,27 +35,40 @@ export function WorkspaceSwitcher({ className }: WorkspaceSwitcherProps) {
   const { user } = useAuth();
   const { currentWorkspace, currentWorkspaceId, workspaces, isLoading, setCurrentWorkspaceId } = useCurrentWorkspace();
   const createWorkspace = useCreateWorkspace();
-  const isAdmin = useIsAdmin();
+  // Creating a workspace is a PLATFORM-admin action (the API enforces it), not
+  // a workspace-role one — useIsAdmin() reads the current workspace's role and
+  // offered the entry point to managers the server would reject.
+  const canCreateWorkspace = user?.isAdmin === true;
 
   const [open, setOpen] = React.useState(false);
   const [dialogOpen, setDialogOpen] = React.useState(false);
   const [name, setName] = React.useState('');
   const [description, setDescription] = React.useState('');
 
+  const closeDialog = () => {
+    setName('');
+    setDescription('');
+    setDialogOpen(false);
+  };
+
   const handleCreateWorkspace = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!user) return;
 
-    await createWorkspace.mutateAsync({
-      name,
-      description,
-      ownerId: user.id,
-    });
+    try {
+      await createWorkspace.mutateAsync({
+        name,
+        description,
+        ownerId: user.id,
+      });
+    } catch {
+      // error toast handled inside the mutation; leave the dialog open so the
+      // typed name is not lost
+      return;
+    }
 
-    setName('');
-    setDescription('');
-    setDialogOpen(false);
+    closeDialog();
   };
 
   if (isLoading) {
@@ -68,7 +80,10 @@ export function WorkspaceSwitcher({ className }: WorkspaceSwitcherProps) {
   }
 
   return (
-    <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+    <Dialog
+      open={dialogOpen}
+      onOpenChange={(next) => (next ? setDialogOpen(true) : closeDialog())}
+    >
       <DropdownMenu open={open} onOpenChange={setOpen}>
         <DropdownMenuTrigger asChild>
           <Button
@@ -82,7 +97,13 @@ export function WorkspaceSwitcher({ className }: WorkspaceSwitcherProps) {
             <ChevronsUpDown className="ml-auto h-4 w-4 shrink-0 opacity-50" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent className="w-[200px]">
+        {/* The menu grows with the workspace list and the primitive is
+            `overflow-hidden` with no cap, so on a long list it ran off the
+            bottom of the screen: the last workspaces and "Create Workspace"
+            could not be reached by mouse, wheel or keyboard, and Radix's scroll
+            lock stopped the page behind it from scrolling either. Radix already
+            measures the space it has — cap the height with it and scroll. */}
+        <DropdownMenuContent className="w-[200px] max-h-(--radix-dropdown-menu-content-available-height) overflow-y-auto">
           <DropdownMenuLabel>Workspaces</DropdownMenuLabel>
           <DropdownMenuSeparator />
           {workspaces?.map((workspace) => (
@@ -106,9 +127,12 @@ export function WorkspaceSwitcher({ className }: WorkspaceSwitcherProps) {
             </DropdownMenuItem>
           ))}
           <DropdownMenuSeparator />
-          {isAdmin && (
+          {canCreateWorkspace && (
             <DropdownMenuItem
-              onSelect={() => {
+              onSelect={(event) => {
+                // Let the menu finish closing before the dialog claims focus,
+                // otherwise the two focus scopes fight over the first field.
+                event.preventDefault();
                 setOpen(false);
                 setDialogOpen(true);
               }}
@@ -152,7 +176,7 @@ export function WorkspaceSwitcher({ className }: WorkspaceSwitcherProps) {
             </div>
           </div>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
+            <Button type="button" variant="outline" onClick={closeDialog}>
               Cancel
             </Button>
             <Button type="submit" disabled={createWorkspace.isPending}>

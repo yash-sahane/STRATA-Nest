@@ -5,6 +5,7 @@ import { getInitials } from '@/lib/utils';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useTeamAttendance, useTeamAttendanceAnalytics } from '@/hooks/use-team-attendance';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -27,7 +28,13 @@ import {
   Download,
 } from 'lucide-react';
 import { ROLE_CONFIG } from '@/hooks/use-team';
-import { getCurrentDate, formatTime } from '@/lib/attendance-utils';
+import {
+  formatMinutes,
+  formatTime,
+  getAttendanceStatusColor,
+  getCurrentDate,
+} from '@/lib/attendance-utils';
+import { ErrorState } from '@/components/ui/error-state';
 
 export function TeamAttendanceTab() {
   const { currentWorkspace } = useCurrentWorkspace();
@@ -37,7 +44,7 @@ export function TeamAttendanceTab() {
   const [statusFilter, setStatusFilter] = React.useState<string>('ALL');
   const [roleFilter, setRoleFilter] = React.useState<string>('ALL');
 
-  const { data: teamAttendance, isLoading } = useTeamAttendance(
+  const { data: teamAttendance, isLoading, isError, refetch } = useTeamAttendance(
     currentWorkspace?.id,
     selectedDate
   );
@@ -59,28 +66,16 @@ export function TeamAttendanceTab() {
     });
   }, [teamAttendance, searchQuery, statusFilter, roleFilter]);
 
-  const getStatusColor = (status: string) => {
-    const colors = {
-      PRESENT: 'bg-green-100 text-green-800 border-green-200',
-      ABSENT: 'bg-red-100 text-red-800 border-red-200',
-      LATE: 'bg-orange-100 text-orange-800 border-orange-200',
-      ON_LEAVE: 'bg-blue-100 text-blue-800 border-blue-200',
-      WEEKEND: 'bg-gray-100 text-gray-800 border-gray-200',
-      HALF_DAY: 'bg-yellow-100 text-yellow-800 border-yellow-200',
-    };
-    return colors[status as keyof typeof colors] || 'bg-gray-100 text-gray-800';
-  };
-
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'PRESENT':
-        return <CheckCircle className="h-4 w-4 text-green-600" />;
+        return <CheckCircle className="h-4 w-4 text-green-600 dark:text-green-400" />;
       case 'ABSENT':
-        return <XCircle className="h-4 w-4 text-red-600" />;
+        return <XCircle className="h-4 w-4 text-red-600 dark:text-red-400" />;
       case 'LATE':
-        return <Clock className="h-4 w-4 text-orange-600" />;
+        return <Clock className="h-4 w-4 text-orange-600 dark:text-orange-400" />;
       case 'ON_LEAVE':
-        return <Calendar className="h-4 w-4 text-blue-600" />;
+        return <Calendar className="h-4 w-4 text-blue-600 dark:text-blue-400" />;
       default:
         return null;
     }
@@ -96,7 +91,7 @@ export function TeamAttendanceTab() {
             Team Attendance
           </h3>
           <p className="text-sm text-muted-foreground">
-            You don&apos;t have permission to view team attendance.
+            Daily attendance for everyone in this workspace.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -106,24 +101,30 @@ export function TeamAttendanceTab() {
             onChange={(e) => setSelectedDate(e.target.value)}
             className="w-auto"
           />
-          <Button variant="outline" size="icon">
+          <Button variant="outline" size="icon" aria-label="Download attendance for this day">
             <Download className="h-4 w-4" />
           </Button>
         </div>
       </div>
 
       {/* Statistics Cards */}
-      {isLoading ? (
+      {isError ? (
+        <ErrorState
+          title="Couldn't load team attendance"
+          description="The team's attendance for this date could not be fetched."
+          onRetry={() => refetch()}
+        />
+      ) : isLoading ? (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           {[1, 2, 3, 4].map((i) => (
             <Card key={i}>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <div className="h-4 w-24 bg-muted animate-pulse rounded" />
-                <div className="h-4 w-4 bg-muted animate-pulse rounded" />
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-4 w-4" />
               </CardHeader>
-              <CardContent>
-                <div className="h-8 w-16 bg-muted animate-pulse rounded mb-2" />
-                <div className="h-3 w-32 bg-muted animate-pulse rounded" />
+              <CardContent className="space-y-2">
+                <Skeleton className="h-8 w-16" />
+                <Skeleton className="h-3 w-32" />
               </CardContent>
             </Card>
           ))}
@@ -144,12 +145,14 @@ export function TeamAttendanceTab() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">Present</CardTitle>
-              <CheckCircle className="h-4 w-4 text-green-600" />
+              <CheckCircle className="h-4 w-4 text-green-600 dark:text-green-400" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-green-600">{analytics.presentCount}</div>
+              <div className="text-2xl font-bold text-green-600 dark:text-green-400">{analytics.presentCount}</div>
               <p className="text-xs text-muted-foreground">
-                {analytics.attendanceRate}% attendance rate
+                {analytics.isWorkingDay
+                  ? `${analytics.attendanceRate}% attendance rate`
+                  : 'Non-working day'}
               </p>
             </CardContent>
           </Card>
@@ -157,11 +160,13 @@ export function TeamAttendanceTab() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">Absent</CardTitle>
-              <XCircle className="h-4 w-4 text-red-600" />
+              <XCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-red-600">{analytics.absentCount}</div>
-              <p className="text-xs text-muted-foreground">{analytics.lateCount} late arrivals</p>
+              <div className="text-2xl font-bold text-red-600 dark:text-red-400">{analytics.absentCount}</div>
+              <p className="text-xs text-muted-foreground">
+                {analytics.lateCount} late &middot; {analytics.onLeaveCount} on leave
+              </p>
             </CardContent>
           </Card>
 
@@ -263,7 +268,9 @@ export function TeamAttendanceTab() {
                   </div>
 
                   <div className="flex items-center gap-4">
-                    {member.attendance && (
+                    {/* An ON_LEAVE row carries no arrival time — the badge alone
+                        tells that story. */}
+                    {member.attendance?.checkInTime && (
                       <div className="text-right">
                         <div className="text-sm font-medium">
                           {formatTime(member.attendance.checkInTime)}
@@ -277,15 +284,18 @@ export function TeamAttendanceTab() {
                               {member.attendance.workHours.toFixed(1)}h worked
                             </div>
                           )}
-                        {member.attendance.lateMinutes && member.attendance.lateMinutes > 0 && (
-                          <div className="text-xs text-orange-600">
-                            Late by {member.attendance.lateMinutes} min
+                        {(member.attendance.lateMinutes ?? 0) > 0 && (
+                          <div className="text-xs text-orange-600 dark:text-orange-400">
+                            Late by {formatMinutes(member.attendance.lateMinutes ?? 0)}
                           </div>
                         )}
                       </div>
                     )}
 
-                    <Badge variant="outline" className={`gap-1 ${getStatusColor(member.status)}`}>
+                    <Badge
+                      variant="outline"
+                      className={`gap-1 ${getAttendanceStatusColor(member.status)}`}
+                    >
                       {getStatusIcon(member.status)}
                       {member.status.replace('_', ' ')}
                     </Badge>

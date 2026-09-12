@@ -1,6 +1,6 @@
 ﻿'use client';
 
-import { getFunctionalRequirementStatusConfig } from '@/lib/semantic/status';
+import { getFunctionalRequirementStatusConfig, getRequirementStatusConfig } from '@/lib/semantic/status';
 import { getComplexityConfig } from '@/lib/semantic/complexity';
 import { getPriorityConfig } from '@/lib/semantic/priority';
 
@@ -48,9 +48,27 @@ import { useTasksByFunctionalRequirement, useUpdateTask } from '@/hooks/use-task
 import { TeamMemberSelector } from '@/components/tasks/team-member-selector';
 import { createBulkNotifications } from '@/hooks/use-notification';
 import { useAuth } from '@/components/providers/auth-provider';
+import { ApiError } from '@/lib/api/rest-client';
 import type { FunctionalRequirement, ClientRequirement } from '@/types';
 import { logger } from '@/lib/logger';
 
+/** Server copy ends with developer instructions; the UI offers the button instead. */
+const stripCascadeHint = (message: string) =>
+  message.replace(/\s*Delete them first or retry with cascade=true\.?\s*$/i, '');
+
+/**
+ * Keep this dialog open when the pointer went down inside an overlay stacked on
+ * top of it.
+ *
+ * Clicking Cancel on the delete confirm used to close the FR dialog with it and
+ * silently discard unsaved edits, while Escape on the very same confirm did
+ * not. Radix defers a dialog's pointer-down-outside to the CLICK that follows,
+ * and by then the confirm has already released its `disableOutsidePointerEvents`
+ * lock (Radix binds it to the confirm's own `open`) — so this layer sees an
+ * unguarded outside click and dismisses. Escape only ever reaches the topmost
+ * layer, which is why the two dismissals disagreed. Judge by where the pointer
+ * actually went down instead. Clicking this dialog's own overlay still closes it.
+ */
 interface FunctionalRequirementDetailDialogProps {
   requirement: FunctionalRequirement;
   open: boolean;
@@ -73,6 +91,8 @@ export function FunctionalRequirementDetailDialog({
   canDelete = false,
 }: FunctionalRequirementDetailDialogProps) {
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
+  /** Server's 409 message when child requirements block the delete (null = not blocked). */
+  const [deleteBlockedBy, setDeleteBlockedBy] = React.useState<string | null>(null);
   const [cloneDialogOpen, setCloneDialogOpen] = React.useState(false);
   const [selectedProject, setSelectedProject] = React.useState<string>('');
 
@@ -96,19 +116,24 @@ export function FunctionalRequirementDetailDialog({
   const { data: projects = [] } = useProjects(workspaceId);
   const { data: linkedTasks = [] } = useTasksByFunctionalRequirement(requirement.id);
 
-  // Reset local state when requirement changes
+  // Re-seed only when a different FR is opened. Keying on `requirement.assignedTo`
+  // re-ran on every background refetch (new array identity) and threw away
+  // in-progress selections.
   React.useEffect(() => {
+    if (!open) return;
     setLocalSprintId(requirement.sprintId || '');
     setLocalAssignedTo(requirement.assignedTo || []);
     setHasChanges(false);
-  }, [requirement.id, requirement.sprintId, requirement.assignedTo]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requirement.id, open]);
 
-  // Track changes
+  // Track changes. Both operands are copied before sorting: `.sort()` is
+  // in-place, so sorting them directly mutated React state and the query cache.
   React.useEffect(() => {
     const sprintChanged = localSprintId !== (requirement.sprintId || '');
     const assigneesChanged =
-      JSON.stringify(localAssignedTo.sort()) !==
-      JSON.stringify((requirement.assignedTo || []).sort());
+      JSON.stringify([...localAssignedTo].sort()) !==
+      JSON.stringify([...(requirement.assignedTo || [])].sort());
     setHasChanges(sprintChanged || assigneesChanged);
   }, [localSprintId, localAssignedTo, requirement.sprintId, requirement.assignedTo]);
 
@@ -127,36 +152,56 @@ export function FunctionalRequirementDetailDialog({
       return member?.name || member?.email || 'Unknown';
     });
 
-    // Check if assignees changed
+    // Check if assignees changed. Copy before sorting — `assignedToNames` above
+    // is index-aligned with `localAssignedTo`, and an in-place sort here would
+    // pair every id with somebody else's name in the payload sent below.
     const previousAssignees = requirement.assignedTo || [];
     const assigneesChanged =
-      JSON.stringify(localAssignedTo.sort()) !== JSON.stringify(previousAssignees.sort());
+      JSON.stringify([...localAssignedTo].sort()) !== JSON.stringify([...previousAssignees].sort());
     const newAssignees = localAssignedTo.filter((id) => !previousAssignees.includes(id));
 
     // Get project name for notifications
     const currentProject = projects.find((p) => p.id === projectId);
     const projectName = currentProject?.name || 'Project';
 
-    await updateRequirement.mutateAsync({
-      requirementId: requirement.id,
-      projectId,
-      updates: {
-        sprintId: localSprintId || undefined,
-        assignedTo: localAssignedTo,
-        assignedToNames,
-      },
-      previousSprintId: requirement.sprintId || undefined,
-    });
+    let reassignedTasks = 0;
+
+    try {
+      await updateRequirement.mutateAsync({
+        requirementId: requirement.id,
+        projectId,
+        updates: {
+          // Send the raw value: '' detaches the FR from its sprint. `undefined`
+          // is dropped by JSON.stringify, so the old sprint was never cleared.
+          sprintId: localSprintId,
+          assignedTo: localAssignedTo,
+          assignedToNames,
+        },
+        // `?? ''`, not `|| undefined`: '' IS the answer for an FR that has no
+        // sprint yet, and `undefined` means "I don't know" — which makes the
+        // hook re-read the FR before writing. That was every save of an
+        // unscheduled FR paying for a GET whose answer this dialog already had.
+        previousSprintId: requirement.sprintId ?? '',
+      });
+    } catch {
+      // The mutation's onError already toasted; keep the dialog open and dirty.
+      return;
+    }
 
     // ✅ AUTO-ASSIGN: Update linked tasks with the same assignees
     if (assigneesChanged && linkedTasks.length > 0) {
       try {
-        // Update all linked tasks with the new assignees
+        // Update all linked tasks with the new assignees. useUpdateTask already
+        // emits the TASK_ASSIGNED notifications for the newly added members, so
+        // this handler must NOT emit them a second time.
         await Promise.all(
           linkedTasks.map((task) =>
             updateTask.mutateAsync({
               taskId: task.id,
               projectId,
+              // One combined toast is emitted below for the whole save; without
+              // this the fan-out stacked one "Task updated" toast per task.
+              silent: true,
               updates: {
                 assignedTo: localAssignedTo,
                 assignedToNames,
@@ -167,37 +212,7 @@ export function FunctionalRequirementDetailDialog({
             })
           )
         );
-
-        toast({
-          title: 'Tasks Updated',
-          description: `${linkedTasks.length} linked task(s) were also assigned to the same team members.`,
-        });
-
-        // Send notifications to newly assigned members for each task
-        if (newAssignees.length > 0) {
-          for (const task of linkedTasks) {
-            try {
-              await createBulkNotifications({
-                workspaceId,
-                userIds: newAssignees,
-                type: 'TASK_ASSIGNED',
-                data: {
-                  taskId: task.id,
-                  taskTitle: task.title,
-                  taskHierarchyId: task.hierarchyId,
-                  projectId,
-                  projectName,
-                  assignerName: user?.name || user?.email || 'Team Member',
-                  priority: task.priority,
-                  dueDate: task.dueDate,
-                  entityType: 'TASK',
-                },
-              });
-            } catch (error) {
-              logger.error('Failed to send task assignment notification', { error });
-            }
-          }
-        }
+        reassignedTasks = linkedTasks.length;
       } catch (error) {
         logger.error('Failed to update linked tasks', { error });
         toast({
@@ -230,21 +245,37 @@ export function FunctionalRequirementDetailDialog({
       }
     }
 
+    // One toast for the whole save — the hooks are deliberately silent.
     toast({
       title: 'Saved',
-      description: 'Functional requirement updated successfully.',
+      description: reassignedTasks
+        ? `Functional requirement updated — ${reassignedTasks} linked task(s) reassigned.`
+        : 'Functional requirement updated successfully.',
     });
 
     setHasChanges(false);
   };
 
-  const handleDelete = async () => {
-    await deleteRequirement.mutateAsync({
-      requirementId: requirement.id,
-      projectId,
-    });
-    setDeleteDialogOpen(false);
-    onOpenChange(false);
+  const handleDelete = async (cascade = false) => {
+    try {
+      await deleteRequirement.mutateAsync({
+        requirementId: requirement.id,
+        projectId,
+        cascade,
+      });
+      setDeleteBlockedBy(null);
+      setDeleteDialogOpen(false);
+      onOpenChange(false);
+    } catch (error) {
+      // 409 = child requirements depend on this one. Offer the cascade the API
+      // already supports instead of leaving the user at a dead end.
+      if (error instanceof ApiError && error.code === 409) {
+        setDeleteBlockedBy(stripCascadeHint(error.message));
+        return;
+      }
+      // Anything else already surfaced through the mutation's onError toast.
+      setDeleteDialogOpen(false);
+    }
   };
 
   const handleClone = async () => {
@@ -260,13 +291,17 @@ export function FunctionalRequirementDetailDialog({
     const targetProj = projects.find((p) => p.id === selectedProject);
     if (!targetProj) return;
 
-    await cloneRequirement.mutateAsync({
-      requirementId: requirement.id,
-      targetProjectId: selectedProject,
-      targetProjectCode: targetProj.shortCode,
-      targetEpicId: undefined, // User can move to epic later
-      targetClientRequirementId: undefined,
-    });
+    try {
+      await cloneRequirement.mutateAsync({
+        requirementId: requirement.id,
+        targetProjectId: selectedProject,
+        targetProjectCode: targetProj.shortCode,
+        targetEpicId: undefined, // User can move to epic later
+        targetClientRequirementId: undefined,
+      });
+    } catch {
+      return; // onError already toasted; keep the dialog open so it can be retried
+    }
 
     setCloneDialogOpen(false);
     setSelectedProject('');
@@ -277,13 +312,25 @@ export function FunctionalRequirementDetailDialog({
     (cr) => cr.id === requirement.clientRequirementId
   );
 
+  // Same rule as the FR table (functional-requirements/page.tsx) so the row and
+  // the dialog can never disagree about the percentage.
+  const completedTasks = linkedTasks.filter((t) => t.status === 'DONE').length;
+  const storedProgress = requirement.progress ?? 0;
+  const progress =
+    storedProgress === 0 && linkedTasks.length > 0
+      ? Math.round((completedTasks / linkedTasks.length) * 100)
+      : storedProgress;
+
   // Get assigned sprint name (for display)
   const selectedSprint = sprints.find((s) => s.id === localSprintId);
 
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent size="2xl" className="max-h-[90vh] overflow-y-auto">
+        <DialogContent
+          size="2xl"
+          className="max-h-[90vh] overflow-y-auto"
+        >
           <DialogHeader>
             <div className="flex items-start justify-between">
               <div className="space-y-2 flex-1">
@@ -324,14 +371,11 @@ export function FunctionalRequirementDetailDialog({
             <div className="space-y-2">
               <label className="text-sm font-medium">Progress</label>
               <div className="flex items-center gap-3">
-                <Progress value={requirement.progress ?? 0} className="flex-1 h-2" />
-                <span className="text-sm font-medium w-12 text-right">
-                  {requirement.progress ?? 0}%
-                </span>
+                <Progress value={progress} className="flex-1 h-2" />
+                <span className="text-sm font-medium w-12 text-right">{progress}%</span>
               </div>
               <p className="text-xs text-muted-foreground">
-                Based on linked tasks completion (
-                {linkedTasks.filter((t) => t.status === 'DONE').length}/{linkedTasks.length} done)
+                Based on linked tasks completion ({completedTasks}/{linkedTasks.length} done)
               </p>
             </div>
 
@@ -417,11 +461,11 @@ export function FunctionalRequirementDetailDialog({
                       </div>
                     )}
                     <div className="flex items-center gap-2 mt-2">
-                      <Badge variant="outline">{linkedClientReq.priority}</Badge>
-                      <Badge
-                        className={`bg-${linkedClientReq.status === 'APPROVED' ? 'green' : 'gray'}-500`}
-                      >
-                        {linkedClientReq.status}
+                      <Badge variant={getPriorityConfig(linkedClientReq.priority).badgeVariant}>
+                        {getPriorityConfig(linkedClientReq.priority).label}
+                      </Badge>
+                      <Badge variant={getRequirementStatusConfig(linkedClientReq.status).badgeVariant}>
+                        {getRequirementStatusConfig(linkedClientReq.status).label}
                       </Badge>
                     </div>
                   </div>
@@ -465,7 +509,7 @@ export function FunctionalRequirementDetailDialog({
                 <Button
                   variant="outline"
                   onClick={() => setDeleteDialogOpen(true)}
-                  className="flex-1 sm:flex-none text-destructive hover:text-destructive"
+                  className="flex-1 sm:flex-none text-destructive-text hover:text-destructive-text"
                 >
                   <Trash2 className="h-4 w-4 mr-2" />
                   Delete
@@ -495,23 +539,52 @@ export function FunctionalRequirementDetailDialog({
         </DialogContent>
       </Dialog>
 
-      {/* Delete Confirmation */}
-      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+      {/* Delete Confirmation — escalates to a cascade prompt on the server's 409 */}
+      <AlertDialog
+        open={deleteDialogOpen}
+        onOpenChange={(next) => {
+          setDeleteDialogOpen(next);
+          if (!next) setDeleteBlockedBy(null);
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Functional Requirement?</AlertDialogTitle>
+            <AlertDialogTitle>
+              {deleteBlockedBy ? 'Delete child requirements too?' : 'Delete Functional Requirement?'}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete &lquo;{requirement.title}&rquo;. This action cannot be
-              undone.
+              {deleteBlockedBy ? (
+                <>
+                  {deleteBlockedBy} Deleting them together removes the whole sub-tree. This action
+                  cannot be undone.
+                </>
+              ) : (
+                <>
+                  This will permanently delete &quot;{requirement.title}&quot;. This action cannot
+                  be undone.
+                </>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="flex-col-reverse sm:flex-row sm:justify-between sm:space-x-0">
-            <AlertDialogCancel className="mt-2 sm:mt-0">Cancel</AlertDialogCancel>
+            <AlertDialogCancel className="mt-2 sm:mt-0" disabled={deleteRequirement.isPending}>
+              Cancel
+            </AlertDialogCancel>
             <AlertDialogAction
-              onClick={handleDelete}
+              // preventDefault: Radix closes the alert on click, which would hide
+              // the in-flight state and the cascade prompt that follows a 409.
+              onClick={(e) => {
+                e.preventDefault();
+                handleDelete(!!deleteBlockedBy);
+              }}
+              disabled={deleteRequirement.isPending}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Delete
+              {deleteRequirement.isPending
+                ? 'Deleting...'
+                : deleteBlockedBy
+                  ? 'Delete with children'
+                  : 'Delete'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -523,7 +596,7 @@ export function FunctionalRequirementDetailDialog({
           <AlertDialogHeader>
             <AlertDialogTitle>Clone Functional Requirement</AlertDialogTitle>
             <AlertDialogDescription>
-              Clone &lquo;{requirement.hierarchyId}&rquo; to another project. The FR will be
+              Clone &quot;{requirement.hierarchyId}&quot; to another project. The FR will be
               duplicated with a new hierarchy id.
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -546,8 +619,14 @@ export function FunctionalRequirementDetailDialog({
           </div>
           <AlertDialogFooter>
             <AlertDialogCancel onClick={() => setSelectedProject('')}>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleClone} disabled={!selectedProject}>
-              Clone FR
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                handleClone();
+              }}
+              disabled={!selectedProject || cloneRequirement.isPending}
+            >
+              {cloneRequirement.isPending ? 'Cloning...' : 'Clone FR'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

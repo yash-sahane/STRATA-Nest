@@ -4,7 +4,6 @@ import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import {
   CommandDialog,
-  CommandEmpty,
   CommandGroup,
   CommandInput,
   CommandItem,
@@ -260,6 +259,9 @@ export function CommandPalette() {
     return groups;
   }, [filteredActions]);
 
+  const hasAnything =
+    searchResults.length > 0 || Object.keys(groupedActions).length > 0;
+
   const getResultIcon = (type: string) => {
     switch (type) {
       case 'task':
@@ -288,23 +290,34 @@ export function CommandPalette() {
       case 'sprint':
         return `/sprints/${result.id}/board`;
       case 'requirement':
-        return `/requirements?reqId=${result.id}`;
+        // The 'requirement' corpus is functional_requirements (use-global-search),
+        // so the id belongs to /functional-requirements — `reqId` was read by no page.
+        return `/functional-requirements?frId=${result.id}`;
       default:
         return '/dashboard';
     }
   };
 
   return (
-    <CommandDialog open={open} onOpenChange={setOpen}>
+    /* shouldFilter={false}: both lists below are ALREADY filtered — the actions
+       by `filteredActions`, the records by the server-side search. Leaving
+       cmdk's own scorer on meant it re-filtered the async results against the
+       typed text and dropped every one of them, so the palette answered "No
+       results found." even for the exact title of an existing record. */
+    <CommandDialog open={open} onOpenChange={setOpen} shouldFilter={false}>
       <CommandInput
         placeholder="Type a command or search..."
         value={searchQuery}
         onValueChange={setSearchQuery}
       />
       <CommandList>
-        <CommandEmpty>
-          {isLoading ? 'Searching...' : 'No results found.'}
-        </CommandEmpty>
+        {/* Rendered by hand rather than with <CommandEmpty>, which only knows
+            about cmdk's own filtering and never appears once that is off. */}
+        {!hasAnything && (
+          <div className="py-6 text-center text-sm text-muted-foreground">
+            {isLoading ? 'Searching…' : 'No results found.'}
+          </div>
+        )}
 
         {/* Search Results */}
         {searchResults.length > 0 && (

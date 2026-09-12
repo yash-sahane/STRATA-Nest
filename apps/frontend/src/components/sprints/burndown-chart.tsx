@@ -4,7 +4,22 @@ import * as React from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Area, AreaChart } from 'recharts';
 import type { Task } from '@/types';
-import { format, eachDayOfInterval, startOfDay, endOfDay } from 'date-fns';
+import { legendLabel } from '@/lib/chart-legend';
+import { format, eachDayOfInterval, startOfDay, endOfDay, parseISO } from 'date-fns';
+
+// Design tokens, not raw hex: the previous slate/blue literals ignored dark mode
+// and disagreed with the palette every other chart surface uses.
+const IDEAL_COLOR = 'hsl(var(--muted-foreground))';
+const ACTUAL_COLOR = 'hsl(var(--info))';
+
+/**
+ * When a DONE task actually finished. The API stamps `completedAt` on the
+ * transition into DONE; rows completed before that column existed fall back to
+ * `updatedAt`. Read structurally so this does not wait on the shared Task type.
+ */
+export function completionDate(task: Task): string {
+  return (task as Task & { completedAt?: string | null }).completedAt ?? task.updatedAt;
+}
 
 interface BurndownChartProps {
   tasks: Task[];
@@ -26,8 +41,11 @@ export function BurndownChart({
   sprintEndDate
 }: BurndownChartProps) {
   const chartData = React.useMemo(() => {
-    const start = startOfDay(new Date(sprintStartDate));
-    const end = endOfDay(new Date(sprintEndDate));
+    // Sprint dates arrive date-only ("2026-08-11"). `new Date(...)` parses that
+    // as UTC midnight, which lands on the previous local day west of UTC and
+    // shifts every bucket; parseISO keeps it on the local calendar day.
+    const start = startOfDay(parseISO(sprintStartDate));
+    const end = endOfDay(parseISO(sprintEndDate));
     const today = startOfDay(new Date());
 
     // Get all days in sprint
@@ -45,11 +63,13 @@ export function BurndownChart({
     // Ideal burndown (linear based on task count)
     const idealRemaining = totalPoints - (totalPoints / totalDays) * dayNumber;
 
-      // Actual burndown (count completed tasks by this day)
+      // Actual burndown (count completed tasks by this day), bucketed on the
+      // real completion timestamp. `updatedAt` is only the fallback for rows
+      // finished before `completedAt` existed — using it alone moved a task
+      // forward in this series on any later edit.
       const completedByDay = tasks.filter(task => {
         if (task.status !== 'DONE') return false;
-        const updatedDate = new Date(task.updatedAt);
-        return updatedDate <= dayEnd;
+        return new Date(completionDate(task)) <= dayEnd;
       });
       
         const completedPoints = completedByDay.length;
@@ -78,7 +98,7 @@ export function BurndownChart({
           <p className="text-sm text-muted-foreground mb-1">{data.day}</p>
           {payload.map((entry: any, index: number) => (
             <p key={index} className="text-sm" style={{ color: entry.color }}>
-              {entry.name}: {entry.value} points
+              {entry.name}: {entry.value} tasks
             </p>
           ))}
         </div>
@@ -97,7 +117,7 @@ export function BurndownChart({
           <div>
             <CardTitle>Sprint Burndown</CardTitle>
             <CardDescription>
-              Ideal vs Actual remaining story points
+              Ideal vs actual remaining tasks
             </CardDescription>
           </div>
           <div className="text-right">
@@ -112,12 +132,12 @@ export function BurndownChart({
             <AreaChart data={chartData.data}>
               <defs>
                 <linearGradient id="colorIdeal" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#94a3b8" stopOpacity={0.1}/>
-                  <stop offset="95%" stopColor="#94a3b8" stopOpacity={0}/>
+                  <stop offset="5%" stopColor={IDEAL_COLOR} stopOpacity={0.1}/>
+                  <stop offset="95%" stopColor={IDEAL_COLOR} stopOpacity={0}/>
                 </linearGradient>
                 <linearGradient id="colorActual" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
-                  <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                  <stop offset="5%" stopColor={ACTUAL_COLOR} stopOpacity={0.3}/>
+                  <stop offset="95%" stopColor={ACTUAL_COLOR} stopOpacity={0}/>
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
@@ -132,14 +152,15 @@ export function BurndownChart({
                 className="text-muted-foreground"
               />
               <Tooltip content={<CustomTooltip />} />
-              <Legend 
+              <Legend
                 wrapperStyle={{ fontSize: 12 }}
                 iconType="line"
+                formatter={legendLabel}
               />
               <Area
                 type="monotone"
                 dataKey="ideal"
-                stroke="#94a3b8"
+                stroke={IDEAL_COLOR}
                 strokeWidth={2}
                 strokeDasharray="5 5"
                 fill="url(#colorIdeal)"
@@ -148,7 +169,7 @@ export function BurndownChart({
               <Area
                 type="monotone"
                 dataKey="actual"
-                stroke="#3b82f6"
+                stroke={ACTUAL_COLOR}
                 strokeWidth={2}
                 fill="url(#colorActual)"
                 name="Actual Burndown"

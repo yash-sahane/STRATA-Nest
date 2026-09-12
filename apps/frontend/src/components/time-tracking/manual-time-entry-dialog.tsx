@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState } from 'react';
-import { format } from 'date-fns';
+import React, { useMemo, useState } from 'react';
+import { addDays, format, startOfDay } from 'date-fns';
 import { Calendar as CalendarIcon, Clock } from 'lucide-react';
 import {
   Dialog,
@@ -31,11 +31,11 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
-import { useCreateTimeEntry } from '@/hooks/use-time-entry';
+import { useCreateTimeEntry, useUpdateTimeEntry } from '@/hooks/use-time-entry';
 import { useWorkspaceTasks } from '@/hooks/use-task';
-import { useWorkspace } from '@/hooks/use-workspace';
+import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { parseTimeToMinutes } from '@/lib/utils/time-format';
-import type { Task } from '@/types';
+import type { Task, TimeEntry } from '@/types';
 
 interface ManualTimeEntryDialogProps {
   userId: string;
@@ -43,7 +43,29 @@ interface ManualTimeEntryDialogProps {
   userEmail: string;
   taskId?: string;
   trigger?: React.ReactNode;
+  /** Supplied to EDIT that entry instead of logging a new one. */
+  entry?: TimeEntry;
+  /** Controlled open state, for callers with no trigger of their own (the timesheet's Edit action). */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
+
+const MINUTES_PER_DAY = 24 * 60;
+
+/**
+ * The entry's own timestamps, read on the LOCAL clock. Both fall back rather
+ * than returning an Invalid Date: date-fns `format` throws on one, and these
+ * seed state during render, so a single malformed row would take the whole
+ * timesheet down instead of just opening with today's defaults.
+ */
+const toLocalDay = (iso: string, fallback: Date) => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? fallback : d;
+};
+const toTimeInput = (iso: string, fallback: string) => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? fallback : format(d, 'HH:mm');
+};
 
 export function ManualTimeEntryDialog({
   userId,
@@ -51,39 +73,86 @@ export function ManualTimeEntryDialog({
   userEmail,
   taskId,
   trigger,
+  entry,
+  open,
+  onOpenChange,
 }: ManualTimeEntryDialogProps) {
-  const [isOpen, setIsOpen] = useState(false);
-  const [date, setDate] = useState<Date>(new Date());
-  const [startTime, setStartTime] = useState('09:00');
-  const [endTime, setEndTime] = useState('17:00');
-  const [selectedTaskId, setSelectedTaskId] = useState(taskId || '');
-  const [description, setDescription] = useState('');
-  const [isBillable, setIsBillable] = useState(false);
-  const [billableRate, setBillableRate] = useState('');
-  const [tags, setTags] = useState('');
+  const isEditing = !!entry;
+  // Controlled by the caller when `open` is passed; otherwise the trigger owns it.
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const isOpen = open ?? uncontrolledOpen;
+  const setIsOpen = (next: boolean) => {
+    setUncontrolledOpen(next);
+    onOpenChange?.(next);
+  };
 
-  const { data: workspace } = useWorkspace();
+  const [date, setDate] = useState<Date>(() =>
+    entry ? toLocalDay(entry.startTime, new Date()) : new Date()
+  );
+  const [startTime, setStartTime] = useState(() =>
+    entry ? toTimeInput(entry.startTime, '09:00') : '09:00'
+  );
+  const [endTime, setEndTime] = useState(() =>
+    entry ? toTimeInput(entry.endTime, '17:00') : '17:00'
+  );
+  const [selectedTaskId, setSelectedTaskId] = useState(entry?.taskId || taskId || '');
+  const [description, setDescription] = useState(entry?.description ?? '');
+  const [isBillable, setIsBillable] = useState(entry?.isBillable ?? false);
+  const [billableRate, setBillableRate] = useState(
+    entry?.billableRate != null ? String(entry.billableRate) : ''
+  );
+  const [tags, setTags] = useState(entry?.tags?.join(', ') ?? '');
+
+  const { currentWorkspace: workspace } = useCurrentWorkspace();
   const { data: tasks } = useWorkspaceTasks(workspace?.id);
   const createTimeEntryMutation = useCreateTimeEntry();
+  const updateTimeEntryMutation = useUpdateTimeEntry();
+  const isPending = createTimeEntryMutation.isPending || updateTimeEntryMutation.isPending;
 
-  const calculateDuration = () => {
+  // One computation, read twice. An end that reads EARLIER than the start is an
+  // overnight window, not an invalid one: a timer left running from 23:00 to
+  // 01:00 writes exactly that row (the server accepts anything up to 24h), and
+  // treating it as `end <= start` made the edit dialog open such an entry
+  // reading "0 minutes" with Save permanently disabled — the one row in the
+  // timesheet that could not be corrected at all.
+  const { durationMinutes, endsNextDay } = useMemo(() => {
     const start = parseTimeToMinutes(startTime);
     const end = parseTimeToMinutes(endTime);
-    
-    if (end <= start) {
-      return 0;
+
+    // A half-typed or cleared <input type="time"> parses to NaN, which is
+    // neither > 0 nor <= 0: the duration line read "NaN minutes" and the submit
+    // guard below stopped guarding.
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end === start) {
+      return { durationMinutes: 0, endsNextDay: false };
     }
-    
-    return end - start;
-  };
+
+    const overnight = end < start;
+    return {
+      durationMinutes: overnight ? end + MINUTES_PER_DAY - start : end - start,
+      endsNextDay: overnight,
+    };
+  }, [startTime, endTime]);
+
+  // Local midnight, so today's own cell stays selectable — a calendar cell is
+  // local midnight and comparing against `new Date()` would disable today.
+  const today = useMemo(() => startOfDay(new Date()), []);
+
+  // Time is a record of work already done. Nothing stopped the picker walking
+  // into May 2027, and the entry was booked, added to Total logged and queued
+  // for the manager exactly like a real one. The server refuses a future start
+  // ("Time cannot be logged for work that has not happened yet"); this mirrors
+  // that rule so the refusal is never reached with a filled-in form.
+  const startsInTheFuture = useMemo(() => {
+    const startAt = new Date(`${format(date, 'yyyy-MM-dd')}T${startTime}:00`);
+    return !Number.isNaN(startAt.getTime()) && startAt.getTime() > Date.now();
+  }, [date, startTime]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!workspace) return;
 
-    const duration = calculateDuration();
-    if (duration <= 0) {
+    if (durationMinutes <= 0 || startsInTheFuture) {
       return;
     }
 
@@ -91,8 +160,22 @@ export function ManualTimeEntryDialog({
 
     // Create ISO timestamps
     const dateStr = format(date, 'yyyy-MM-dd');
-    const startDateTime = new Date(`${dateStr}T${startTime}:00`).toISOString();
-    const endDateTime = new Date(`${dateStr}T${endTime}:00`).toISOString();
+    const startDateTime = new Date(`${dateStr}T${startTime}:00`);
+    const endAt = new Date(`${dateStr}T${endTime}:00`);
+    // An overnight window ends on the FOLLOWING day. setDate on the local date
+    // rolls month ends and DST correctly; adding 24h of milliseconds would not.
+    if (endsNextDay) {
+      endAt.setDate(endAt.getDate() + 1);
+    }
+
+    // `null`, never `undefined`: JSON.stringify drops an undefined key, so the
+    // PATCH carried no rate at all and the server (which only copies a rate it
+    // was actually sent) left the stored one standing — clearing the box, or
+    // switching the entry to non-billable, reported success and changed
+    // nothing. A rate also belongs to a billable entry only, so the value still
+    // sitting in state behind a switched-off toggle must not be sent.
+    const typedRate = Number.parseFloat(billableRate);
+    const ratePayload = isBillable && Number.isFinite(typedRate) ? typedRate : null;
 
     // Parse tags
     const tagArray = tags
@@ -100,27 +183,58 @@ export function ManualTimeEntryDialog({
       .map((t) => t.trim())
       .filter((t) => t.length > 0);
 
-    await createTimeEntryMutation.mutateAsync({
-      workspaceId: workspace.id,
-      userId,
-      userName,
-      userEmail,
-      taskId: selectedTaskId || undefined,
-      taskTitle: selectedTask?.title,
-      taskHierarchyId: selectedTask?.hierarchyId,
-      projectId: selectedTask?.projectId,
-      projectName: undefined,
-      description,
-      startTime: startDateTime,
-      endTime: endDateTime,
-      duration,
-      isBillable,
-      billableRate: billableRate ? parseFloat(billableRate) : undefined,
-      tags: tagArray.length > 0 ? tagArray : undefined,
-    });
+    try {
+      if (entry) {
+        // The server recomputes duration from the window and, for an entry that
+        // was already approved or rejected, clears the decision and puts it back
+        // in the queue — an approval must never outlive the numbers it signed off.
+        await updateTimeEntryMutation.mutateAsync({
+          id: entry.id,
+          userId,
+          updates: {
+            description,
+            startTime: startDateTime.toISOString(),
+            endTime: endAt.toISOString(),
+            isBillable,
+            billableRate: ratePayload,
+            tags: tagArray,
+          },
+        });
+      } else {
+        await createTimeEntryMutation.mutateAsync({
+          workspaceId: workspace.id,
+          userId,
+          userName,
+          userEmail,
+          taskId: selectedTaskId || undefined,
+          taskTitle: selectedTask?.title,
+          taskHierarchyId: selectedTask?.hierarchyId,
+          projectId: selectedTask?.projectId,
+          projectName: undefined,
+          description,
+          startTime: startDateTime.toISOString(),
+          endTime: endAt.toISOString(),
+          duration: durationMinutes,
+          isBillable,
+          billableRate: ratePayload,
+          tags: tagArray.length > 0 ? tagArray : undefined,
+        });
+      }
+    } catch {
+      // The mutation's onError already toasts. Keep the dialog open with the
+      // typed values so the entry can be retried instead of re-keyed.
+      return;
+    }
+
+    setIsOpen(false);
+
+    if (isEditing) {
+      // The caller unmounts the dialog on close, so there is nothing to reset —
+      // blanking the fields here only flashes an empty form on the way out.
+      return;
+    }
 
     // Reset form
-    setIsOpen(false);
     setDescription('');
     setStartTime('09:00');
     setEndTime('17:00');
@@ -134,20 +248,26 @@ export function ManualTimeEntryDialog({
 
   return (
     <Dialog open={isOpen} onOpenChange={setIsOpen}>
-      <DialogTrigger asChild>
-        {trigger || (
-          <Button variant="outline">
-            <Clock className="h-4 w-4 mr-2" />
-            Log Time
-          </Button>
-        )}
-      </DialogTrigger>
+      {open === undefined && (
+        <DialogTrigger asChild>
+          {trigger || (
+            <Button variant="outline">
+              <Clock className="h-4 w-4 mr-2" />
+              Log Time
+            </Button>
+          )}
+        </DialogTrigger>
+      )}
       <DialogContent size="sm">
         <form onSubmit={handleSubmit}>
           <DialogHeader>
-            <DialogTitle>Log Time Manually</DialogTitle>
+            <DialogTitle>{isEditing ? 'Edit Time Entry' : 'Log Time Manually'}</DialogTitle>
             <DialogDescription>
-              Record time spent on tasks manually
+              {!isEditing
+                ? 'Record time spent on tasks manually'
+                : entry?.status === 'PENDING'
+                  ? 'Correct this entry before it is reviewed'
+                  : 'Correcting a reviewed entry sends it back for approval'}
             </DialogDescription>
           </DialogHeader>
 
@@ -173,6 +293,11 @@ export function ManualTimeEntryDialog({
                     mode="single"
                     selected={date}
                     onSelect={(d) => d && setDate(d)}
+                    // `toDate` as well as `disabled`: without it the chevrons
+                    // still walk on into 2027 and the whole grid merely looks
+                    // greyed out.
+                    toDate={today}
+                    disabled={(d) => d > today}
                     initialFocus
                   />
                 </PopoverContent>
@@ -203,18 +328,37 @@ export function ManualTimeEntryDialog({
               </div>
             </div>
 
+            {startsInTheFuture && (
+              <p className="text-sm text-destructive-text">
+                Time can only be logged for work that has already happened — pick an earlier date
+                or start time.
+              </p>
+            )}
+
             {/* Duration Display */}
             <div className="rounded-md bg-muted p-3 text-sm">
               <span className="font-medium">Duration:</span>{' '}
-              {calculateDuration()} minutes (
-              {(calculateDuration() / 60).toFixed(2)} hours)
+              {durationMinutes} minutes ({(durationMinutes / 60).toFixed(2)} hours)
+              {endsNextDay && (
+                // An overnight window is legitimate, but it is also what a
+                // mistyped end time looks like — so name the day it lands on
+                // rather than quietly booking an extra 24 hours.
+                <span className="text-muted-foreground">
+                  {' '}
+                  — ends {format(addDays(date, 1), 'MMM d')} (next day)
+                </span>
+              )}
             </div>
 
             {/* Task Selection */}
             {!taskId && (
               <div className="space-y-2">
                 <Label htmlFor="task">Task (Optional)</Label>
-                <Select value={selectedTaskId} onValueChange={setSelectedTaskId}>
+                <Select
+                  value={selectedTaskId}
+                  onValueChange={setSelectedTaskId}
+                  disabled={isEditing}
+                >
                   <SelectTrigger id="task">
                     <SelectValue placeholder="Select a task" />
                   </SelectTrigger>
@@ -226,6 +370,13 @@ export function ManualTimeEntryDialog({
                     ))}
                   </SelectContent>
                 </Select>
+                {isEditing && (
+                  // PATCH /time_entries/:id carries no taskId, so offering the
+                  // change here would drop it silently on save.
+                  <p className="text-xs text-muted-foreground">
+                    The linked task is fixed. Delete the entry and log it again to move it.
+                  </p>
+                )}
               </div>
             )}
 
@@ -287,7 +438,7 @@ export function ManualTimeEntryDialog({
               type="button"
               variant="outline"
               onClick={() => setIsOpen(false)}
-              disabled={createTimeEntryMutation.isPending}
+              disabled={isPending}
             >
               Cancel
             </Button>
@@ -295,11 +446,18 @@ export function ManualTimeEntryDialog({
               type="submit"
               disabled={
                 !description.trim() ||
-                calculateDuration() <= 0 ||
-                createTimeEntryMutation.isPending
+                durationMinutes <= 0 ||
+                startsInTheFuture ||
+                isPending
               }
             >
-              {createTimeEntryMutation.isPending ? 'Logging...' : 'Log Time'}
+              {isPending
+                ? isEditing
+                  ? 'Saving...'
+                  : 'Logging...'
+                : isEditing
+                  ? 'Save Changes'
+                  : 'Log Time'}
             </Button>
           </DialogFooter>
         </form>

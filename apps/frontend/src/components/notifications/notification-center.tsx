@@ -17,13 +17,23 @@ import {
 import { useConfirm } from '@/components/providers/confirm-provider';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Skeleton } from '@/components/ui/skeleton';
 import { ScrollArea } from '@/components/ui/scroll-area';
+/**
+ * A Popover, NOT a DropdownMenu.
+ *
+ * Radix's DropdownMenu is a `role="menu"` with roving focus: it moves focus
+ * between its `role="menuitem"` children and swallows every other key. This
+ * panel has no menuitems — it has 50 notification rows, each with its own
+ * delete button, plus "Mark all read". So the menu opened, focus landed on the
+ * container, and NOTHING moved it: 102 focusable controls inside and not one
+ * key (arrows, Home/End, Tab, letters) could reach any of them. A popover is
+ * what this actually is — a panel of rich content — and it gives back the
+ * ordinary tab order, Escape-to-close and focus-return-to-trigger.
+ */
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import {
+  AlertTriangle,
   Bell,
   CheckCheck,
   X,
@@ -107,23 +117,22 @@ function NotificationItem({ notification, onDelete, onClick }: NotificationItemP
     <div
       className={cn(
         'flex gap-3 p-3 rounded-lg transition-colors cursor-pointer hover:bg-accent group relative',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
         !notification.isRead && 'bg-blue-50/50 dark:bg-blue-950/20'
       )}
+      // The row navigates, so it must be reachable and activatable from the
+      // keyboard — a bare <div onClick> is neither. It cannot be a <button>
+      // because it contains the delete button (nested buttons are invalid).
+      role="button"
+      tabIndex={0}
       onClick={() => onClick(notification)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onClick(notification);
+        }
+      }}
     >
-      {/* Close button - always visible on hover */}
-      <Button
-        variant="ghost"
-        size="icon"
-        className="absolute top-1 right-1 h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
-        onClick={(e) => {
-          e.stopPropagation();
-          onDelete(notification.id);
-        }}
-      >
-        <X className="h-3.5 w-3.5" />
-      </Button>
-
       <div className={cn('mt-1', iconColor)}>
         <Icon className="h-5 w-5" />
       </div>
@@ -140,16 +149,47 @@ function NotificationItem({ notification, onDelete, onClick }: NotificationItemP
           {formatDistanceToNow(new Date(notification.createdAt), { addSuffix: true })}
         </p>
       </div>
+
+      {/* Absolutely positioned, so it sits top-right whatever its DOM position —
+          and placing it AFTER the row's content puts it where a keyboard user
+          expects it: row, then that row's delete, then the next row. Only
+          opacity-0 for the mouse; `focus-visible:opacity-100` keeps it visible
+          for keyboard users, who never trigger the group hover. */}
+      <Button
+        variant="ghost"
+        size="icon"
+        className="absolute top-1 right-1 h-6 w-6 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+        aria-label={`Delete notification: ${notification.title}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          onDelete(notification.id);
+        }}
+      >
+        <X className="h-3.5 w-3.5" />
+      </Button>
     </div>
   );
 }
 
+/**
+ * NOT memoised, deliberately — this was tried and reverted.
+ *
+ * The unread query fires twice on a full page load, and memoising this
+ * component does remove the second request. But the second request is the one
+ * whose result is KEPT: React Query cancels the first when the observer
+ * re-reads its options, discards that response even though it arrives, and
+ * relies on the refetch to populate the cache. With the re-render suppressed no
+ * refetch happens, the badge silently stays empty, and the count never appears.
+ *
+ * So the duplicate is not removable from this end. Anything attacking it has to
+ * stop the first fetch being cancelled, and must be checked against the badge
+ * actually rendering a count — not just against the request count going down.
+ */
 export function NotificationCenter() {
   const router = useRouter();
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const { data: unreadNotifications } = useUnreadNotifications(user?.id);
-  const { data: allNotifications } = useNotifications(user?.id);
   const markAsRead = useMarkNotificationAsRead();
   const markAllAsRead = useMarkAllNotificationsAsRead();
   const deleteNotification = useDeleteNotification();
@@ -157,6 +197,14 @@ export function NotificationCenter() {
   const confirm = useConfirm();
 
   const [open, setOpen] = React.useState(false);
+  // Only the badge count is needed until the menu is opened, so the 50-row list
+  // is deferred until there is something to show it in.
+  const {
+    data: allNotifications,
+    isLoading: notificationsLoading,
+    isError: notificationsError,
+    refetch: refetchNotifications,
+  } = useNotifications(user?.id, open);
 
   // Real-time subscription for notifications
   React.useEffect(() => {
@@ -170,14 +218,21 @@ export function NotificationCenter() {
 
         // Only process notifications for this user
         if (payload.userId === user.id) {
-          queryClient.invalidateQueries({ queryKey: ['notifications', user.id] });
-          queryClient.invalidateQueries({ queryKey: ['unread-notifications', user.id] });
+          // Prefix match: covers both ['notifications', userId] and
+          // ['notifications', 'unread', userId] — the unread badge is keyed with
+          // 'unread' at index 1, so ['notifications', userId] never matched it.
+          queryClient.invalidateQueries({ queryKey: ['notifications'] });
 
           // Show toast for new notifications
           if (eventType === 'create') {
+            // 'info', not the default: this is an inbound announcement, not a
+            // confirmation of something the viewer did, and payload.title can
+            // read 'Leave Request Rejected' — which must not land on a green
+            // success card (the shim maps 'default' to sonnerToast.success).
             toast({
               title: 'New Notification',
               description: payload.title || 'You have a new notification',
+              variant: 'info',
             });
           }
         }
@@ -259,9 +314,9 @@ export function NotificationCenter() {
     // FR (Functional Requirement) notifications
     if (type.startsWith('FR_')) {
       if (projectId && relatedEntityId) {
-        return `/frs?projectId=${projectId}&frId=${relatedEntityId}`;
+        return `/functional-requirements?projectId=${projectId}&frId=${relatedEntityId}`;
       }
-      return '/frs';
+      return '/functional-requirements';
     }
 
     // Requirement notifications
@@ -305,8 +360,8 @@ export function NotificationCenter() {
             : '/epics';
         case 'FR':
           return projectId && relatedEntityId
-            ? `/frs?projectId=${projectId}&frId=${relatedEntityId}`
-            : '/frs';
+            ? `/functional-requirements?projectId=${projectId}&frId=${relatedEntityId}`
+            : '/functional-requirements';
         case 'LEAVE':
           return '/leave';
         case 'ATTENDANCE':
@@ -336,9 +391,18 @@ export function NotificationCenter() {
   };
 
   return (
-    <DropdownMenu open={open} onOpenChange={setOpen}>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" className="relative">
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="relative"
+          // Icon-only trigger: without this a screen reader announces just
+          // "button", and the unread count in the badge is decorative markup.
+          aria-label={
+            unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'
+          }
+        >
           <Bell className="h-5 w-5" />
           {unreadCount > 0 && (
             <Badge
@@ -349,8 +413,8 @@ export function NotificationCenter() {
             </Badge>
           )}
         </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-95 p-0">
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-95 p-0" aria-label="Notifications">
         <div className="flex items-center justify-between p-4 border-b">
           <h3 className="font-semibold">Notifications</h3>
           <div className="flex items-center gap-1">
@@ -371,7 +435,7 @@ export function NotificationCenter() {
                 size="sm"
                 onClick={handleDeleteAll}
                 disabled={deleteAllNotifications.isPending}
-                className="text-destructive hover:text-destructive"
+                className="text-destructive-text hover:text-destructive-text"
               >
                 <Trash2 className="h-4 w-4 mr-1" />
                 Clear all
@@ -382,7 +446,31 @@ export function NotificationCenter() {
 
         <ScrollArea className="h-100">
           <div className="p-2 space-y-1">
-            {allNotifications && allNotifications.length > 0 ? (
+            {/* The list is deferred until the panel opens, so on the FIRST open
+                it is genuinely still loading — and rendering the empty state
+                then told the user they were "all caught up" while the bell
+                beside it showed an unread count. */}
+            {notificationsLoading ? (
+              <div className="space-y-2 p-1">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <div key={i} className="flex gap-3 p-3">
+                    <Skeleton className="h-5 w-5 rounded-full" />
+                    <div className="flex-1 space-y-2">
+                      <Skeleton className="h-3.5 w-2/3" />
+                      <Skeleton className="h-3 w-full" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : notificationsError ? (
+              <div className="flex flex-col items-center justify-center gap-3 py-10 text-center">
+                <AlertTriangle className="h-8 w-8 text-destructive-text" />
+                <p className="text-sm font-medium">Couldn&apos;t load notifications</p>
+                <Button variant="outline" size="sm" onClick={() => void refetchNotifications()}>
+                  Try again
+                </Button>
+              </div>
+            ) : allNotifications && allNotifications.length > 0 ? (
               allNotifications.map((notification) => (
                 <NotificationItem
                   key={notification.id}
@@ -400,7 +488,7 @@ export function NotificationCenter() {
             )}
           </div>
         </ScrollArea>
-      </DropdownMenuContent>
-    </DropdownMenu>
+      </PopoverContent>
+    </Popover>
   );
 }

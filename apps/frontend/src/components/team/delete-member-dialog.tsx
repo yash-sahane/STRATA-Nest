@@ -34,17 +34,21 @@ export function DeleteMemberDialog({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <div className="flex items-center gap-2 text-destructive">
+          <div className="flex items-center gap-2 text-destructive-text">
             <AlertTriangle className="h-5 w-5" />
             <AlertDialogTitle>Remove Team Member</AlertDialogTitle>
           </div>
-          <AlertDialogDescription className="space-y-2">
-            <p>
-              Are you sure you want to remove{' '}
-              <strong className="text-foreground">{member.name}</strong> ({member.email}) from the
-              team?
-            </p>
-            <p className="text-destructive font-medium">This action cannot be undone.</p>
+          {/* asChild: Radix renders the description as a <p>, and two block
+              paragraphs cannot legally nest inside one. */}
+          <AlertDialogDescription asChild>
+            <div className="space-y-2">
+              <p>
+                Are you sure you want to remove{' '}
+                <strong className="text-foreground">{member.name}</strong> ({member.email}) from the
+                team?
+              </p>
+              <p className="text-destructive-text font-medium">This action cannot be undone.</p>
+            </div>
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter className="flex-col-reverse sm:flex-row sm:justify-between sm:space-x-0">

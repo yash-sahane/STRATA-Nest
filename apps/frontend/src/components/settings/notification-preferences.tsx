@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
+import { ErrorState } from '@/components/ui/error-state';
 import {
   NOTIFICATION_TEMPLATES,
   NOTIFICATION_TYPES,
@@ -13,12 +14,23 @@ import {
 import { toast } from 'sonner';
 import { Bell, Mail } from 'lucide-react';
 import { logger } from '@/lib/logger';
+import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
+import {
+  useNotificationPreferences,
+  useSaveNotificationPreferences,
+} from '@/hooks/use-notification';
 
 interface NotificationPreference {
   type: string;
   inApp: boolean;
   email: boolean;
 }
+
+/** Preferences used to live here and were read by nothing — delivery is decided
+ *  server-side, because the notification is created by the ACTOR's browser and a
+ *  toggle in the RECIPIENT's localStorage is structurally unreachable. The key is
+ *  now cleared on mount so no stale copy lingers. */
+const LEGACY_STORAGE_KEY = 'notification-preferences';
 
 // Default preferences - all enabled
 const getDefaultPreferences = (): Record<string, NotificationPreference> => {
@@ -85,6 +97,8 @@ const notificationLabels: Record<string, string> = {
   [NOTIFICATION_TYPES.SPRINT_STARTED]: 'Sprint Started',
   [NOTIFICATION_TYPES.SPRINT_ENDING_SOON]: 'Sprint Ending Soon',
   [NOTIFICATION_TYPES.SPRINT_COMPLETED]: 'Sprint Completed',
+  [NOTIFICATION_TYPES.SPRINT_TASK_ADDED]: 'Task Added to Sprint',
+  [NOTIFICATION_TYPES.WORKSPACE_INVITATION]: 'Workspace Invitations',
   [NOTIFICATION_TYPES.LEAVE_APPROVED]: 'Leave Approved',
   [NOTIFICATION_TYPES.LEAVE_REJECTED]: 'Leave Rejected',
   [NOTIFICATION_TYPES.LEAVE_REQUESTED]: 'Leave Requests',
@@ -107,6 +121,8 @@ const notificationDescriptions: Record<string, string> = {
   [NOTIFICATION_TYPES.SPRINT_STARTED]: 'When a sprint begins',
   [NOTIFICATION_TYPES.SPRINT_ENDING_SOON]: 'When a sprint is about to end',
   [NOTIFICATION_TYPES.SPRINT_COMPLETED]: 'When a sprint is completed',
+  [NOTIFICATION_TYPES.SPRINT_TASK_ADDED]: 'When a task is added to a sprint',
+  [NOTIFICATION_TYPES.WORKSPACE_INVITATION]: 'When you are invited to a workspace',
   [NOTIFICATION_TYPES.LEAVE_APPROVED]: 'When your leave is approved',
   [NOTIFICATION_TYPES.LEAVE_REJECTED]: 'When your leave is rejected',
   [NOTIFICATION_TYPES.LEAVE_REQUESTED]: 'When someone requests leave',
@@ -120,22 +136,42 @@ const notificationDescriptions: Record<string, string> = {
 };
 
 export default function NotificationPreferences() {
+  const { currentWorkspaceId } = useCurrentWorkspace();
+  const {
+    data: saved,
+    isLoading,
+    isError,
+    refetch,
+  } = useNotificationPreferences(currentWorkspaceId ?? undefined);
+  const savePreferences = useSaveNotificationPreferences();
+
   const [preferences, setPreferences] =
     React.useState<Record<string, NotificationPreference>>(getDefaultPreferences());
-  const [isSaving, setIsSaving] = React.useState(false);
 
-  // Load preferences from localStorage on mount
+  // Drop the pre-server copy once, so a stale browser value can never be
+  // mistaken for the (now authoritative) server state.
   React.useEffect(() => {
     try {
-      const saved = localStorage.getItem('notification-preferences');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        setPreferences({ ...getDefaultPreferences(), ...parsed });
-      }
+      localStorage.removeItem(LEGACY_STORAGE_KEY);
     } catch (error) {
-      logger.error('Failed to load notification preferences', { error });
+      logger.error('Failed to clear legacy notification preferences', { error });
     }
   }, []);
+
+  // Server rows are stored opt-out (only the toggles a user changed exist), so
+  // they are layered over the defaults rather than replacing them.
+  React.useEffect(() => {
+    if (!saved) return;
+    setPreferences(() => {
+      const merged = getDefaultPreferences();
+      saved.forEach((row) => {
+        if (merged[row.type]) {
+          merged[row.type] = { type: row.type, inApp: row.inApp, email: row.email };
+        }
+      });
+      return merged;
+    });
+  }, [saved]);
 
   const handleToggle = (type: string, channel: 'inApp' | 'email') => {
     setPreferences((prev) => ({
@@ -148,28 +184,60 @@ export default function NotificationPreferences() {
   };
 
   const handleSave = async () => {
-    setIsSaving(true);
+    if (!currentWorkspaceId) {
+      toast.error('Select a workspace before saving notification preferences');
+      return;
+    }
 
     try {
-      // Save to localStorage
-      localStorage.setItem('notification-preferences', JSON.stringify(preferences));
-      toast.success('Notification preferences saved successfully');
+      await savePreferences.mutateAsync({
+        workspaceId: currentWorkspaceId,
+        preferences: Object.values(preferences).map((pref) => ({
+          type: pref.type,
+          inApp: pref.inApp,
+          email: pref.email,
+        })),
+      });
+      toast.success('Notification preferences saved');
     } catch (error) {
       logger.error('Failed to save preferences', { error });
-      toast.error('Failed to save preferences');
-    } finally {
-      setIsSaving(false);
+      toast.error(error instanceof Error ? error.message : 'Failed to save preferences');
     }
   };
 
+  const isSaving = savePreferences.isPending;
   const categorizedTypes = groupByCategory();
+
+  /**
+   * A failed load must not be shown as "these are your settings".
+   *
+   * The state falls back to the defaults, so a GET that failed painted every
+   * toggle at its default position — and Save then wrote that whole default set
+   * over the choices the user had actually made, silently re-enabling
+   * notifications they had turned off. Nothing is rendered until the real
+   * preferences are in hand.
+   */
+  if (isError) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h3 className="text-lg font-medium">Notification Preferences</h3>
+        </div>
+        <ErrorState
+          title="Couldn't load your notification preferences"
+          description="Your saved choices are still there. Nothing is shown here until they load, so saving cannot overwrite them."
+          onRetry={() => void refetch()}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
       <div>
         <h3 className="text-lg font-medium">Notification Preferences</h3>
         <p className="text-sm text-muted-foreground mt-1">
-          Choose how you want to be notified about different events
+          Choose how you want to be notified about different events in this workspace.
         </p>
       </div>
 
@@ -203,10 +271,16 @@ export default function NotificationPreferences() {
                 const pref = preferences[type];
                 if (!pref) return null;
 
+                // The row's <Label> names the notification, not either switch —
+                // and it is a sibling, so it labels neither. Without an explicit
+                // name a screen reader announces two identical "switch, on"
+                // controls per row with no way to tell In-App from Email.
+                const label = notificationLabels[type] || type;
+
                 return (
                   <div key={type} className="grid grid-cols-[1fr_80px_80px] gap-4 items-center">
                     <div className="space-y-0.5">
-                      <Label className="font-normal">{notificationLabels[type] || type}</Label>
+                      <Label className="font-normal">{label}</Label>
                       <p className="text-xs text-muted-foreground">
                         {notificationDescriptions[type] || ''}
                       </p>
@@ -214,6 +288,7 @@ export default function NotificationPreferences() {
 
                     <div className="flex justify-center">
                       <Switch
+                        aria-label={`${label}: in-app`}
                         checked={pref.inApp}
                         onCheckedChange={() => handleToggle(type, 'inApp')}
                       />
@@ -221,6 +296,7 @@ export default function NotificationPreferences() {
 
                     <div className="flex justify-center">
                       <Switch
+                        aria-label={`${label}: email`}
                         checked={pref.email}
                         onCheckedChange={() => handleToggle(type, 'email')}
                         disabled={!NOTIFICATION_TEMPLATES[type].requiresEmail}
@@ -235,10 +311,14 @@ export default function NotificationPreferences() {
       })}
 
       <div className="flex justify-end gap-2">
-        <Button variant="outline" onClick={() => setPreferences(getDefaultPreferences())}>
+        <Button
+          variant="outline"
+          onClick={() => setPreferences(getDefaultPreferences())}
+          disabled={isSaving}
+        >
           Reset to Defaults
         </Button>
-        <Button onClick={handleSave} disabled={isSaving}>
+        <Button onClick={handleSave} disabled={isSaving || isLoading || !currentWorkspaceId}>
           {isSaving ? 'Saving...' : 'Save Preferences'}
         </Button>
       </div>

@@ -31,13 +31,20 @@ import {
 import { useCreateEpic } from '@/hooks/use-epic';
 import { useClientRequirements } from '@/hooks/use-client-requirement';
 
-const formSchema = z.object({
-  name: z.string().min(1, 'Name is required').max(200),
-  description: z.string().max(1000).optional(),
-  requirementId: z.string().optional(), // ✅ NEW: Map to requirement
-  startDate: z.string().optional(),
-  endDate: z.string().optional(),
-});
+const formSchema = z
+  .object({
+    name: z.string().trim().min(1, 'Name is required').max(200),
+    description: z.string().max(1000).optional(),
+    requirementId: z.string().optional(), // ✅ NEW: Map to requirement
+    startDate: z.string().optional(),
+    endDate: z.string().optional(),
+  })
+  .refine((data) => !data.startDate || !data.endDate || data.endDate >= data.startDate, {
+    // Both are `yyyy-MM-dd` strings from <input type="date">, so a lexical
+    // comparison is a date comparison. Without this an epic saves end-before-start.
+    message: 'End date must be on or after the start date',
+    path: ['endDate'],
+  });
 
 type FormData = z.infer<typeof formSchema>;
 
@@ -73,17 +80,23 @@ export function CreateEpicDialog({
   });
 
   const onSubmit = async (values: FormData) => {
-    await createEpic.mutateAsync({
-      projectId,
-      projectCode,
-      workspaceId,
-      createdBy: userId,
-      name: values.name,
-      description: values.description || '',
-      requirementId: values.requirementId || undefined, // ✅ NEW: Pass requirement mapping
-      startDate: values.startDate || undefined,
-      endDate: values.endDate || undefined,
-    });
+    try {
+      await createEpic.mutateAsync({
+        projectId,
+        projectCode,
+        workspaceId,
+        createdBy: userId,
+        name: values.name.trim(),
+        description: values.description || '',
+        requirementId: values.requirementId || undefined, // ✅ NEW: Pass requirement mapping
+        startDate: values.startDate || undefined,
+        endDate: values.endDate || undefined,
+      });
+    } catch {
+      // The mutation hook already toasted; keep the dialog open with the input
+      // instead of letting the rejection escape react-hook-form's handleSubmit.
+      return;
+    }
 
     form.reset();
     onOpenChange(false);

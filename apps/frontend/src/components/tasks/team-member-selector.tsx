@@ -83,9 +83,14 @@ export function TeamMemberSelector({
     <TooltipProvider>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
+          {/* aria-label, not the inner text: ARIA gives the combobox role
+              nameFrom="author" only, so the placeholder and badges inside the
+              button are NOT announced as its name. Without this a screen reader
+              reads it as an unnamed "combobox". */}
           <Button
             variant="outline"
             role="combobox"
+            aria-label={placeholder}
             aria-expanded={open}
             className={cn('w-full justify-between', className)}
           >
@@ -104,7 +109,7 @@ export function TeamMemberSelector({
                     <span className="max-w-[100px] truncate">{member.name}</span>
                     {multiSelect && (
                       <X
-                        className="h-3 w-3 cursor-pointer hover:text-destructive"
+                        className="h-3 w-3 cursor-pointer hover:text-destructive-text"
                         onClick={(e) => handleRemove(member.userId, e)}
                       />
                     )}

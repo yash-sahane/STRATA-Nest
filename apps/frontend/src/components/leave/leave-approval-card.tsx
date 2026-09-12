@@ -24,12 +24,11 @@ import {
 } from '@/components/ui/dialog';
 import { useApproveLeave, useRejectLeave, type LeaveRequest } from '@/hooks/use-leave';
 import {
-  LEAVE_TYPES,
-  LEAVE_STATUS,
+  getLeaveTypeLabel,
   getLeaveTypeColor,
-  getLeaveStatusColor,
   formatLeaveDateRange,
 } from '@/lib/leave-utils';
+import { LeaveStatusBadge } from '@/components/leave/leave-status-badge';
 
 interface LeaveApprovalCardProps {
   leaveRequest: LeaveRequest;
@@ -44,21 +43,26 @@ export function LeaveApprovalCard({
 }: LeaveApprovalCardProps) {
   const [showApproveDialog, setShowApproveDialog] = React.useState(false);
   const [showRejectDialog, setShowRejectDialog] = React.useState(false);
-  const [approverComments, setApproverComments] = React.useState('');
   const [rejectionReason, setRejectionReason] = React.useState('');
+  const [decisionError, setDecisionError] = React.useState('');
 
   const approveLeave = useApproveLeave();
   const rejectLeave = useRejectLeave();
 
   const handleApprove = async () => {
-    await approveLeave.mutateAsync({
-      leaveRequestId: leaveRequest.id,
-      approverId,
-      approverName,
-      approverComments: approverComments || undefined,
-    });
+    setDecisionError('');
+    try {
+      await approveLeave.mutateAsync({
+        leaveRequestId: leaveRequest.id,
+        approverId,
+        approverName,
+      });
+    } catch (error) {
+      // Keep the dialog open so the manager sees why the decision failed.
+      setDecisionError(error instanceof Error ? error.message : 'Failed to approve leave request');
+      return;
+    }
     setShowApproveDialog(false);
-    setApproverComments('');
   };
 
   const handleReject = async () => {
@@ -66,12 +70,18 @@ export function LeaveApprovalCard({
       return;
     }
 
-    await rejectLeave.mutateAsync({
-      leaveRequestId: leaveRequest.id,
-      approverId,
-      approverName,
-      rejectionReason,
-    });
+    setDecisionError('');
+    try {
+      await rejectLeave.mutateAsync({
+        leaveRequestId: leaveRequest.id,
+        approverId,
+        approverName,
+        rejectionReason,
+      });
+    } catch (error) {
+      setDecisionError(error instanceof Error ? error.message : 'Failed to reject leave request');
+      return;
+    }
     setShowRejectDialog(false);
     setRejectionReason('');
   };
@@ -96,11 +106,13 @@ export function LeaveApprovalCard({
               </CardDescription>
             </div>
             <div className="flex flex-col items-end gap-2">
-              <Badge className={getLeaveStatusColor(leaveRequest.status)} variant="outline">
-                {LEAVE_STATUS[leaveRequest.status]}
-              </Badge>
+              {/* Semantic variant, shared with the pending count on the tab
+                  above — see LeaveStatusBadge. The TYPE badge below stays a
+                  soft outline tint on purpose: status is the loud signal, the
+                  leave type is quiet metadata beside it. */}
+              <LeaveStatusBadge status={leaveRequest.status} />
               <Badge className={getLeaveTypeColor(leaveRequest.leaveType)} variant="outline">
-                {LEAVE_TYPES[leaveRequest.leaveType]}
+                {getLeaveTypeLabel(leaveRequest.leaveType)}
               </Badge>
             </div>
           </div>
@@ -111,8 +123,9 @@ export function LeaveApprovalCard({
               <Clock className="h-4 w-4 text-muted-foreground" />
               <span className="text-muted-foreground">Duration:</span>
               <span className="font-medium">
-                {leaveRequest.days} {leaveRequest.days === 1 ? 'day' : 'days'}
-                {leaveRequest.halfDay && ' (Half Day)'}
+                {leaveRequest.leaveType === 'HALF_DAY'
+                  ? 'Half day'
+                  : `${leaveRequest.days} ${leaveRequest.days === 1 ? 'day' : 'days'}`}
               </span>
             </div>
             <div className="flex items-center gap-2">
@@ -131,37 +144,30 @@ export function LeaveApprovalCard({
             </p>
           </div>
 
-          {leaveRequest.emergencyContact && (
+          {leaveRequest.rejectionReason && (
             <div className="space-y-2">
-              <Label className="text-sm font-medium">Emergency Contact:</Label>
-              <p className="text-sm text-muted-foreground">{leaveRequest.emergencyContact}</p>
-            </div>
-          )}
-
-          {leaveRequest.approverComments && (
-            <div className="space-y-2">
-              <Label className="text-sm font-medium">Manager Comments:</Label>
+              <Label className="text-sm font-medium">Rejection Reason:</Label>
               <p className="text-sm text-muted-foreground bg-muted/30 p-3 rounded-md">
-                {leaveRequest.approverComments}
+                {leaveRequest.rejectionReason}
               </p>
-              {leaveRequest.approverName && (
-                <p className="text-xs text-muted-foreground">— {leaveRequest.approverName}</p>
-              )}
             </div>
           )}
         </CardContent>
         {isPending && (
           <CardFooter className="flex gap-2">
+            {/* Same variants as the confirmation dialogs these open, so the
+                card and its dialog agree, and both stay on the tokens. */}
             <Button
               variant="outline"
-              className="flex-1 text-red-600 hover:bg-red-50 hover:text-red-700"
+              className="flex-1 text-destructive-text hover:bg-destructive/10 hover:text-destructive-text"
               onClick={() => setShowRejectDialog(true)}
             >
               <X className="mr-2 h-4 w-4" />
               Reject
             </Button>
             <Button
-              className="flex-1 bg-green-600 hover:bg-green-700"
+              variant="success"
+              className="flex-1"
               onClick={() => setShowApproveDialog(true)}
             >
               <Check className="mr-2 h-4 w-4" />
@@ -172,43 +178,45 @@ export function LeaveApprovalCard({
         {(isApproved || isRejected) && (
           <CardFooter>
             <div className="text-xs text-muted-foreground w-full text-center">
-              {isApproved ? 'Approved' : 'Rejected'} by {leaveRequest.approverName} on{' '}
-              {leaveRequest.approvedAt && new Date(leaveRequest.approvedAt).toLocaleDateString()}
+              {isApproved ? 'Approved' : 'Rejected'}
+              {leaveRequest.approvedAt &&
+                ` on ${new Date(leaveRequest.approvedAt).toLocaleDateString()}`}
             </div>
           </CardFooter>
         )}
       </Card>
 
       {/* Approve Dialog */}
-      <Dialog open={showApproveDialog} onOpenChange={setShowApproveDialog}>
+      {/* Clear on close: Escape, outside-click and the X all route through
+          onOpenChange and never fire the Cancel button's handler, so one
+          dialog's failure ("Insufficient leave balance") was still on screen
+          when the OTHER opened, before any decision had been attempted. */}
+      <Dialog
+        open={showApproveDialog}
+        onOpenChange={(next) => {
+          setShowApproveDialog(next);
+          if (!next) setDecisionError('');
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Approve Leave Request</DialogTitle>
             <DialogDescription>
               You are about to approve {leaveRequest.userName}&apos;s leave request for{' '}
-              {leaveRequest.days} {leaveRequest.days === 1 ? 'day' : 'days'}. The employee will be
-              notified via email.
+              {leaveRequest.days} {leaveRequest.days === 1 ? 'day' : 'days'}. The balance will be
+              deducted and the employee will be notified.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label htmlFor="approverComments">Comments (Optional)</Label>
-              <Textarea
-                id="approverComments"
-                placeholder="Add any comments or instructions..."
-                value={approverComments}
-                onChange={(e) => setApproverComments(e.target.value)}
-                rows={3}
-              />
-            </div>
-          </div>
+          {decisionError && (
+            <p className="text-sm text-destructive-text">{decisionError}</p>
+          )}
           <DialogFooter>
             <Button
               type="button"
               variant="outline"
               onClick={() => {
                 setShowApproveDialog(false);
-                setApproverComments('');
+                setDecisionError('');
               }}
             >
               Cancel
@@ -226,7 +234,13 @@ export function LeaveApprovalCard({
       </Dialog>
 
       {/* Reject Dialog */}
-      <Dialog open={showRejectDialog} onOpenChange={setShowRejectDialog}>
+      <Dialog
+        open={showRejectDialog}
+        onOpenChange={(next) => {
+          setShowRejectDialog(next);
+          if (!next) setDecisionError('');
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Reject Leave Request</DialogTitle>
@@ -247,9 +261,12 @@ export function LeaveApprovalCard({
                 required
               />
               <p className="text-xs text-muted-foreground">
-                This reason will be sent to the employee via email.
+                This reason is stored on the request and sent to the employee.
               </p>
             </div>
+            {decisionError && (
+              <p className="text-sm text-destructive-text">{decisionError}</p>
+            )}
           </div>
           <DialogFooter className="flex-col-reverse sm:flex-row sm:justify-between sm:space-x-0">
             <Button
@@ -259,6 +276,7 @@ export function LeaveApprovalCard({
               onClick={() => {
                 setShowRejectDialog(false);
                 setRejectionReason('');
+                setDecisionError('');
               }}
             >
               Cancel

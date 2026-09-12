@@ -11,11 +11,13 @@ import {
   useFunctionalRequirement,
   useUpdateFunctionalRequirement,
 } from '@/hooks/use-functional-requirement';
-import { useUserRole } from '@/hooks/use-permissions';
+import { useHasPermissionResolved } from '@/hooks/use-permissions';
+import { Permission } from '@/lib/permissions';
 import type { Task, TaskStatus, FunctionalRequirement, FunctionalRequirementStatus } from '@/types';
 import { cn } from '@/lib/utils';
 import { User, Calendar, Link2, FileText } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
+import { toast } from 'sonner';
 
 interface SprintBoardProps {
   tasks: Task[];
@@ -37,7 +39,17 @@ const getBoardStatusForFR = (status: FunctionalRequirementStatus): TaskStatus =>
   }
 };
 
-const getFRStatusForBoard = (status: TaskStatus): FunctionalRequirementStatus => {
+/**
+ * Map a board column back to an FR status. DRAFT, REVIEW and APPROVED all render
+ * in the same TODO column, so keep the FR's current status whenever the column
+ * is unchanged — otherwise reordering a DRAFT FR inside TODO silently promotes
+ * it to APPROVED with no undo.
+ */
+const getFRStatusForBoard = (
+  status: TaskStatus,
+  current: FunctionalRequirementStatus
+): FunctionalRequirementStatus => {
+  if (getBoardStatusForFR(current) === status) return current;
   switch (status) {
     case 'TODO':
       return 'APPROVED';
@@ -52,7 +64,11 @@ const getFRStatusForBoard = (status: TaskStatus): FunctionalRequirementStatus =>
   }
 };
 
+// BACKLOG must be here: tasks auto-created when an FR joins a sprint start in
+// BACKLOG and are only promoted to TODO when the sprint starts. Without this
+// column they match no bucket and a PLANNING sprint's board renders empty.
 const COLUMNS: { id: TaskStatus; label: string; color: string }[] = [
+  { id: 'BACKLOG', label: 'Backlog', color: 'bg-gray-100 dark:bg-gray-800' },
   { id: 'TODO', label: 'To Do', color: 'bg-slate-100 dark:bg-slate-900' },
   { id: 'IN_PROGRESS', label: 'In Progress', color: 'bg-blue-50 dark:bg-blue-950' },
   { id: 'REVIEW', label: 'Review', color: 'bg-purple-50 dark:bg-purple-950' },
@@ -79,7 +95,10 @@ function TaskFRBadge({ functionalRequirementId }: { functionalRequirementId?: st
 export function SprintBoard({ tasks, frs = [] }: SprintBoardProps) {
   const updateTask = useUpdateTask();
   const updateFR = useUpdateFunctionalRequirement();
-  const userRole = useUserRole(); // ✅ Get user role for permission check
+  // Tri-state: `undefined` while the membership request is in flight, so a
+  // drop onto Done on first paint is not refused for an unresolved answer.
+  const doneGate = useHasPermissionResolved(Permission.EDIT_ANY_TASK);
+  const canMarkDone = doneGate.isLoading ? undefined : doneGate.allowed;
 
   const [localItems, setLocalItems] = React.useState<BoardItem[]>([]);
 
@@ -117,6 +136,19 @@ export function SprintBoard({ tasks, frs = [] }: SprintBoardProps) {
     if (!item) return;
 
     const newStatus = destination.droppableId as TaskStatus;
+    // The Backlog column exists for TASKS (an FR joining a PLANNING sprint
+    // auto-creates one there). FRs have no backlog state: `getBoardStatusForFR`
+    // never returns BACKLOG, so the "column unchanged" short-circuit below
+    // cannot fire and the `default` arm would silently mark a DRAFT FR APPROVED
+    // — then re-bucket the card back into To Do and toast "moved to approved"
+    // for a drop the user made on Backlog. Refuse the drop instead.
+    if (item.type === 'FR' && newStatus === 'BACKLOG') {
+      toast.info('Functional requirements have no backlog state.');
+      return;
+    }
+
+    const nextFRStatus =
+      item.type === 'FR' ? getFRStatusForBoard(newStatus, item.data.status) : null;
 
     // Optimistic update
     const updatedItems = localItems.map((i) => {
@@ -124,7 +156,7 @@ export function SprintBoard({ tasks, frs = [] }: SprintBoardProps) {
         if (i.type === 'TASK') {
           return { ...i, data: { ...i.data, status: newStatus } };
         } else {
-          return { ...i, data: { ...i.data, status: getFRStatusForBoard(newStatus) } };
+          return { ...i, data: { ...i.data, status: nextFRStatus! } };
         }
       }
       return i;
@@ -134,18 +166,37 @@ export function SprintBoard({ tasks, frs = [] }: SprintBoardProps) {
     // Update in database
     try {
       if (item.type === 'TASK') {
+        // `destination.index` counts FR cards too. `position` orders TASKS, so
+        // convert to the rank among tasks only before persisting it.
+        //
+        // The index dnd reports is into the list AFTER the dragged card is
+        // removed, so the slice has to be taken from a list with it already
+        // removed. Slicing the pre-drag list and subtracting the dragged card
+        // afterwards was one short for every downward move within a column
+        // (drag T1 past T2: index 2, slice [T1,T2], minus T1 => position 1,
+        // tying with T2 instead of landing after it).
+        const rest = getItemsByColumn(newStatus).filter((i) => i.data.id !== draggableId);
+        const taskPosition = rest
+          .slice(0, destination.index)
+          .filter((i) => i.type === 'TASK').length;
+
         await updateTask.mutateAsync({
           taskId: item.data.id,
           projectId: item.data.projectId,
-          updates: { status: newStatus, position: destination.index },
-          currentUserRole: userRole || undefined, // ✅ Pass role for permission check
+          updates: { status: newStatus, position: taskPosition },
+          canMarkDone,
         });
       } else {
         await updateFR.mutateAsync({
           requirementId: item.data.id,
           projectId: item.data.projectId,
-          updates: { status: getFRStatusForBoard(newStatus) },
+          updates: { status: nextFRStatus! },
         });
+        // useUpdateFunctionalRequirement deliberately emits no generic success
+        // toast (it stacked one per caller), and the TASK branch above still
+        // gets one from useUpdateTask — so confirm the FR move here or the two
+        // halves of the same drag behave differently.
+        toast.success(`${item.data.hierarchyId} moved to ${nextFRStatus!.toLowerCase()}`);
       }
     } catch (error) {
       setLocalItems(localItems); // Revert
@@ -154,7 +205,7 @@ export function SprintBoard({ tasks, frs = [] }: SprintBoardProps) {
 
   return (
     <DragDropContext onDragEnd={handleDragEnd}>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
         {COLUMNS.map((column) => {
           const columnItems = getItemsByColumn(column.id);
 
@@ -210,7 +261,7 @@ export function SprintBoard({ tasks, frs = [] }: SprintBoardProps) {
                                     {!isTask && (
                                       <Badge
                                         variant="secondary"
-                                        className="text-[10px] bg-blue-100 text-blue-700"
+                                        className="text-[10px] bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-200"
                                       >
                                         FR
                                       </Badge>

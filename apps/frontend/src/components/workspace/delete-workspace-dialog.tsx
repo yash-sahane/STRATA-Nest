@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useDeleteWorkspace } from '@/hooks/use-workspace';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
@@ -19,26 +19,48 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { AlertTriangle } from 'lucide-react';
+import type { Workspace } from '@/types';
 
 interface DeleteWorkspaceDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Workspace to delete; defaults to the current workspace. */
+  workspace?: Workspace;
 }
 
-export function DeleteWorkspaceDialog({ open, onOpenChange }: DeleteWorkspaceDialogProps) {
+export function DeleteWorkspaceDialog({ open, onOpenChange, workspace }: DeleteWorkspaceDialogProps) {
   const router = useRouter();
-  const { currentWorkspace } = useCurrentWorkspace();
+  const { currentWorkspace, currentWorkspaceId } = useCurrentWorkspace();
   const { clearWorkspaceData } = useWorkspaceContext();
   const { mutate: deleteWorkspace, isPending } = useDeleteWorkspace();
   const [confirmText, setConfirmText] = useState('');
 
+  const targetWorkspace = workspace ?? currentWorkspace;
+
+  // The typed confirmation belongs to ONE workspace and ONE opening of this
+  // dialog. `AlertDialogCancel`'s onClick was the only thing clearing it, but
+  // Radix routes Escape, outside-click and the X through `onOpenChange`
+  // WITHOUT firing that button — so "DELETE" typed for workspace X survived the
+  // dismissal, and opening the dialog for workspace Y arrived with the confirm
+  // already satisfied and the destructive button enabled. Reset on every close
+  // and on every change of target.
+  useEffect(() => {
+    if (!open) setConfirmText('');
+  }, [open]);
+  useEffect(() => {
+    setConfirmText('');
+  }, [targetWorkspace?.id]);
+
   const handleDelete = () => {
-    if (!currentWorkspace) return;
+    if (!targetWorkspace) return;
     if (confirmText !== 'DELETE') return;
 
-    deleteWorkspace(currentWorkspace.id, {
+    deleteWorkspace(targetWorkspace.id, {
       onSuccess: () => {
-        clearWorkspaceData();
+        // Only reset the active selection when the deleted workspace is the current one.
+        if (targetWorkspace.id === currentWorkspaceId) {
+          clearWorkspaceData();
+        }
         onOpenChange(false);
         setConfirmText('');
         router.push('/workspaces');
@@ -46,7 +68,7 @@ export function DeleteWorkspaceDialog({ open, onOpenChange }: DeleteWorkspaceDia
     });
   };
 
-  if (!currentWorkspace) return null;
+  if (!targetWorkspace) return null;
 
   const isConfirmed = confirmText === 'DELETE';
 
@@ -68,7 +90,7 @@ export function DeleteWorkspaceDialog({ open, onOpenChange }: DeleteWorkspaceDia
           <Alert variant="destructive">
             <AlertDescription>
               You are about to delete:{' '}
-              <strong className="font-semibold">{currentWorkspace.name}</strong>
+              <strong className="font-semibold">{targetWorkspace.name}</strong>
             </AlertDescription>
           </Alert>
 

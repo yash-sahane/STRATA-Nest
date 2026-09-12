@@ -1,7 +1,10 @@
 'use client';
 
 import * as React from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { getInitials } from '@/lib/utils';
+import { query, resources } from '@/lib/api/client';
+import { useTeamMembers } from '@/hooks/use-team';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -14,89 +17,195 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { EmptyState } from '@/components/ui/empty-state';
+import { ErrorState } from '@/components/ui/error-state';
+import { Skeleton } from '@/components/ui/skeleton';
 import {
+  CalendarOff,
   CheckCircle2,
-  GitBranch,
-  MessageSquare,
-  UserPlus,
-  FileText,
-  Calendar,
-  Tag,
-  Edit,
-  Trash2,
   Clock,
+  FileText,
   Filter,
+  FolderKanban,
+  GitBranch,
+  KeySquare,
+  LayoutList,
+  ListChecks,
+  LogIn,
+  Mail,
+  PartyPopper,
+  PlayCircle,
+  Rocket,
+  ShieldCheck,
+  Tag,
+  Target,
+  Timer,
+  UserMinus,
+  UserPlus,
+  XCircle,
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 
-type ActivityType =
-  | 'task_created'
-  | 'task_updated'
-  | 'task_deleted'
-  | 'task_assigned'
-  | 'task_status_changed'
-  | 'comment_added'
-  | 'requirement_created'
-  | 'requirement_updated'
-  | 'sprint_created'
-  | 'sprint_started'
-  | 'sprint_completed'
-  | 'epic_created'
-  | 'member_added';
+/**
+ * The `action` values the audit trail actually stores.
+ *
+ * These are the dotted domain-event names emitted by AuditSubscriber
+ * (packages/shared/src/events — `workspace.member.added`, `leave.approved`, …).
+ * They are NOT the invented `task_created`-style keys this component used to
+ * declare: those matched nothing the server writes, so an unguarded
+ * `activityConfig[activity.type]` lookup would have thrown on the first real row
+ * had the component ever fetched one.
+ */
+type ActivityConfig = {
+  icon: React.ComponentType<{ className?: string }>;
+  color: string;
+  label: string;
+};
 
-interface Activity {
+/** The three rows a CRUD-audited entity contributes, so each verb keeps its own
+ *  colour without spelling out `created`/`updated`/`deleted` twenty times. */
+function crud(
+  entity: string,
+  icon: React.ComponentType<{ className?: string }>,
+  noun: string,
+): Record<string, ActivityConfig> {
+  return {
+    [`${entity}.created`]: { icon, color: 'text-emerald-500', label: `${noun} Created` },
+    [`${entity}.updated`]: { icon, color: 'text-sky-500', label: `${noun} Updated` },
+    [`${entity}.deleted`]: { icon, color: 'text-red-500', label: `${noun} Deleted` },
+  };
+}
+
+const ACTIVITY_CONFIG: Record<string, ActivityConfig> = {
+  'workspace.member.added': { icon: UserPlus, color: 'text-emerald-500', label: 'Member Added' },
+  'workspace.member.role_changed': {
+    icon: ShieldCheck,
+    color: 'text-violet-500',
+    label: 'Role Changed',
+  },
+  'workspace.member.removed': { icon: UserMinus, color: 'text-red-500', label: 'Member Removed' },
+  'workspace.invitation.accepted': {
+    icon: LogIn,
+    color: 'text-sky-500',
+    label: 'Invitation Accepted',
+  },
+  'workspace.join_request.approved': {
+    icon: CheckCircle2,
+    color: 'text-emerald-500',
+    label: 'Join Request Approved',
+  },
+  'workspace.join_request.rejected': {
+    icon: XCircle,
+    color: 'text-red-500',
+    label: 'Join Request Rejected',
+  },
+  'leave.approved': { icon: CalendarOff, color: 'text-emerald-500', label: 'Leave Approved' },
+  'leave.rejected': { icon: CalendarOff, color: 'text-red-500', label: 'Leave Rejected' },
+  'time_entry.approved': { icon: Timer, color: 'text-emerald-500', label: 'Time Approved' },
+  'time_entry.rejected': { icon: Timer, color: 'text-red-500', label: 'Time Rejected' },
+
+  // Sprint milestones, emitted by SprintsService (start) and
+  // SprintCompletionService (completion).
+  'sprint.started': { icon: PlayCircle, color: 'text-sky-500', label: 'Sprint Started' },
+  'sprint.completed': { icon: PartyPopper, color: 'text-emerald-500', label: 'Sprint Completed' },
+
+  // Plain CRUD on the planning domain, written by ScopedCrudService for every
+  // collection that opts in via `auditEntity`. The `<entity>.<created|updated|
+  // deleted>` shape means one entry per verb; anything not listed still renders
+  // through configFor's fallback.
+  ...crud('project', FolderKanban, 'Project'),
+  ...crud('epic', Rocket, 'Epic'),
+  ...crud('sprint', Target, 'Sprint'),
+  ...crud('retrospective', ListChecks, 'Retrospective'),
+  ...crud('task', CheckCircle2, 'Task'),
+  ...crud('label', Tag, 'Label'),
+  ...crud('client_requirement', FileText, 'Client Requirement'),
+  ...crud('functional_requirement', FileText, 'Functional Requirement'),
+  ...crud('holiday', CalendarOff, 'Holiday'),
+  ...crud('leave_request', CalendarOff, 'Leave Request'),
+  ...crud('leave_balance', CalendarOff, 'Leave Balance'),
+  ...crud('workspace_role', ShieldCheck, 'Role'),
+  ...crud('invite_code', KeySquare, 'Invite Code'),
+  ...crud('email_invitation', Mail, 'Email Invitation'),
+  ...crud('join_request', UserPlus, 'Join Request'),
+  ...crud('pending_access', UserPlus, 'Access Request'),
+  ...crud('github_integration', GitBranch, 'GitHub Integration'),
+  ...crud('gitlab_integration', GitBranch, 'GitLab Integration'),
+  ...crud('discord_integration', LayoutList, 'Discord Integration'),
+};
+
+/** Total lookup. The audit trail is append-only and open-ended: an action added
+ *  server-side must render as an ordinary row, never as `config.icon of
+ *  undefined`. The label falls back to the raw action so nothing is invisible. */
+function configFor(action: string) {
+  return (
+    ACTIVITY_CONFIG[action] ?? {
+      icon: Clock,
+      color: 'text-muted-foreground',
+      label: action.replace(/[._]/g, ' '),
+    }
+  );
+}
+
+interface ActivityLog {
   id: string;
-  type: ActivityType;
+  workspaceId: string;
   userId: string;
-  userName: string;
+  action: string;
+  entityType: string;
   entityId: string;
-  entityType: 'task' | 'requirement' | 'sprint' | 'epic' | 'comment' | 'project';
-  entityTitle: string;
-  description: string;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
   createdAt: string;
 }
 
 interface ActivityFeedProps {
-  projectId?: string;
   workspaceId?: string;
   showFilters?: boolean;
   className?: string;
 }
 
-// Activity configuration with icons and colors
-const activityConfig: Record<
-  ActivityType,
-  { icon: React.ComponentType<{ className?: string }>; color: string; label: string }
-> = {
-  task_created: { icon: FileText, color: 'text-blue-500', label: 'Task Created' },
-  task_updated: { icon: Edit, color: 'text-yellow-500', label: 'Task Updated' },
-  task_deleted: { icon: Trash2, color: 'text-red-500', label: 'Task Deleted' },
-  task_assigned: { icon: UserPlus, color: 'text-purple-500', label: 'Task Assigned' },
-  task_status_changed: { icon: CheckCircle2, color: 'text-green-500', label: 'Status Changed' },
-  comment_added: { icon: MessageSquare, color: 'text-indigo-500', label: 'Comment Added' },
-  requirement_created: { icon: FileText, color: 'text-blue-500', label: 'Requirement Created' },
-  requirement_updated: { icon: Edit, color: 'text-yellow-500', label: 'Requirement Updated' },
-  sprint_created: { icon: GitBranch, color: 'text-cyan-500', label: 'Sprint Created' },
-  sprint_started: { icon: Calendar, color: 'text-green-500', label: 'Sprint Started' },
-  sprint_completed: { icon: CheckCircle2, color: 'text-green-600', label: 'Sprint Completed' },
-  epic_created: { icon: Tag, color: 'text-orange-500', label: 'Epic Created' },
-  member_added: { icon: UserPlus, color: 'text-purple-500', label: 'Member Added' },
-};
+const PAGE_SIZE = 100;
 
-export function ActivityFeed({
-  projectId: _projectId,
-  showFilters = true,
-  className,
-}: ActivityFeedProps) {
-  const [activities] = React.useState<Activity[]>([]);
-  const [filterType, setFilterType] = React.useState<ActivityType | 'all'>('all');
+export function ActivityFeed({ workspaceId, showFilters = true, className }: ActivityFeedProps) {
+  const [filterAction, setFilterAction] = React.useState<string>('all');
 
-  // Filter activities by type
+  const {
+    data: activities = [],
+    isLoading,
+    isError,
+    refetch,
+  } = useQuery({
+    queryKey: ['activity-logs', workspaceId],
+    enabled: Boolean(workspaceId),
+    queryFn: async () => {
+      if (!workspaceId) return [];
+      const response = await resources.list<ActivityLog>('activity_logs', [
+        query.equal('workspaceId', workspaceId),
+        query.orderDesc('createdAt'),
+        query.limit(PAGE_SIZE),
+      ]);
+      return response.items;
+    },
+  });
+
+  // The log stores a userId; the roster is where the display name lives. It is
+  // the same `['team-members', workspaceId]` query the header already holds, so
+  // this costs no extra request.
+  const { data: teamMembers = [] } = useTeamMembers(workspaceId);
+  const nameOf = React.useMemo(() => {
+    const byId = new Map(teamMembers.map((m) => [m.userId, m.name || m.email || 'Someone']));
+    return (userId: string) => byId.get(userId) ?? 'Someone';
+  }, [teamMembers]);
+
+  // Only the actions actually present, so the picker never offers an empty filter.
+  const availableActions = React.useMemo(
+    () => [...new Set(activities.map((a) => a.action))].sort(),
+    [activities]
+  );
+
   const filteredActivities = React.useMemo(() => {
-    if (filterType === 'all') return activities;
-    return activities.filter((activity) => activity.type === filterType);
-  }, [activities, filterType]);
+    if (filterAction === 'all') return activities;
+    return activities.filter((activity) => activity.action === filterAction);
+  }, [activities, filterAction]);
 
   return (
     <Card className={className}>
@@ -107,26 +216,22 @@ export function ActivityFeed({
               <Clock className="h-5 w-5" />
               Activity Feed
             </CardTitle>
-            <CardDescription>Recent activity in your project</CardDescription>
+            <CardDescription>Recent activity across this workspace</CardDescription>
           </div>
-          {showFilters && (
+          {showFilters && availableActions.length > 0 && (
             <div className="flex items-center gap-2">
               <Filter className="h-4 w-4 text-muted-foreground" />
-              <Select
-                value={filterType}
-                onValueChange={(value) => setFilterType(value as ActivityType | 'all')}
-              >
-                <SelectTrigger className="w-[180px]">
+              <Select value={filterAction} onValueChange={setFilterAction}>
+                <SelectTrigger aria-label="Filter the activity feed" className="w-[220px]">
                   <SelectValue placeholder="Filter by type" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Activities</SelectItem>
-                  <SelectItem value="task_created">Task Created</SelectItem>
-                  <SelectItem value="task_updated">Task Updated</SelectItem>
-                  <SelectItem value="task_status_changed">Status Changed</SelectItem>
-                  <SelectItem value="comment_added">Comments</SelectItem>
-                  <SelectItem value="sprint_created">Sprints</SelectItem>
-                  <SelectItem value="requirement_created">Requirements</SelectItem>
+                  {availableActions.map((action) => (
+                    <SelectItem key={action} value={action}>
+                      {configFor(action).label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -135,17 +240,36 @@ export function ActivityFeed({
       </CardHeader>
       <CardContent>
         <ScrollArea className="h-[600px] pr-4">
-          {filteredActivities.length === 0 ? (
+          {isLoading ? (
+            <div className="space-y-3">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="flex gap-3 rounded-lg border p-3">
+                  <Skeleton className="h-10 w-10 shrink-0 rounded-full" />
+                  <div className="flex-1 space-y-2">
+                    <Skeleton className="h-4 w-1/2" />
+                    <Skeleton className="h-3 w-1/3" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : isError ? (
+            <ErrorState
+              title="Couldn't load activity"
+              description="The workspace activity trail could not be fetched."
+              onRetry={() => refetch()}
+            />
+          ) : filteredActivities.length === 0 ? (
             <EmptyState
               icon={Clock}
               title="No activities yet"
-              description="Activity will appear here as your team works on the project"
+              description="Activity will appear here as your team works in this workspace"
             />
           ) : (
             <div className="space-y-4">
               {filteredActivities.map((activity) => {
-                const config = activityConfig[activity.type];
+                const config = configFor(activity.action);
                 const Icon = config.icon;
+                const userName = nameOf(activity.userId);
 
                 return (
                   <div
@@ -165,45 +289,31 @@ export function ActivityFeed({
                         <div className="flex items-center gap-2 flex-wrap">
                           <Avatar className="h-6 w-6">
                             <AvatarFallback className="text-xs">
-                              {getInitials(activity.userName)}
+                              {getInitials(userName)}
                             </AvatarFallback>
                           </Avatar>
-                          <span className="font-medium text-sm">{activity.userName}</span>
+                          <span className="font-medium text-sm">{userName}</span>
                           <span className="text-sm text-muted-foreground">
-                            {activity.description}
+                            {config.label.toLowerCase()}
                           </span>
+                          {/* Which epic, which task. The server records a
+                              title/name on the row it audits, and without this
+                              every entry read "someone created a task" with no
+                              way to tell which one. */}
+                          {typeof activity.metadata?.label === 'string' &&
+                            activity.metadata.label && (
+                              <span
+                                className="text-sm font-medium truncate max-w-[22rem]"
+                                title={activity.metadata.label}
+                              >
+                                {activity.metadata.label}
+                              </span>
+                            )}
                         </div>
                         <Badge variant="outline" className="shrink-0 text-xs">
-                          {config.label}
+                          {activity.entityType}
                         </Badge>
                       </div>
-
-                      {/* Entity Title */}
-                      <div className="text-sm font-medium truncate">{activity.entityTitle}</div>
-
-                      {/* Metadata */}
-                      {activity.metadata && (
-                        <div className="text-xs text-muted-foreground">
-                          {activity.metadata.commentPreview && (
-                            <span className="italic">&ldquo;{activity.metadata.commentPreview}&rdquo;</span>
-                          )}
-                          {activity.metadata.assignedTo && (
-                            <span>to {activity.metadata.assignedTo}</span>
-                          )}
-                          {activity.metadata.oldStatus && activity.metadata.newStatus && (
-                            <span>
-                              from{' '}
-                              <Badge variant="outline" className="text-xs mx-1">
-                                {activity.metadata.oldStatus}
-                              </Badge>
-                              to{' '}
-                              <Badge variant="outline" className="text-xs mx-1">
-                                {activity.metadata.newStatus}
-                              </Badge>
-                            </span>
-                          )}
-                        </div>
-                      )}
 
                       {/* Timestamp */}
                       <div className="text-xs text-muted-foreground">

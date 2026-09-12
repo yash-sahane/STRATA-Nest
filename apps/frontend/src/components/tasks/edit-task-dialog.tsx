@@ -4,6 +4,7 @@ import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
+import { syncBadInput } from '@/lib/number-field';
 import {
   Dialog,
   DialogContent,
@@ -47,12 +48,54 @@ const LABEL_COLORS = [
   { name: 'Gray', value: 'gray', class: 'bg-gray-500' },
 ];
 
+/** Labels and assignee ids reach us either as an array or as a JSON string. */
+const parseLabels = (labelsData: unknown): string[] => {
+  if (!labelsData) return [];
+  if (Array.isArray(labelsData)) return labelsData;
+  if (typeof labelsData === 'string') {
+    try {
+      const parsed = JSON.parse(labelsData);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+};
+
+// Estimated hours is optional, and "blank" has to survive the trip to the
+// resolver as blank: z.coerce.number() turns '' (what a cleared number input
+// reports) into a real 0h estimate. Normalise every flavour of "nothing was
+// typed" to undefined before coercion, and keep an explicit 0 meaningful for
+// anyone who really does mean a zero-hour task.
+//
+// NaN is deliberately NOT normalised away any more — it is the sentinel the
+// Estimated Hours input stores when the browser reports validity.badInput.
+// Letting it fall through to z.coerce.number() is what turns "e", "-" and
+// "1e-" into a visible message instead of a silently dropped estimate.
+const optionalEstimatedHours = z.preprocess(
+  (value) => {
+    if (value === null) return undefined;
+    if (typeof value === 'string' && value.trim() === '') return undefined;
+    return value;
+  },
+  z.coerce
+    .number({ invalid_type_error: 'Estimated hours must be a number' })
+    .min(0, 'Estimated hours cannot be negative')
+    .max(1000, 'Estimated hours cannot exceed 1000')
+    .optional()
+);
+
 const taskSchema = z.object({
   title: z.string().min(3, 'Title must be at least 3 characters'),
   description: z.string().optional(),
   status: z.enum(['BACKLOG', 'TODO', 'IN_PROGRESS', 'REVIEW', 'DONE']),
   priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']),
   dueDate: z.date().optional(),
+  // Previously unreachable from any dialog, so every task's estimate stayed 0.
+  // Clearing the field must read as "no estimate", not 0 — see
+  // optionalEstimatedHours above.
+  estimatedHours: optionalEstimatedHours,
   epicId: z.string().optional(),
   assigneeIds: z.array(z.string()).optional(),
   labels: z.array(z.string()).optional(),
@@ -120,48 +163,65 @@ export function EditTaskDialog({
     form.setValue('labels', updated, { shouldDirty: true });
   };
 
-  // Parse labels - handle both array and JSON string
-  const parseLabels = (labelsData: unknown): string[] => {
-    if (!labelsData) return [];
-    if (Array.isArray(labelsData)) return labelsData;
-    if (typeof labelsData === 'string') {
-      try {
-        const parsed = JSON.parse(labelsData);
-        return Array.isArray(parsed) ? parsed : [];
-      } catch {
-        return [];
-      }
-    }
-    return [];
-  };
+  // One definition of "the fields as the task actually is". Both the seeding
+  // effect and closeDialog go through it so the two cannot drift apart.
+  const seedFromTask = React.useCallback(
+    (source: Task) => {
+      form.reset({
+        title: source.title,
+        description: source.description || '',
+        status: source.status as TaskStatus,
+        priority: source.priority,
+        dueDate: source.dueDate ? new Date(source.dueDate) : undefined,
+        estimatedHours: source.estimatedHours ?? undefined,
+        epicId: source.epicId,
+        labels: parseLabels(source.labels),
+        assigneeIds: parseLabels(source.assigneeIds),
+      });
+    },
+    [form]
+  );
+
+  // The label composer is component state, not form state, so a form reset on
+  // its own leaves a half-typed label name and an open composer behind.
+  const resetLabelComposer = React.useCallback(() => {
+    setNewLabel('');
+    setSelectedColor('blue');
+    setShowLabelInput(false);
+  }, []);
 
   // Update form when task changes
   React.useEffect(() => {
-    if (task) {
-      const taskLabels = parseLabels(task.labels);
-      const assigneeIds = parseLabels(task.assigneeIds);
-      form.reset({
-        title: task.title,
-        description: task.description || '',
-        status: task.status as TaskStatus,
-        priority: task.priority,
-        dueDate: task.dueDate ? new Date(task.dueDate) : undefined,
-        epicId: task.epicId,
-        labels: taskLabels,
-        assigneeIds: assigneeIds,
-      });
-    }
-  }, [task, form]);
+    if (task) seedFromTask(task);
+  }, [task, seedFromTask]);
+
+  // Closing DISCARDS. The tasks page keeps the same `task` object selected after
+  // the dialog closes, so the effect above does not re-run on the next open:
+  // without this, Cancel left the abandoned edits in the fields and the next
+  // Save would have written a change the user had explicitly thrown away.
+  const closeDialog = React.useCallback(() => {
+    if (task) seedFromTask(task);
+    resetLabelComposer();
+    onOpenChange(false);
+  }, [task, seedFromTask, resetLabelComposer, onOpenChange]);
 
   const handleSubmit = async (values: TaskFormValues) => {
-    await onSubmit(values);
+    try {
+      await onSubmit(values);
+    } catch {
+      // The mutation hook already toasted; keep the dialog open with the user's
+      // edits rather than re-throwing out of react-hook-form's handleSubmit.
+      return;
+    }
+    // The saved values are the clean ones now, so only the composer is cleared.
+    resetLabelComposer();
     onOpenChange(false);
   };
 
   if (!task) return null;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(next) => (next ? onOpenChange(true) : closeDialog())}>
       <DialogContent size="lg" className="max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Edit Task</DialogTitle>
@@ -169,7 +229,12 @@ export function EditTaskDialog({
         </DialogHeader>
 
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-4">
+          {/* noValidate: the browser ran its own constraint check first and, when
+              it failed, cancelled the submit with nothing but a transient native
+              bubble — no request, no FormMessage, no toast, nothing left on screen.
+              zod owns validation end to end here so a rejection can actually be
+              rendered next to the field that caused it. */}
+          <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-4" noValidate>
             {/* Title */}
             <FormField
               control={form.control}
@@ -287,6 +352,55 @@ export function EditTaskDialog({
                     disabled={(date) => date < new Date(new Date().setHours(0, 0, 0, 0))}
                     buttonClassName="w-full"
                   />
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            {/* Estimated Hours */}
+            <FormField
+              control={form.control}
+              name="estimatedHours"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Estimated Hours</FormLabel>
+                  <FormControl>
+                    <Input
+                      type="number"
+                      min={0}
+                      // Quarter hours are an ordinary estimate. With noValidate on
+                      // the form the browser no longer refuses an off-step 7.25 —
+                      // zod owns the bounds and this only sizes the spinner arrows.
+                      step={0.25}
+                      placeholder="e.g., 8"
+                      {...field}
+                      // NaN is the badInput sentinel set below; React has to be
+                      // handed a string here or it warns and wipes the characters
+                      // the user can still see in the field.
+                      value={
+                        typeof field.value === 'number' && Number.isNaN(field.value)
+                          ? ''
+                          : field.value ?? ''
+                      }
+                      onChange={(event) => {
+                        // Chrome reports "e", "-" and "1e-" as value="" with
+                        // validity.badInput set — indistinguishable from a cleared
+                        // field, so a typo was filed as "no estimate" while native
+                        // validation silently cancelled the submit. Store NaN and
+                        // let the resolver put the reason on the field.
+                        field.onChange(event.target.validity.badInput ? NaN : event.target.value);
+                      }}
+                      // onChange alone is not enough: React suppresses it when the
+                      // value string does not change, and on an EMPTY field the
+                      // first bad keystroke is "" -> "". keyup and blur always
+                      // fire. See lib/number-field.ts.
+                      onKeyUp={syncBadInput(field)}
+                      onBlur={(event) => {
+                        syncBadInput(field)(event);
+                        field.onBlur();
+                      }}
+                    />
+                  </FormControl>
                   <FormMessage />
                 </FormItem>
               )}
@@ -447,12 +561,7 @@ export function EditTaskDialog({
             </div>
 
             <DialogFooter className="justify-end">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => onOpenChange(false)}
-                disabled={isLoading}
-              >
+              <Button type="button" variant="outline" onClick={closeDialog} disabled={isLoading}>
                 Cancel
               </Button>
               <Button type="submit" disabled={isLoading}>

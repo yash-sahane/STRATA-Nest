@@ -12,10 +12,14 @@ import { Calendar, Clock, User, Edit, Trash2, Tag } from 'lucide-react';
 import { formatDate, cn, getInitials } from '@/lib/utils';
 import type { Task } from '@/types';
 import { TaskDependencies } from '@/components/tasks/task-dependencies';
+import { TaskComments } from '@/components/tasks/task-comments';
 import { TaskTimeTracking } from '@/components/time-tracking/task-time-tracking';
-import { useTasks, useAddTaskDependency, useRemoveTaskDependency } from '@/hooks/use-task';
+import {
+  useWorkspaceTasks,
+  useAddTaskDependency,
+  useRemoveTaskDependency,
+} from '@/hooks/use-task';
 import { useAuth } from '@/components/providers/auth-provider';
-import { useWorkspace } from '@/hooks/use-workspace';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useTeamMembers, ROLE_CONFIG } from '@/hooks/use-team';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -47,6 +51,8 @@ interface TaskDetailsDialogProps {
   onOpenChange: (open: boolean) => void;
   onEdit?: (task: Task) => void;
   onDelete?: (taskId: string) => void;
+  /** Whether the viewer may change the task's dependency edges (`task:write`). */
+  canEditDependencies?: boolean;
 }
 
 export function TaskDetailsDialog({
@@ -55,15 +61,22 @@ export function TaskDetailsDialog({
   onOpenChange,
   onEdit,
   onDelete,
+  canEditDependencies = false,
 }: TaskDetailsDialogProps) {
-  // Fetch all tasks from the same project for dependencies
-  const { data: allTasks = [] } = useTasks(task?.projectId);
+  // Dependency edges are workspace-scoped server-side (tasks.services.ts refuses
+  // only CROSS-WORKSPACE edges), and TaskDependencies renders a "Cross-project"
+  // badge for them. Scoping this to the task's project made that badge dead code
+  // and, worse, hid any existing cross-project dependency from both lists —
+  // `allTasks.filter(t => task.blockedBy.includes(t.id))` simply dropped it.
+  const { data: allTasks = [] } = useWorkspaceTasks(task?.workspaceId);
   const addDependency = useAddTaskDependency();
   const removeDependency = useRemoveTaskDependency();
 
   // Get user info for time tracking
   const { user } = useAuth();
-  const { data: workspace } = useWorkspace();
+  // useWorkspace() was called with no id, so its query was permanently disabled
+  // and `workspace` stayed undefined — which silently hid the whole Time
+  // Tracking block below. The selected workspace is what this dialog wants.
   const { currentWorkspace } = useCurrentWorkspace();
   const { data: teamMembers = [] } = useTeamMembers(currentWorkspace?.id);
 
@@ -91,7 +104,10 @@ export function TaskDetailsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent size="xl" className="max-h-[90vh] overflow-y-auto">
+      <DialogContent
+        size="xl"
+        className="max-h-[90vh] overflow-y-auto"
+      >
         <DialogHeader>
           <div className="flex items-start justify-between">
             <div className="space-y-2 flex-1">
@@ -136,8 +152,10 @@ export function TaskDetailsDialog({
               </div>
             )}
 
-            {/* Estimated Hours */}
-            {task.estimatedHours && (
+            {/* Estimated Hours. 0 means "no estimate", and a bare `&&` on a
+                number renders the 0 itself — so every task created without an
+                estimate opened this grid with a naked zero. */}
+            {(task.estimatedHours ?? 0) > 0 && (
               <div>
                 <div className="flex items-center gap-2 text-sm font-medium mb-2">
                   <Clock className="h-4 w-4" />
@@ -311,10 +329,16 @@ export function TaskDetailsDialog({
             allTasks={allTasks}
             onAddDependency={handleAddDependency}
             onRemoveDependency={handleRemoveDependency}
+            canEdit={canEditDependencies}
           />
 
+          {/* Comments — the discussion thread. Any workspace member may post;
+              editing and deleting are limited to the comment's author. */}
+          <Separator />
+          <TaskComments taskId={task.id} workspaceId={currentWorkspace?.id} />
+
           {/* Time Tracking */}
-          {user && workspace && (
+          {user && currentWorkspace && (
             <>
               <Separator />
               <TaskTimeTracking
@@ -322,7 +346,7 @@ export function TaskDetailsDialog({
                 userId={user.id}
                 userName={user.name || 'User'}
                 userEmail={user.email}
-                workspaceId={workspace.id}
+                workspaceId={currentWorkspace.id}
               />
             </>
           )}
