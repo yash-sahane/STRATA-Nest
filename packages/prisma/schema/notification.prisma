@@ -38,3 +38,25 @@ model NotificationDelivery {
   @@index([status, channel])
   @@map("notifications_notificationdelivery")
 }
+
+// Per-user delivery preferences for one notification `type` in one workspace.
+// OPT-OUT model: a missing row means "deliver on every channel", so existing
+// users keep today's behaviour with no backfill. `type` is stored
+// upper-cased because the two producers spell the same event differently — the
+// browser templates use SCREAMING_SNAKE (`TASK_ASSIGNED`) while the server's
+// NotifiableEvent map uses snake_case (`leave_approved`) — and both must resolve
+// to the same row.
+model NotificationPreference {
+  id          String   @id
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  workspaceId String   @map("workspace_id")
+  userId      String   @map("user_id")
+  type        String
+  inApp       Boolean  @default(true) @map("in_app")
+  email       Boolean  @default(true)
+
+  @@unique([workspaceId, userId, type], map: "notifications_notifpref_workspace_user_type_key")
+  @@index([userId])
+  @@map("notifications_notificationpreference")
+}

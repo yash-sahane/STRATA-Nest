@@ -94,5 +94,8 @@ model PendingWorkspaceAccess {
   userId        String   @map("user_id")
   requestedRole String   @default("MEMBER") @map("requested_role")
 
+  // One pending request per (workspace, user) — mirrors JoinRequest. Without it
+  // every re-submit appended another row and the table grew without bound.
+  @@unique([workspaceId, userId])
   @@map("workspaces_pendingworkspaceaccess")
 }

@@ -34,8 +34,10 @@ model FunctionalRequirement {
   epicId              String   @default("") @map("epic_id")
   sprintId            String   @default("") @map("sprint_id")
   clientRequirementId String   @default("") @map("client_requirement_id")
+  parentRequirementId String   @default("") @map("parent_requirement_id")
   title               String
   description         String   @default("")
+  type                String   @default("FUNCTIONAL")
   complexity          String   @default("MEDIUM")
   priority            String   @default("")
   status              String   @default("DRAFT")
@@ -48,7 +50,14 @@ model FunctionalRequirement {
   createdById         String   @map("created_by_id")
   createdByName       String   @default("") @map("created_by_name")
 
+  // Hierarchy ids are the human-facing key of an FR (they prefix every task id
+  // and every deep link). They were allocated as COUNT+1, which repeats the
+  // moment an FR is deleted and races between two concurrent creates, so the
+  // same id could name two rows. Allocation is now server-side and retries on
+  // this constraint (requirements.services.ts, generation.service.ts).
+  @@unique([projectId, hierarchyId])
   @@index([projectId, epicId])
   @@index([hierarchyId])
+  @@index([parentRequirementId])
   @@map("requirements_functionalrequirement")
 }

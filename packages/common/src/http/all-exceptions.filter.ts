@@ -56,6 +56,14 @@ function isPrismaKnownRequestError(exception: unknown): exception is { code: str
  * The frontend `rest-client.ts` unwraps `data.error.message`, so the shape must
  * not change under /api/v1.
  */
+/** body-parser's oversized-payload error, which is a plain Error subclass. */
+function isBodyTooLarge(exception: unknown): boolean {
+  const e = exception as { type?: unknown; status?: unknown; statusCode?: unknown };
+  return (
+    e?.type === 'entity.too.large' || e?.status === 413 || e?.statusCode === 413
+  );
+}
+
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
   private readonly logger = new Logger('Exceptions');
@@ -82,6 +90,13 @@ export class AllExceptionsFilter implements ExceptionFilter {
       if (type === exception.constructor.name || type === 'Error') {
         type = ERROR_TYPE_BY_STATUS[status] ?? exception.constructor.name;
       }
+    } else if (isBodyTooLarge(exception)) {
+      // body-parser rejects an oversized payload with a plain Error carrying
+      // `type: 'entity.too.large'` — not an HttpException, so without this it
+      // reached the client as a bare 500 with nothing to act on.
+      status = HttpStatus.PAYLOAD_TOO_LARGE;
+      message = 'That upload is too large. Please choose a smaller file.';
+      type = ERROR_TYPE_BY_STATUS[status] ?? 'PayloadTooLarge';
     } else if (isPrismaKnownRequestError(exception) && PRISMA_ERROR_STATUS[exception.code]) {
       const mapped = PRISMA_ERROR_STATUS[exception.code];
       status = mapped.status;

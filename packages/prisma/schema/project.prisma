@@ -23,6 +23,9 @@ model Project {
   memberIds       Json      @default("[]") @map("member_ids")
   projectSettings Json      @default("{}") @map("project_settings")
 
+  // `short_code` prefixes every task hierarchy id in the project, so two
+  // projects sharing one inside a workspace make those ids ambiguous.
+  @@unique([workspaceId, shortCode])
   @@index([workspaceId, status])
   @@map("projects_project")
 }

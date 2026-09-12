@@ -58,8 +58,9 @@ export const envSchema = z.object({
   // refresh token); true = strict (jti must be tracked in Redis).
   AUTH_STRICT_REFRESH: boolEnv(false),
   // RBAC_ENFORCED: false = membership-only floor; true = enforce
-  // per-permission role checks on writes.
-  RBAC_ENFORCED: boolEnv(false),
+  // per-permission role checks on writes. Secure by default — set to false
+  // only as an explicit, temporary rollback lever (docs/release/ROLLBACK.md).
+  RBAC_ENFORCED: boolEnv(true),
 
   // Email (Resend; queued). EMAIL_TRANSPORT: 'queue' enqueues to BullMQ (the
   // worker sends); 'inline' logs synchronously (fallback when the worker is

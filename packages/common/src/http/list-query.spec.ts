@@ -73,4 +73,46 @@ describe('parseListQuery (allowlisted field filter)', () => {
     const r = parseListQuery({ page: '3', pageSize: '5000' }, spec);
     expect(r).toMatchObject({ page: 3, pageSize: 1000, skip: 2000, take: 1000 });
   });
+
+  describe('unknown-key diagnostics', () => {
+    const originalEnv = process.env.NODE_ENV;
+    let warn: jest.SpyInstance;
+
+    beforeEach(() => {
+      warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+      warn.mockRestore();
+      process.env.NODE_ENV = originalEnv;
+    });
+
+    it('stays silent outside development (prod log noise / test output)', () => {
+      for (const env of ['production', 'test']) {
+        process.env.NODE_ENV = env;
+        parseListQuery({ inviteCode: 'ABC', ordering: 'evil' }, spec);
+      }
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('warns in development for unknown filter and sort keys', () => {
+      process.env.NODE_ENV = 'development';
+      const { where, orderBy } = parseListQuery({ inviteCode: 'ABC', ordering: 'evil' }, spec);
+
+      // The dropping behaviour itself is unchanged — the warn is diagnostic only.
+      expect(where).toEqual({});
+      expect(orderBy).toEqual({ createdAt: 'desc' });
+
+      const messages = warn.mock.calls.map((c) => String(c[0]));
+      expect(messages).toHaveLength(2);
+      expect(messages[0]).toContain('inviteCode');
+      expect(messages[1]).toContain('evil');
+    });
+
+    it('does not warn for reserved pagination/ordering keys', () => {
+      process.env.NODE_ENV = 'development';
+      parseListQuery({ page: '2', pageSize: '10', format: 'json', status: 'ACTIVE' }, spec);
+      expect(warn).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -37,6 +37,22 @@ export interface ParsedListQuery {
 
 const RESERVED = new Set(['page', 'pageSize', 'page_size', 'ordering', 'format']);
 
+/**
+ * Unknown filter/sort keys are dropped silently — that is the security contract
+ * (an arbitrary model field must never reach `where`), but it also means a
+ * client typo or a spec that forgot a field produces an unfiltered list instead
+ * of an error, which is how the invite-code lookup shipped broken. Surface it in
+ * development only: never in production (log noise from hostile query strings)
+ * and never in tests (the allowlist specs assert on dropping).
+ */
+function warnUnknownKey(kind: 'filter' | 'sort', apiKey: string): void {
+  if (process.env.NODE_ENV !== 'development') return;
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[parseListQuery] ignoring unknown ${kind} key "${apiKey}" — it is not in this resource's allowlist, so it did NOT narrow the result set.`,
+  );
+}
+
 function coerce(type: FieldType | undefined, value: string): unknown {
   switch (type) {
     case 'number':
@@ -105,7 +121,11 @@ export function parseListQuery(
     if (RESERVED.has(rawKey)) continue;
     const [apiKey, suffix] = rawKey.split('__', 2);
     const fieldSpec = spec.filterable[apiKey];
-    if (!fieldSpec) continue; // ALLOWLIST — silently ignore unknown fields
+    if (!fieldSpec) {
+      // ALLOWLIST — ignore unknown fields (dev-mode warn, see warnUnknownKey).
+      warnUnknownKey('filter', apiKey);
+      continue;
+    }
 
     const values = asArray(rawVal);
     if (values.length === 0 && suffix !== 'isnull') continue;
@@ -134,7 +154,11 @@ export function parseListQuery(
         const desc = token.startsWith('-');
         const apiKey = desc ? token.slice(1) : token;
         const field = spec.sortable[apiKey];
-        return field ? { [field]: (desc ? 'desc' : 'asc') as 'asc' | 'desc' } : null;
+        if (!field) {
+          warnUnknownKey('sort', apiKey);
+          return null;
+        }
+        return { [field]: (desc ? 'desc' : 'asc') as 'asc' | 'desc' };
       })
       .filter((c): c is Record<string, 'asc' | 'desc'> => c !== null);
     if (clauses.length) orderBy = clauses;

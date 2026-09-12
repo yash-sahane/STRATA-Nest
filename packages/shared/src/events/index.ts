@@ -51,6 +51,10 @@ export interface SprintLifecyclePayload {
   workspaceId: string;
   projectId: string;
   sprintId: string;
+  /** Who performed the transition. Sprint events have no per-user subject the
+   *  way the membership and HR events do, so without this the audit trail
+   *  recorded the milestone with no author. */
+  actorId?: string;
 }
 
 // --- HR domain events --------------------------------------------------------

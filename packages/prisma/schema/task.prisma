@@ -22,6 +22,9 @@ model Task {
   description             String    @default("")
   status                  String    @default("BACKLOG")
   priority                String    @default("MEDIUM")
+  // When the task last entered DONE. `updatedAt` is not a completion time — any
+  // later edit moves it — so completion trends and burndowns must bucket on this.
+  completedAt             DateTime? @map("completed_at")
   assigneeIds             Json      @default("[]") @map("assignee_ids")
   assignedBy              String    @default("") @map("assigned_by")
   assignedByName          String    @default("") @map("assigned_by_name")
@@ -81,7 +84,7 @@ model Label {
   projectId   String?  @map("project_id")
   name        String
   color       String
-  description  String  @default("")
+  description String   @default("")
 
   @@map("tasks_label")
 }
