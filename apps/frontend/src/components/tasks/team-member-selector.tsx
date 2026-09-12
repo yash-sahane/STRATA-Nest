@@ -120,7 +120,12 @@ export function TeamMemberSelector({
             <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
           </Button>
         </PopoverTrigger>
-        <PopoverContent className="w-[450px] p-0" align="start">
+        {/* 450px unconditionally was 60px wider than a 390px phone, and a
+            popover renders in a portal where nothing clips it back. */}
+        <PopoverContent
+          className="w-[calc(100vw-2rem)] p-0 sm:w-[450px]"
+          align="start"
+        >
           <Command>
             <CommandInput placeholder="Search team members..." />
             <CommandEmpty>{isLoading ? 'Loading...' : 'No team members found.'}</CommandEmpty>

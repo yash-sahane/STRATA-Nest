@@ -13,6 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { RowActivator } from '@/components/ui/row-activator';
 import { PageLoader } from '@/components/ui/page-loader';
 import { ErrorState } from '@/components/ui/error-state';
 import { PageHeader } from '@/components/layout/page-header';
@@ -423,9 +424,22 @@ export default function DashboardPage() {
                       onClick={() => router.push(`/tasks?projectId=${task.projectId}`)}
                     >
                       <div className="flex items-center gap-3">
-                        <Checkbox />
+                        {/* A bare <Checkbox /> used to sit here: no `checked`, no
+                            `onCheckedChange`, inside a row whose onClick navigates
+                            away — so it could not be ticked, and ticking it would
+                            have done nothing. Completing a task needs the
+                            TODO -> IN_PROGRESS -> REVIEW -> DONE path the server
+                            enforces, and DONE is not a transition most roles may
+                            make, so a one-click tick here would fail for most
+                            users on most tasks. The row opens the task instead. */}
                         <div>
-                          <p className="font-medium">{task.title}</p>
+                          <RowActivator
+                            label={`Open task: ${task.title}`}
+                            onActivate={() => router.push(`/tasks?projectId=${task.projectId}`)}
+                            className="font-medium"
+                          >
+                            {task.title}
+                          </RowActivator>
                           <div className="mt-1 flex items-center gap-2">
                             <Badge variant="outline">{task.hierarchyId}</Badge>
                             <Badge variant={status.variant}>{status.label}</Badge>

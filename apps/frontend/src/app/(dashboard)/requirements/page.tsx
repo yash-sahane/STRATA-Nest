@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { RowActivator } from '@/components/ui/row-activator';
 import { Input } from '@/components/ui/input';
 import {
   Select,
@@ -431,7 +432,19 @@ function RequirementsPageContent() {
                             className="cursor-pointer hover:bg-accent"
                             onClick={() => setSelectedRequirement(requirement.id)}
                           >
-                            <TableCell className="font-medium">{requirement.title}</TableCell>
+                            <TableCell className="font-medium">
+                              {/* Keyboard path to the row's own action: a
+                                  <TableRow> is not focusable and Enter does
+                                  nothing to it. A sibling of the row's action
+                                  button, not its ancestor. */}
+                              <RowActivator
+                                label={`Open requirement: ${requirement.title}`}
+                                onActivate={() => setSelectedRequirement(requirement.id)}
+                                className="font-medium"
+                              >
+                                {requirement.title}
+                              </RowActivator>
+                            </TableCell>
                             <TableCell>{requirement.clientName}</TableCell>
                             <TableCell>
                               <div className="flex items-center gap-1">

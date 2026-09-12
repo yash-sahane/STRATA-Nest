@@ -19,6 +19,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { RowActivator } from '@/components/ui/row-activator';
 /**
  * A Popover, NOT a DropdownMenu.
  *
@@ -103,6 +104,112 @@ const getNotificationColor = (type: NotificationType) => {
   }
 };
 
+/**
+ * Where a notification leads, or null when its type has no destination.
+ *
+ * At module scope on purpose: it reads nothing but its argument, and the row
+ * needs the answer in order to decide whether to present itself as clickable
+ * at all. While this lived inside the component the row could not ask, so
+ * every row was role="button" with a pointer cursor whether or not there was
+ * anywhere to go.
+ */
+function navigationUrlFor(notification: Notification): string | null {
+  const { type, relatedEntityType, relatedEntityId, projectId } = notification;
+
+  // Task-related notifications
+  if (
+    type.startsWith('TASK_') ||
+    type === 'COMMENT_MENTION' ||
+    type === 'COMMENT_REPLY' ||
+    type === 'COMMENT_ON_TASK'
+  ) {
+    if (projectId && relatedEntityId) {
+      return `/tasks?projectId=${projectId}&taskId=${relatedEntityId}`;
+    }
+    return '/tasks';
+  }
+
+  // Sprint-related notifications
+  if (type.startsWith('SPRINT_')) {
+    if (relatedEntityId) {
+      return `/sprints/${relatedEntityId}/board`;
+    }
+    return '/sprints';
+  }
+
+  // Epic-related notifications
+  if (type.startsWith('EPIC_')) {
+    if (projectId && relatedEntityId) {
+      return `/epics?projectId=${projectId}&epicId=${relatedEntityId}`;
+    }
+    return '/epics';
+  }
+
+  // FR (Functional Requirement) notifications
+  if (type.startsWith('FR_')) {
+    if (projectId && relatedEntityId) {
+      return `/functional-requirements?projectId=${projectId}&frId=${relatedEntityId}`;
+    }
+    return '/functional-requirements';
+  }
+
+  // Requirement notifications
+  if (type.startsWith('REQUIREMENT_')) {
+    if (projectId) {
+      return `/requirements?projectId=${projectId}`;
+    }
+    return '/requirements';
+  }
+
+  // Leave-related notifications
+  if (type.startsWith('LEAVE_')) {
+    return '/leave';
+  }
+
+  // Attendance-related notifications
+  if (type.startsWith('ATTENDANCE_')) {
+    return '/attendance';
+  }
+
+  // Team/Project notifications
+  if (type === 'TEAM_MEMBER_ADDED' || type === 'PROJECT_INVITATION') {
+    if (projectId) {
+      return `/projects/${projectId}`;
+    }
+    return '/projects';
+  }
+
+  // Fallback based on relatedEntityType
+  if (relatedEntityType) {
+    switch (relatedEntityType) {
+      case 'TASK':
+        return projectId && relatedEntityId
+          ? `/tasks?projectId=${projectId}&taskId=${relatedEntityId}`
+          : '/tasks';
+      case 'SPRINT':
+        return relatedEntityId ? `/sprints/${relatedEntityId}/board` : '/sprints';
+      case 'EPIC':
+        return projectId && relatedEntityId
+          ? `/epics?projectId=${projectId}&epicId=${relatedEntityId}`
+          : '/epics';
+      case 'FR':
+        return projectId && relatedEntityId
+          ? `/functional-requirements?projectId=${projectId}&frId=${relatedEntityId}`
+          : '/functional-requirements';
+      case 'LEAVE':
+        return '/leave';
+      case 'ATTENDANCE':
+        return '/attendance';
+      case 'PROJECT':
+        return projectId ? `/projects/${projectId}` : '/projects';
+      default:
+        return null;
+    }
+  }
+
+  return null;
+}
+
 interface NotificationItemProps {
   notification: Notification;
   onDelete: (id: string) => void;
@@ -113,35 +220,54 @@ function NotificationItem({ notification, onDelete, onClick }: NotificationItemP
   const Icon = getNotificationIcon(notification.type);
   const iconColor = getNotificationColor(notification.type);
 
+  // What activating this row would actually DO. A notification whose type has no
+  // destination and which is already read has no effect at all on click, and used
+  // to be role="button" with a pointer cursor and a hover highlight regardless.
+  const destination = navigationUrlFor(notification);
+  const doesSomething = Boolean(destination) || !notification.isRead;
+  const actionLabel = destination
+    ? `Open: ${notification.title}`
+    : `Mark as read: ${notification.title}`;
+
   return (
     <div
       className={cn(
-        'flex gap-3 p-3 rounded-lg transition-colors cursor-pointer hover:bg-accent group relative',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        'flex gap-3 p-3 rounded-lg transition-colors group relative',
+        // Only claim to be clickable when activating it does something.
+        doesSomething && 'cursor-pointer hover:bg-accent',
         !notification.isRead && 'bg-blue-50/50 dark:bg-blue-950/20'
       )}
-      // The row navigates, so it must be reachable and activatable from the
-      // keyboard — a bare <div onClick> is neither. It cannot be a <button>
-      // because it contains the delete button (nested buttons are invalid).
-      role="button"
-      tabIndex={0}
-      onClick={() => onClick(notification)}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          onClick(notification);
-        }
-      }}
+      // NOT role="button". This row contains the delete button below it, and an
+      // interactive ancestor of an interactive element is what axe reports as
+      // nested-interactive — 28 of them in one open popover. The keyboard
+      // contract lives on the row's title instead, as a SIBLING of that button.
+      onClick={doesSomething ? () => onClick(notification) : undefined}
     >
-      <div className={cn('mt-1', iconColor)}>
+      <div className={cn('mt-1', iconColor)} aria-hidden="true">
         <Icon className="h-5 w-5" />
       </div>
 
       <div className="flex-1 space-y-1 min-w-0 pr-6">
         <div className="flex items-start justify-between gap-2">
-          <p className="text-sm font-medium leading-tight">{notification.title}</p>
+          {doesSomething ? (
+            <RowActivator
+              label={actionLabel}
+              onActivate={() => onClick(notification)}
+              className="text-sm font-medium leading-tight min-w-0 flex-1"
+            >
+              {notification.title}
+            </RowActivator>
+          ) : (
+            <p className="text-sm font-medium leading-tight">{notification.title}</p>
+          )}
           {!notification.isRead && (
-            <div className="h-2 w-2 rounded-full bg-blue-500 shrink-0 mt-1" />
+            <div
+              className="h-2 w-2 rounded-full bg-blue-500 shrink-0 mt-1"
+              // The dot is the only thing that distinguishes unread from read, so
+              // it is not decoration and needs a name.
+              role="img"
+              aria-label="Unread"
+            />
           )}
         </div>
         <p className="text-xs text-muted-foreground line-clamp-2">{notification.message}</p>
@@ -265,9 +391,13 @@ export function NotificationCenter() {
 
   const handleDeleteAll = async () => {
     if (!user || !allNotifications || allNotifications.length === 0) return;
+    const unread = allNotifications.filter((n) => !n.isRead).length;
     const confirmed = await confirm({
       title: 'Clear all notifications?',
-      description: `This permanently deletes all ${allNotifications.length} notifications and can't be undone.`,
+      description:
+        `This permanently deletes all ${allNotifications.length} notifications` +
+        (unread > 0 ? `, including ${unread} you haven't read` : '') +
+        ", and can't be undone.",
       confirmText: 'Clear all',
       destructive: true,
     });
@@ -279,102 +409,6 @@ export function NotificationCenter() {
   /**
    * Get navigation URL based on notification type and related entity
    */
-  const getNavigationUrl = (notification: Notification): string | null => {
-    const { type, relatedEntityType, relatedEntityId, projectId } = notification;
-
-    // Task-related notifications
-    if (
-      type.startsWith('TASK_') ||
-      type === 'COMMENT_MENTION' ||
-      type === 'COMMENT_REPLY' ||
-      type === 'COMMENT_ON_TASK'
-    ) {
-      if (projectId && relatedEntityId) {
-        return `/tasks?projectId=${projectId}&taskId=${relatedEntityId}`;
-      }
-      return '/tasks';
-    }
-
-    // Sprint-related notifications
-    if (type.startsWith('SPRINT_')) {
-      if (relatedEntityId) {
-        return `/sprints/${relatedEntityId}/board`;
-      }
-      return '/sprints';
-    }
-
-    // Epic-related notifications
-    if (type.startsWith('EPIC_')) {
-      if (projectId && relatedEntityId) {
-        return `/epics?projectId=${projectId}&epicId=${relatedEntityId}`;
-      }
-      return '/epics';
-    }
-
-    // FR (Functional Requirement) notifications
-    if (type.startsWith('FR_')) {
-      if (projectId && relatedEntityId) {
-        return `/functional-requirements?projectId=${projectId}&frId=${relatedEntityId}`;
-      }
-      return '/functional-requirements';
-    }
-
-    // Requirement notifications
-    if (type.startsWith('REQUIREMENT_')) {
-      if (projectId) {
-        return `/requirements?projectId=${projectId}`;
-      }
-      return '/requirements';
-    }
-
-    // Leave-related notifications
-    if (type.startsWith('LEAVE_')) {
-      return '/leave';
-    }
-
-    // Attendance-related notifications
-    if (type.startsWith('ATTENDANCE_')) {
-      return '/attendance';
-    }
-
-    // Team/Project notifications
-    if (type === 'TEAM_MEMBER_ADDED' || type === 'PROJECT_INVITATION') {
-      if (projectId) {
-        return `/projects/${projectId}`;
-      }
-      return '/projects';
-    }
-
-    // Fallback based on relatedEntityType
-    if (relatedEntityType) {
-      switch (relatedEntityType) {
-        case 'TASK':
-          return projectId && relatedEntityId
-            ? `/tasks?projectId=${projectId}&taskId=${relatedEntityId}`
-            : '/tasks';
-        case 'SPRINT':
-          return relatedEntityId ? `/sprints/${relatedEntityId}/board` : '/sprints';
-        case 'EPIC':
-          return projectId && relatedEntityId
-            ? `/epics?projectId=${projectId}&epicId=${relatedEntityId}`
-            : '/epics';
-        case 'FR':
-          return projectId && relatedEntityId
-            ? `/functional-requirements?projectId=${projectId}&frId=${relatedEntityId}`
-            : '/functional-requirements';
-        case 'LEAVE':
-          return '/leave';
-        case 'ATTENDANCE':
-          return '/attendance';
-        case 'PROJECT':
-          return projectId ? `/projects/${projectId}` : '/projects';
-        default:
-          return null;
-      }
-    }
-
-    return null;
-  };
 
   const handleNotificationClick = (notification: Notification) => {
     // Mark as read
@@ -383,7 +417,7 @@ export function NotificationCenter() {
     }
 
     // Navigate based on notification type
-    const url = getNavigationUrl(notification);
+    const url = navigationUrlFor(notification);
     if (url) {
       router.push(url);
       setOpen(false);
@@ -429,7 +463,13 @@ export function NotificationCenter() {
                 Mark all read
               </Button>
             )}
-            {allNotifications && allNotifications.length > 0 && unreadCount === 0 && (
+            {/* No `unreadCount === 0` here any more. Gating this on everything
+                having been read meant the only route to "Clear all" was to press
+                "Mark all read" first — two steps for one intention, and nothing
+                about deleting a notification requires having read it. The
+                confirmation says how many are unread, so the destructive action
+                still states what it is about to destroy. */}
+            {allNotifications && allNotifications.length > 0 && (
               <Button
                 variant="ghost"
                 size="sm"

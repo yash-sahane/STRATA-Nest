@@ -27,6 +27,7 @@ import { useTasks } from '@/hooks/use-task';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { RowActivator } from '@/components/ui/row-activator';
 import {
   Table,
   TableBody,
@@ -250,9 +251,19 @@ function FunctionalRequirementsPageContent() {
         <TableCell>
           {/* Indent sub-requirements so the parent/child nesting is visible. */}
           <div style={{ paddingLeft: depth * 16 }}>
-            <Badge variant="outline" className="font-mono">
-              {req.hierarchyId}
-            </Badge>
+            {/* The row's own onClick is mouse-only — a <TableRow> is not focusable
+                and does not respond to Enter. This is the keyboard path to the
+                same action, and a sibling of the row's action button rather than
+                its ancestor (role="button" on the row would be
+                nested-interactive). */}
+            <RowActivator
+              label={`Open requirement ${req.hierarchyId}: ${req.title}`}
+              onActivate={() => setSelectedRequirementId(req.id)}
+            >
+              <Badge variant="outline" className="font-mono">
+                {req.hierarchyId}
+              </Badge>
+            </RowActivator>
           </div>
         </TableCell>
         <TableCell>

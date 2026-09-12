@@ -9,6 +9,7 @@ import { useTasks } from '@/hooks/use-task';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { RowActivator } from '@/components/ui/row-activator';
 import { Progress } from '@/components/ui/progress';
 import {
   Select,
@@ -324,7 +325,17 @@ export default function SprintsPage() {
                 <CardHeader>
                   <div className="flex items-start justify-between">
                     <div className="space-y-1">
-                      <CardTitle className="text-lg">{sprint.name}</CardTitle>
+                      {/* The card's onClick is mouse-only. This is the keyboard
+                          path to the same board, and a sibling of the card's own
+                          action buttons rather than their ancestor. */}
+                      <CardTitle className="text-lg">
+                        <RowActivator
+                          label={`Open sprint board: ${sprint.name}`}
+                          onActivate={() => router.push(`/sprints/${sprint.id}/board`)}
+                        >
+                          {sprint.name}
+                        </RowActivator>
+                      </CardTitle>
                       <CardDescription className="flex items-center gap-2">
                         <Calendar className="h-3 w-3" />
                         {formatSprintDate(sprint.startDate)} - {formatSprintDate(sprint.endDate)}

@@ -222,7 +222,10 @@ export function ActivityFeed({ workspaceId, showFilters = true, className }: Act
             <div className="flex items-center gap-2">
               <Filter className="h-4 w-4 text-muted-foreground" />
               <Select value={filterAction} onValueChange={setFilterAction}>
-                <SelectTrigger aria-label="Filter the activity feed" className="w-[220px]">
+                <SelectTrigger
+                  aria-label="Filter the activity feed"
+                  className="w-full min-w-0 sm:w-[220px]"
+                >
                   <SelectValue placeholder="Filter by type" />
                 </SelectTrigger>
                 <SelectContent>
@@ -286,7 +289,11 @@ export function ActivityFeed({ workspaceId, showFilters = true, className }: Act
                     {/* Activity Content */}
                     <div className="flex-1 space-y-1 min-w-0">
                       <div className="flex items-start justify-between gap-2">
-                        <div className="flex items-center gap-2 flex-wrap">
+                        {/* min-w-0 so this can shrink below its content: without
+                            it the nowrap label below refuses to narrow and drags
+                            the row out to 466px on a 390px screen, where nothing
+                            scrolls sideways and the timestamp and badge are lost. */}
+                        <div className="flex min-w-0 flex-wrap items-center gap-2">
                           <Avatar className="h-6 w-6">
                             <AvatarFallback className="text-xs">
                               {getInitials(userName)}
@@ -303,7 +310,13 @@ export function ActivityFeed({ workspaceId, showFilters = true, className }: Act
                           {typeof activity.metadata?.label === 'string' &&
                             activity.metadata.label && (
                               <span
-                                className="text-sm font-medium truncate max-w-[22rem]"
+                                // max-w-[22rem] was a 352px cap, not a floor — but
+                                // `truncate` implies white-space:nowrap, and a flex
+                                // item will not shrink below its content width
+                                // without min-w-0. So the span sat AT the cap and
+                                // overflowed the phone viewport. It now shrinks to
+                                // whatever the row can spare and truncates there.
+                                className="min-w-0 max-w-full truncate text-sm font-medium"
                                 title={activity.metadata.label}
                               >
                                 {activity.metadata.label}

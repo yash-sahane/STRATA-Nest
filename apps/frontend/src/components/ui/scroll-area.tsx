@@ -20,9 +20,19 @@ const ScrollArea = React.forwardRef<
         silently clips the rest. */}
     {/* tabIndex 0: a region that scrolls must be reachable by keyboard, or its
         overflowing content is unreachable without a mouse (WCAG 2.1.1). */}
+    {/* `[&>div]:!block`: Radix puts a `display:table; min-width:100%` wrapper in
+        here. `display:table` shrink-wraps to content and `min-width` is only a
+        floor, so the wrapper grows to the content's max-content width while the
+        Root's `overflow-hidden` clips it — on /activity that left 174px of every
+        entry, the timestamp and the type badge, outside the clip with nothing to
+        scroll. No ScrollArea in this app renders a horizontal scrollbar, so that
+        overflow was never reachable: as a block the wrapper fills the viewport
+        instead, and the `truncate`/`min-w-0` inside these lists take effect.
+        A caller that genuinely wants horizontal scrolling needs a horizontal
+        <ScrollBar /> and should override this. */}
     <ScrollAreaPrimitive.Viewport
       tabIndex={0}
-      className="h-full max-h-[inherit] w-full rounded-[inherit] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      className="h-full max-h-[inherit] w-full rounded-[inherit] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 [&>div]:!block"
     >
       {children}
     </ScrollAreaPrimitive.Viewport>
