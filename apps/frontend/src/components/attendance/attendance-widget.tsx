@@ -68,6 +68,10 @@ export function AttendanceWidget() {
   // that grows all day. On an open day check-in stays available — the server
   // converts the marker in place for anyone who comes in anyway.
   const isOnLeave = todayAttendance?.status === 'ON_LEAVE';
+  // The server classifies a day with too little logged time as ABSENT. Three
+  // parts of this card used to disagree about that: a green "Checked Out" badge,
+  // a celebratory banner, and "Status: Absent" immediately underneath.
+  const isAbsentDay = todayAttendance?.status === 'ABSENT';
 
   // Update current time every minute
   useEffect(() => {
@@ -481,9 +485,23 @@ export function AttendanceWidget() {
           )}
 
           {hasCheckedOut && (
-            <div className="text-center p-4 bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 rounded-lg">
-              <p className="text-sm font-medium text-green-800 dark:text-green-200">
-                You&apos;ve completed your work for today! 🎉
+            <div
+              className={
+                isAbsentDay
+                  ? 'text-center p-4 bg-muted border rounded-lg'
+                  : 'text-center p-4 bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 rounded-lg'
+              }
+            >
+              <p
+                className={
+                  isAbsentDay
+                    ? 'text-sm font-medium text-foreground'
+                    : 'text-sm font-medium text-green-800 dark:text-green-200'
+                }
+              >
+                {isAbsentDay
+                  ? 'Checked out, but too little time was logged for the day to count as attended.'
+                  : "You've completed your work for today! 🎉"}
               </p>
             </div>
           )}

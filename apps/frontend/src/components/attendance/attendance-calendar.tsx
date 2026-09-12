@@ -1,10 +1,12 @@
 'use client';
 
+import * as React from 'react';
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useMonthlyAttendance } from '@/hooks/use-attendance';
 import { useHolidays } from '@/hooks/use-holidays';
+import { useTeamMembers } from '@/hooks/use-team';
 import {
   getCalendarMonth,
   isWeekend,
@@ -44,6 +46,12 @@ export function AttendanceCalendar() {
   const [currentMonth, setCurrentMonth] = useState(new Date().getMonth());
   const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
   const [leaveDates, setLeaveDates] = useState<Set<string>>(new Set());
+  // The day this user's membership began. Absence before it is not absence.
+  const { data: roster = [] } = useTeamMembers(currentWorkspace?.id);
+  const membershipStart = React.useMemo(() => {
+    const mine = roster.find((m) => m.userId === user?.id);
+    return mine?.joinedAt ? String(mine.joinedAt).slice(0, 10) : '';
+  }, [roster, user?.id]);
 
   const { data: attendanceData, isLoading, isError, refetch } = useMonthlyAttendance(
     user?.id || '',
@@ -134,6 +142,15 @@ export function AttendanceCalendar() {
     // Check if user is on approved leave
     if (leaveDates.has(dateString)) {
       return 'ON_LEAVE';
+    }
+
+    // A day before this membership began is not a day the user missed — there
+    // was nothing to attend. Returning no status paints the neutral past-day
+    // cell the code below already has, and keeps the day out of every counter in
+    // monthSummary, which is what made the Calendar and Analytics tabs disagree
+    // about the same month.
+    if (membershipStart && dateString < membershipStart) {
+      return '';
     }
 
     // If date is in the past and no attendance record and not on leave, mark as absent

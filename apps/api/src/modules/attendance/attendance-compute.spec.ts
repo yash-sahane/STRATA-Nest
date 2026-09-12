@@ -66,10 +66,40 @@ describe('attendance-compute (ported from frontend attendance-utils)', () => {
     expect(determineAttendanceStatus(at(15, 0), null, null, false)).toBe('PRESENT');
     expect(determineAttendanceStatus(at(15, 0), at(23, 0), 8, false)).toBe('PRESENT');
     expect(determineAttendanceStatus(at(15, 0), at(17, 0), 2, false)).toBe('HALF_DAY');
-    // The credit floor is not a punctuality rule, so it still applies.
-    expect(determineAttendanceStatus(at(15, 0), at(15, 10), 0.17, false)).toBe('ABSENT');
+    // The credit floor still denies credit, but it no longer records a miss:
+    // see the closed-day absence test below.
+    expect(determineAttendanceStatus(at(15, 0), at(15, 10), 0.17, false)).toBe('HOLIDAY');
     // Default is unchanged: an ordinary working day is still graded on arrival.
     expect(determineAttendanceStatus(at(15, 0), null, null)).toBe('LATE');
+  });
+
+  it('a day the office was SHUT can never produce an ABSENCE', () => {
+    // Measured against the live API: a manager filed two minutes of Saturday
+    // work for a developer and got back
+    //   { workHours: 0.033, status: 'ABSENT', isWeekend: true }
+    // so the Team tab's absentCount included the day and the calendar painted
+    // that Saturday red — against the person who had volunteered to work it.
+    // Nobody was expected in, so nobody failed to turn up.
+    for (const hours of [0, 0.01, 0.17, 0.5, 0.99]) {
+      // jest's expect takes no message argument; the loop value is in the
+      // failure diff via the inputs.
+      expect(determineAttendanceStatus(at(15, 0), at(15, 30), hours, false)).toBe('HOLIDAY');
+    }
+    // A shut day with no stamps at all is not an absence either.
+    expect(determineAttendanceStatus(null, null, null, false)).toBe('HOLIDAY');
+
+    // The same inputs on a WORKING day are still absences — the floor keeps its
+    // original job of refusing credit for a check-in-and-straight-out day.
+    for (const hours of [0, 0.01, 0.17, 0.5, 0.99]) {
+      // jest's expect takes no message argument; the loop value is in the
+      // failure diff via the inputs.
+      expect(determineAttendanceStatus(at(8, 30), at(9, 0), hours, true)).toBe('ABSENT');
+    }
+    expect(determineAttendanceStatus(null, null, null, true)).toBe('ABSENT');
+
+    // Exactly at the floor is credited, on either kind of day.
+    expect(determineAttendanceStatus(at(15, 0), at(16, 0), 1, false)).toBe('HALF_DAY');
+    expect(determineAttendanceStatus(at(8, 30), at(9, 30), 1, true)).toBe('HALF_DAY');
   });
 });
 

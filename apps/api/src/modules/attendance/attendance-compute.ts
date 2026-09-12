@@ -47,7 +47,7 @@ export function calculateLateMinutes(checkIn: Date): number {
   return diff > 0 ? diff : 0;
 }
 
-/** determineAttendanceStatus → one of PRESENT | LATE | HALF_DAY | ABSENT.
+/** determineAttendanceStatus → PRESENT | LATE | HALF_DAY | ABSENT | HOLIDAY.
  *
  *  A day is only classified once it is CLOSED (both stamps present). An
  *  open day reports on the check-in alone; a closed day under
@@ -66,10 +66,17 @@ export function determineAttendanceStatus(
    */
   expectsPunctuality = true,
 ): string {
-  if (!checkIn) return 'ABSENT';
+  // Nobody was expected in, so nobody failed to turn up. A shut day with no
+  // stamps at all is not an absence either — the calendar and the Team tab
+  // already read the closed-day flags and render it as such.
+  if (!checkIn) return expectsPunctuality ? 'ABSENT' : 'HOLIDAY';
   const closed = Boolean(checkOut) && workHours != null;
-  // Checked in and straight back out: no credit on either branch below.
-  if (closed && (workHours as number) < WORK_SCHEDULE.MIN_CREDIT_HOURS) return 'ABSENT';
+  // Checked in and straight back out: no credit on either branch below. On a
+  // shut day that is still not an absence — see the note above — so the floor
+  // records the day as closed rather than as a day the member missed.
+  if (closed && (workHours as number) < WORK_SCHEDULE.MIN_CREDIT_HOURS) {
+    return expectsPunctuality ? 'ABSENT' : 'HOLIDAY';
+  }
   if (expectsPunctuality && isLateCheckIn(checkIn)) {
     if (!closed) return 'LATE';
     return (workHours as number) < WORK_SCHEDULE.HALF_DAY_HOURS ? 'HALF_DAY' : 'LATE';

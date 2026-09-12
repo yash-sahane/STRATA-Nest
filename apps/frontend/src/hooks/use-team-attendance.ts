@@ -2,7 +2,12 @@ import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { resources } from '@/lib/api/client';
 import { query } from '@/lib/api/client';
-import { getCurrentDate, getMonthDateRange, isWorkingDay } from '@/lib/attendance-utils';
+import {
+    attendanceWindowStart,
+    getCurrentDate,
+    getMonthDateRange,
+    isWorkingDay,
+} from '@/lib/attendance-utils';
 import { useHolidays } from '@/hooks/use-holidays';
 import type { HolidayDates } from '@/lib/utils/working-days';
 
@@ -26,13 +31,22 @@ export interface TeamMemberAttendance {
         status: string;
         lateMinutes?: number;
     };
-    status: 'PRESENT' | 'ABSENT' | 'LATE' | 'ON_LEAVE' | 'WEEKEND' | 'HALF_DAY';
+    /**
+      * UNKNOWN: the day is in the future, or predates this membership, so there
+      * is nothing to report either way — as distinct from ABSENT, which is a
+      * judgement about a day the person could have attended.
+      */
+    status: 'PRESENT' | 'ABSENT' | 'LATE' | 'ON_LEAVE' | 'WEEKEND' | 'HALF_DAY' | 'UNKNOWN';
 }
 
 export interface TeamAttendanceAnalytics {
     totalMembers: number;
     presentCount: number;
     absentCount: number;
+    /** Members for whom this date carries no judgement — see status UNKNOWN. */
+    unknownCount: number;
+    /** Members who could have attended on this date — the rate's denominator. */
+    expectedCount: number;
     lateCount: number;
     onLeaveCount: number;
     attendanceRate: number;
@@ -84,6 +98,11 @@ export function useTeamAttendance(workspaceId?: string, date?: string) {
             });
 
             const dateIsWorking = isWorkingDay(targetDate, holidays);
+            // A date that has not happened cannot have absences. The picker
+            // accepts any date, so without this the whole team read ABSENT nine
+            // months out, with the card reporting "0% attendance rate" — a
+            // number a manager could act on.
+            const dateIsFuture = targetDate > getCurrentDate();
 
             // Combine member data with attendance
             const teamAttendance: TeamMemberAttendance[] = membersResponse.items.map((member: any) => {
@@ -92,7 +111,16 @@ export function useTeamAttendance(workspaceId?: string, date?: string) {
                 // A persisted row always wins over the "no check-in ⇒ absent"
                 // fallback — approving leave materialises an ON_LEAVE row, which
                 // is how this hook can surface leave at all.
-                let status: TeamMemberAttendance['status'] = dateIsWorking ? 'ABSENT' : 'WEEKEND';
+                // A day before this member joined is not a day they missed,
+                // and a day in the future has not happened. Neither is an
+                // absence.
+                const beforeJoining =
+                    attendanceWindowStart(targetDate, member.joinedAt) !== targetDate;
+                let status: TeamMemberAttendance['status'] = !dateIsWorking
+                    ? 'WEEKEND'
+                    : dateIsFuture || beforeJoining
+                      ? 'UNKNOWN'
+                      : 'ABSENT';
                 if (attendance) {
                     status = attendance.status as TeamMemberAttendance['status'];
                 }
@@ -136,6 +164,10 @@ function summarizeTeamAttendance(
     holidays?: HolidayDates
 ): TeamAttendanceAnalytics {
     const totalMembers = team.length;
+    // Nobody is expected on a day that has not happened, or before they joined,
+    // so an UNKNOWN member is out of the denominator the same way somebody on
+    // approved leave is.
+    const unknownCount = team.filter((m) => m.status === 'UNKNOWN').length;
     const attended = team.filter(
         (m) => m.status === 'PRESENT' || m.status === 'LATE' || m.status === 'HALF_DAY'
     ).length;
@@ -149,15 +181,21 @@ function summarizeTeamAttendance(
 
     // Members on approved leave are not expected in, so they are out of the
     // denominator rather than counted as a miss.
-    const expected = Math.max(0, totalMembers - onLeaveCount);
+    const expected = Math.max(0, totalMembers - onLeaveCount - unknownCount);
     const dateIsWorking = isWorkingDay(date, holidays);
 
     return {
         totalMembers,
+        unknownCount,
         presentCount: attended,
         absentCount,
         lateCount,
         onLeaveCount,
+        // expected === 0 on a working day means nobody COULD have attended —
+        // a future date, or a team who had all either joined later or are on
+        // approved leave. A rate of 0% there reads as a team that failed to
+        // show up, so callers are told the figure is unknown instead.
+        expectedCount: expected,
         attendanceRate: dateIsWorking && expected > 0 ? Math.round((attended / expected) * 100) : 0,
         averageWorkHours: Math.round(averageWorkHours * 10) / 10,
         totalWorkHours: Math.round(totalWorkHours * 10) / 10,

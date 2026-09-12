@@ -26,6 +26,13 @@ export interface TeamMember {
   rawRole: string;
   workspaceId: string;
   status: 'ACTIVE' | 'INACTIVE' | 'INVITED';
+  /**
+   * When this membership began. Attendance cannot be missing before it: a day
+   * before somebody joined is not a day they failed to attend, and painting it
+   * red told a user who joined on the 5th that they had missed the whole of the
+   * previous month.
+   */
+  joinedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -88,6 +95,7 @@ export function useTeamMembers(workspaceId?: string) {
         rawRole: doc.role || 'MEMBER',
         workspaceId: doc.workspaceId,
         status: normalizeStatus(doc.status || 'ACTIVE'),
+        joinedAt: doc.joinedAt,
         createdAt: doc.createdAt,
         updatedAt: doc.updatedAt,
       })) as TeamMember[];

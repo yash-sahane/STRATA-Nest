@@ -9,11 +9,13 @@ import {
   getMonthDateRange,
   getUserLeaveDates,
   isWorkingDay,
+  attendanceWindowStart,
   calculateAttendanceSummary,
   type AttendanceStatus,
 } from '@/lib/attendance-utils';
 import { countWorkingDaysBetween } from '@/lib/utils/working-days';
 import { useHolidays } from '@/hooks/use-holidays';
+import { useTeamMembers } from './use-team';
 
 export interface Attendance {
   id: string;
@@ -263,19 +265,36 @@ export function useAttendanceAnalytics(userId?: string, workspaceId?: string, ye
   const currentDate = new Date();
   const targetYear = year ?? currentDate.getFullYear();
   const targetMonth = month ?? currentDate.getMonth();
+  // A day before this person joined is not a day they failed to attend. Without
+  // it the denominator ran from the 1st for somebody who joined on the 5th, and
+  // the Calendar tab — which does apply the boundary — reported 0 absences while
+  // this reported 9 for the same user and the same month.
+  const { data: roster = [] } = useTeamMembers(workspaceId);
+  const joinedAt = roster.find((m) => m.userId === userId)?.joinedAt;
   // A public holiday is not a day anyone could have attended, so it must not sit
   // in the denominator. Without this a month with two holidays capped a perfect
   // record at ~90%.
   const { data: holidays = [], isLoading: holidaysLoading } = useHolidays(workspaceId);
   return useQuery({
-    queryKey: ['attendance', 'analytics', userId, workspaceId, targetYear, targetMonth, holidays],
+    queryKey: [
+      'attendance',
+      'analytics',
+      userId,
+      workspaceId,
+      targetYear,
+      targetMonth,
+      holidays,
+      joinedAt,
+    ],
     queryFn: async () => {
       if (!userId) return null;
-      const { start, end } = getMonthDateRange(targetYear, targetMonth);
+      const { start: monthStart, end } = getMonthDateRange(targetYear, targetMonth);
+      // Everything below measures from here, not from the first of the month.
+      const start = attendanceWindowStart(monthStart, joinedAt);
 
       const queries = [
         query.equal('userId', userId),
-        query.greaterThanEqual('date', start),
+        query.greaterThanEqual('date', monthStart),
         query.lessThanEqual('date', end),
         // Not conditional, unlike the other attendance queries: the rate is a
         // ratio of two workspace-scoped quantities. Unscoped, the rows span

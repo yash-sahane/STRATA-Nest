@@ -228,6 +228,8 @@ export function getAttendanceStatusColor(status: AttendanceStatus | string): str
     'On Leave': blue,
     WEEKEND: gray,
     Weekend: gray,
+    // Nothing to report: a future date, or one before the membership began.
+    UNKNOWN: gray,
     HOLIDAY: purple,
     Holiday: purple,
   };
@@ -513,3 +515,24 @@ export async function getUserLeaveDates(
 }
 
 
+
+/**
+ * The first day on which a person's absence could be meaningful.
+ *
+ * A day before somebody joined the workspace is not a day they failed to
+ * attend — there was nothing to attend. Without this boundary every screen that
+ * infers "working day + no record ⇒ absent" painted a new member's entire
+ * history red: a user who joined on 5 September read the whole of August as 23
+ * missed days, and the analytics denominator counted those days too, so their
+ * attendance rate opened at a fraction of what they had actually achieved.
+ *
+ * Returns the LATER of the period start and the membership start, both as
+ * `YYYY-MM-DD` day markers, so callers can use it directly as a lower bound.
+ */
+export function attendanceWindowStart(periodStart: string, joinedAt?: string): string {
+  if (!joinedAt) return periodStart;
+  const joinedDay = String(joinedAt).slice(0, 10);
+  // A malformed value must not silently widen the window back to the epoch.
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(joinedDay)) return periodStart;
+  return joinedDay > periodStart ? joinedDay : periodStart;
+}

@@ -66,6 +66,16 @@ export function TeamAttendanceTab() {
     });
   }, [teamAttendance, searchQuery, statusFilter, roleFilter]);
 
+  // UNKNOWN is a real state — a date in the future, or one before this person
+  // joined — but "UNKNOWN" is not a word to put on a badge. Say what it means.
+  const statusLabel = (status: string) =>
+    status === 'UNKNOWN' ? 'No record' : status.replace('_', ' ');
+
+  const statusHint = (status: string) =>
+    status === 'UNKNOWN'
+      ? 'Nothing to report for this date — it is in the future, or before this member joined the workspace.'
+      : undefined;
+
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'PRESENT':
@@ -150,9 +160,11 @@ export function TeamAttendanceTab() {
             <CardContent>
               <div className="text-2xl font-bold text-green-600 dark:text-green-400">{analytics.presentCount}</div>
               <p className="text-xs text-muted-foreground">
-                {analytics.isWorkingDay
-                  ? `${analytics.attendanceRate}% attendance rate`
-                  : 'Non-working day'}
+                {!analytics.isWorkingDay
+                  ? 'Non-working day'
+                  : analytics.expectedCount === 0
+                    ? 'Nobody expected in on this date'
+                    : `${analytics.attendanceRate}% attendance rate`}
               </p>
             </CardContent>
           </Card>
@@ -295,9 +307,10 @@ export function TeamAttendanceTab() {
                     <Badge
                       variant="outline"
                       className={`gap-1 ${getAttendanceStatusColor(member.status)}`}
+                      title={statusHint(member.status)}
                     >
                       {getStatusIcon(member.status)}
-                      {member.status.replace('_', ' ')}
+                      {statusLabel(member.status)}
                     </Badge>
                   </div>
                 </div>

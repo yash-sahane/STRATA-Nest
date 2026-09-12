@@ -62,6 +62,9 @@ export function AttendanceStats({ year, month }: AttendanceStatsProps) {
   }
 
   const attendanceRate = analytics?.attendanceRate ?? 0;
+  // With no completed working days in the window — somebody who joined this
+  // month, or the 1st falling on a weekend — the rate is not 0%, it is not yet
+  // knowable. A red "0%" over "0 of 0 days" was a judgement on nothing.
   const totalWorkHours = analytics?.totalWorkHours ?? 0;
   const averageWorkHours = analytics?.averageWorkHours ?? 0;
   const lateDays = analytics?.lateDays ?? 0;
@@ -131,18 +134,24 @@ export function AttendanceStats({ year, month }: AttendanceStatsProps) {
           </CardHeader>
           <CardContent>
             <div className="space-y-2">
-              <div className={`text-3xl font-bold ${getRateColor(attendanceRate)}`}>
-                {attendanceRate}%
+              <div
+                className={`text-3xl font-bold ${
+                  expectedDays === 0 ? 'text-muted-foreground' : getRateColor(attendanceRate)
+                }`}
+              >
+                {expectedDays === 0 ? '—' : `${attendanceRate}%`}
               </div>
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <span>
-                  {attendedDays} of {days(expectedDays)} so far this month
+                  {expectedDays === 0
+                    ? 'No completed working days in this period yet'
+                    : `${attendedDays} of ${days(expectedDays)} so far this month`}
                 </span>
               </div>
               <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
                 <div
                   className="bg-gradient-to-r from-green-500 to-green-600 h-2 rounded-full transition-all"
-                  style={{ width: `${Math.min(attendanceRate, 100)}%` }}
+                  style={{ width: `${expectedDays === 0 ? 0 : Math.min(attendanceRate, 100)}%` }}
                 />
               </div>
             </div>
