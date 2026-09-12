@@ -54,6 +54,9 @@ function build(current: Partial<Task> = {}) {
     // namesFor() resolves assignee display names from here — a name is not
     // derivable from an id, so the service has to look it up.
     user: { findMany: jest.fn().mockResolvedValue([]) },
+    // Assignees must be ACTIVE members of the workspace, so create() checks the
+    // roster. 'u2' is the assignee these tests use.
+    workspaceMember: { findMany: jest.fn().mockResolvedValue([{ userId: 'u2' }, { userId: 'u3' }]) },
     project,
     sprint: sibling(),
     epic: sibling(),
@@ -66,7 +69,7 @@ function build(current: Partial<Task> = {}) {
     isPlatformAdmin: jest.fn().mockReturnValue(false),
     can: jest.fn().mockResolvedValue(true),
   } as unknown as WorkspaceAccessService;
-  return { svc: new TasksService(prisma, access), update, create, access, project };
+  return { svc: new TasksService(prisma, access), update, create, access, project, prisma };
 }
 
 describe('TasksService self-reference guard', () => {
@@ -172,18 +175,36 @@ describe('TasksService completedAt stamping', () => {
     expect(update).toHaveBeenCalled();
   });
 
-  it('stamps completedAt when a task is created straight into DONE', async () => {
+  it('refuses to create a task straight into DONE', async () => {
+    // PATCH has enforced the REVIEW gate all along (patchStatus), but create
+    // accepted status:'DONE' outright and stamped completedAt — the same rule,
+    // skipped by the other door. A brand-new task cannot have been reviewed.
     const { svc, create } = build();
-    await svc.create(user, {
-      workspaceId: 'w1',
-      projectId: 'p1',
-      hierarchyId: 'ABC-T02',
-      title: 'T',
-      status: 'DONE',
-    });
-    expect((create.mock.calls[0][0].data as Record<string, unknown>).completedAt).toBeInstanceOf(
-      Date,
-    );
+    await expect(
+      svc.create(user, {
+        workspaceId: 'w1',
+        projectId: 'p1',
+        hierarchyId: 'ABC-T02',
+        title: 'T',
+        status: 'DONE',
+      }),
+    ).rejects.toThrow(/pass through Review/i);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('refuses an assignee who is not an active member of the workspace', async () => {
+    const { svc, create, prisma } = build();
+    (prisma.workspaceMember.findMany as jest.Mock).mockResolvedValueOnce([]);
+    await expect(
+      svc.create(user, {
+        workspaceId: 'w1',
+        projectId: 'p1',
+        hierarchyId: 'ABC-T09',
+        title: 'T',
+        assigneeIds: ['not-a-member'],
+      }),
+    ).rejects.toThrow(/active member/i);
+    expect(create).not.toHaveBeenCalled();
   });
 });
 

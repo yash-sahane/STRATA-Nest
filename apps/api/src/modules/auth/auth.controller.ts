@@ -1,10 +1,22 @@
-import { Body, Controller, Get, HttpCode, Patch, Post, Req, Res } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Patch,
+  Post,
+  Query,
+  Req,
+  Res,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import type { User } from '@prisma/client';
 import { THROTTLE } from '../../throttling/throttle.constants';
+import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { AuthService } from './auth.service';
 import { AllowTempPassword } from './decorators/allow-temp-password.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
@@ -24,6 +36,7 @@ export class AuthController {
   constructor(
     private readonly auth: AuthService,
     private readonly config: ConfigService,
+    private readonly access: WorkspaceAccessService,
   ) {}
 
   private refreshCookie(req: Request): string | undefined {
@@ -79,6 +92,27 @@ export class AuthController {
   @Get('me')
   me(@CurrentUser() user: User) {
     return this.auth.me(user);
+  }
+
+  /**
+   * The caller's effective permissions in one workspace.
+   *
+   * `{ workspaceId, permissions: string[] }`, where `['*']` means a platform
+   * admin and `[]` means no active membership. Resolves custom workspace roles
+   * the same way every server-side check does, which is the point: the browser
+   * was resolving them from a hardcoded map of the seven built-in role names, so
+   * a custom role showed no buttons even where the API allowed the action.
+   *
+   * Deliberately NOT behind @AllowTempPassword: an account that still holds its
+   * temporary password has no business enumerating what it could do.
+   */
+  @Get('me/permissions')
+  async myPermissions(@CurrentUser() user: User, @Query('workspaceId') workspaceId?: string) {
+    if (!workspaceId) {
+      throw new BadRequestException('workspaceId is required.');
+    }
+    const permissions = await this.access.permissions(user, workspaceId);
+    return { workspaceId, permissions: [...permissions] };
   }
 
   @AllowTempPassword()

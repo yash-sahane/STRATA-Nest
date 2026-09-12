@@ -11,9 +11,10 @@ import { PasswordService } from './services/password.service';
 import { PasswordResetStore } from './services/password-reset.store';
 import { RefreshTokenStore } from './services/refresh-token.store';
 import { TokenService } from './services/token.service';
+import { AuthzModule } from '../authz/authz.module';
 
 @Module({
-  imports: [PassportModule, JwtModule.register({}), UsersModule],
+  imports: [PassportModule, JwtModule.register({}), UsersModule, AuthzModule],
   controllers: [AuthController],
   providers: [
     AuthService,

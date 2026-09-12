@@ -15,6 +15,20 @@ import { StorageService } from '../storage/storage.service';
 import type { CreateFileDto } from './dto';
 import { uploadedFileResponse } from './mappers';
 
+/** Longest filename kept, including the extension. */
+const MAX_FILENAME = 200;
+
+/** Shorten an over-long filename, preserving its extension. */
+function truncateFilename(original: string): string {
+  const name = original || 'file';
+  if (name.length <= MAX_FILENAME) return name;
+  const dot = name.lastIndexOf('.');
+  // Only treat a short trailing segment as an extension; a dot 150 characters
+  // from the end is part of the name, not a type marker.
+  const ext = dot > 0 && name.length - dot <= 12 ? name.slice(dot) : '';
+  return name.slice(0, MAX_FILENAME - ext.length) + ext;
+}
+
 /** The subset of a Multer file this service needs (avoids an @types/multer dep). */
 export interface UploadPart {
   originalname: string;
@@ -114,7 +128,12 @@ export class FilesService {
     // the stored size no longer matched the served bytes.
     const id = generateId();
     const projectId = dto.projectId ?? dto.project_id ?? '';
-    const name = part.originalname;
+    // A 300-character filename came back as a bare 500: the name is stored in a
+    // bounded column and also becomes part of the storage key, and the operating
+    // system has its own path limit. Truncate rather than refuse — the file is
+    // fine, only its label is unreasonable — keeping the extension so the
+    // download still opens in the right application.
+    const name = truncateFilename(part.originalname);
     const key = StorageService.key(workspaceId, id, name);
     const mimeType = part.mimetype ?? '';
 

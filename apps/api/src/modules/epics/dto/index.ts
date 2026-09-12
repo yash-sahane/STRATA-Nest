@@ -6,13 +6,13 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
-import { TrimmedText } from '@strata/common';
+import { StrictString, TrimmedText } from '@strata/common';
 
 export class CreateEpicDto {
   @IsString() workspaceId!: string;
   @IsString() projectId!: string;
   @IsString() @MaxLength(100) hierarchyId!: string;
-  @TrimmedText() @IsString() @IsNotEmpty() @MaxLength(500) name!: string;
+  @StrictString() @TrimmedText() @IsString() @IsNotEmpty() @MaxLength(500) name!: string;
   @IsOptional() @IsString() requirementId?: string;
   @IsOptional() @IsString() description?: string;
   @IsOptional() @IsString() color?: string;

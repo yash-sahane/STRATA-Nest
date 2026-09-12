@@ -8,15 +8,15 @@ import {
   IsString,
   MaxLength,
 } from 'class-validator';
-import { TrimmedText } from '@strata/common';
+import { StrictString, TrimmedText } from '@strata/common';
 import { IsStrictBoolean } from '@strata/common';
 
 export class CreateProjectDto {
   @IsString() workspaceId!: string;
   // @IsNotEmpty on both DTOs: an empty name renders as a blank card title and
   // there is no UI that can repair it except this same field.
-  @TrimmedText() @IsString() @IsNotEmpty() @MaxLength(255) name!: string;
-  @IsString() @MaxLength(10) shortCode!: string;
+  @StrictString() @TrimmedText() @IsString() @IsNotEmpty() @MaxLength(255) name!: string;
+  @TrimmedText() @IsString() @IsNotEmpty() @MaxLength(10) shortCode!: string;
   @IsOptional() @IsString() description?: string;
   @IsOptional() @IsString() clientName?: string;
   @IsOptional() @IsString() logo?: string;
@@ -35,7 +35,7 @@ export class CreateProjectDto {
 
 export class UpdateProjectDto {
   @TrimmedText() @IsOptional() @IsString() @IsNotEmpty() @MaxLength(255) name?: string;
-  @IsOptional() @IsString() @MaxLength(10) shortCode?: string;
+  @TrimmedText() @IsOptional() @IsString() @IsNotEmpty() @MaxLength(10) shortCode?: string;
   @IsOptional() @IsString() description?: string;
   @IsOptional() @IsString() clientName?: string;
   @IsOptional() @IsString() logo?: string;

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { hasApiSession } from '@/lib/api/server-proxy';
+import { hasApiSession, proxyToApi } from '@/lib/api/server-proxy';
 import { logger } from '@/lib/logger';
 
 /**
@@ -159,6 +159,29 @@ async function callGemini(prompt: string): Promise<string> {
   }
 }
 
+/**
+ * May this caller author in that workspace?
+ *
+ * Signed-in was not a high enough bar: this route spends the operator's key, and
+ * generation AUTHORS requirements, so the permission it needs is the one the
+ * manual equivalent needs. Resolved by the API — which understands custom
+ * workspace roles — rather than guessed at here.
+ */
+async function mayGenerateIn(request: NextRequest, workspaceId: string): Promise<boolean> {
+  try {
+    const { status, data } = await proxyToApi(
+      request,
+      `/api/v1/auth/me/permissions/?workspaceId=${encodeURIComponent(workspaceId)}`,
+    );
+    if (status !== 200) return false;
+    const granted: unknown = (data as { permissions?: unknown })?.permissions;
+    if (!Array.isArray(granted)) return false;
+    return granted.includes('*') || granted.includes('requirement:write');
+  } catch {
+    return false;
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     // This route calls the model with the OPERATOR's key and never reaches the
@@ -167,7 +190,21 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
     }
 
-    const { prompt, maxRetries = 2 } = await request.json();
+    const { prompt, maxRetries = 2, workspaceId } = await request.json();
+
+    // Authorisation, not just authentication — see mayGenerateIn.
+    if (typeof workspaceId !== 'string' || !workspaceId.trim()) {
+      return NextResponse.json(
+        { error: 'workspaceId is required so your permissions can be checked.' },
+        { status: 400 },
+      );
+    }
+    if (!(await mayGenerateIn(request, workspaceId))) {
+      return NextResponse.json(
+        { error: 'You do not have permission to generate requirements in this workspace.' },
+        { status: 403 },
+      );
+    }
 
     if (typeof prompt !== 'string' || !prompt.trim()) {
       return NextResponse.json({ error: 'Prompt is required' }, { status: 400 });

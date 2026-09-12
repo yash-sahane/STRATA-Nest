@@ -20,6 +20,9 @@ model Epic {
   createdById   String    @map("created_by_id")
   createdByName String    @default("") @map("created_by_name")
 
+  // Same reasoning as Task.hierarchyId — see
+  // 20260912000000_task_epic_hierarchy_id_unique.
+  @@unique([projectId, hierarchyId])
   @@map("epics_epic")
 }
 

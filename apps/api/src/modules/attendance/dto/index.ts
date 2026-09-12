@@ -3,6 +3,7 @@ import {
   IsDateString,
   IsIn,
   IsInt,
+  IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
@@ -10,7 +11,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
-import { IsStrictBoolean } from '@strata/common';
+import { IsStrictBoolean, StrictString, TrimmedText } from '@strata/common';
 
 /** Closed set of persisted attendance statuses (mirrors determineAttendanceStatus). */
 export const ATTENDANCE_STATUSES = [
@@ -61,13 +62,13 @@ export class CheckOutDto {
 
 export class CreateHolidayDto {
   @IsString() workspaceId!: string;
-  @IsString() @MaxLength(255) name!: string;
+  @StrictString() @TrimmedText() @IsString() @IsNotEmpty() @MaxLength(255) name!: string;
   @IsDateString() date!: string;
   @IsOptional() @IsStrictBoolean() @IsBoolean() isOptional?: boolean;
   @IsOptional() @IsString() description?: string;
 }
 export class UpdateHolidayDto {
-  @IsOptional() @IsString() @MaxLength(255) name?: string;
+  @StrictString() @TrimmedText() @IsOptional() @IsString() @IsNotEmpty() @MaxLength(255) name?: string;
   @IsOptional() @IsDateString() date?: string;
   @IsOptional() @IsStrictBoolean() @IsBoolean() isOptional?: boolean;
   @IsOptional() @IsString() description?: string;

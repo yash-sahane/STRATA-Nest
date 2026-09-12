@@ -46,6 +46,10 @@ model Task {
   @@index([projectId, status])
   @@index([sprintId])
   @@index([hierarchyId])
+  // The human-facing key of a task: allocated client-side as COUNT+1, so a delete
+  // frees a number the next create hands out again and two concurrent creates
+  // read the same count. See 20260912000000_task_epic_hierarchy_id_unique.
+  @@unique([projectId, hierarchyId])
   @@map("tasks_task")
 }
 

@@ -36,7 +36,13 @@ export class FilesController {
   @Post()
   // An explicit ceiling: without one an upload is bounded only by available
   // memory, and multer's own rejection is a clean 413 through the filter.
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 25 * 1024 * 1024 } }))
+  //
+  // 20 MB is the number the browser already checks against
+  // (MAX_UPLOAD_BYTES in apps/frontend/src/hooks/use-file.ts) so it can warn
+  // before pushing the body over the wire. Two different limits would mean a
+  // file the client accepted and the server refused, with the user told two
+  // different rules — so this is deliberately the SAME number.
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
   create(@CurrentUser() u: User, @UploadedFile() file: UploadPart | undefined, @Body() d: CreateFileDto) {
     return this.svc.create(u, file, d);
   }

@@ -336,7 +336,7 @@ export function AIGenerateDialog({
       }, 800);
 
       const generated = normalizeGenerated(
-        await generateProjectHierarchyUnified(values.documentText)
+        await generateProjectHierarchyUnified(values.documentText, workspaceId)
       );
 
       clearInterval(progressInterval);

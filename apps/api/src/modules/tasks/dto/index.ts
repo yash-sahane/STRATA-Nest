@@ -7,9 +7,11 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
+  Min,
 } from 'class-validator';
-import { TrimmedText } from '@strata/common';
+import { StrictString, TrimmedText } from '@strata/common';
 
 /**
  * The kanban columns. A free-string `status` let a task hold a value that
@@ -23,7 +25,7 @@ export class CreateTaskDto {
   @IsString() workspaceId!: string;
   @IsString() projectId!: string;
   @IsString() @MaxLength(100) hierarchyId!: string;
-  @TrimmedText() @IsString() @IsNotEmpty() @MaxLength(500) title!: string;
+  @StrictString() @TrimmedText() @IsString() @IsNotEmpty() @MaxLength(500) title!: string;
   @IsOptional() @IsString() sprintId?: string;
   @IsOptional() @IsString() epicId?: string;
   @IsOptional() @IsString() functionalRequirementId?: string;
@@ -38,8 +40,8 @@ export class CreateTaskDto {
   @IsOptional() @IsArray() assignedToNames?: string[];
   @IsOptional() @IsArray() watcherIds?: string[];
   @IsOptional() @IsString() dueDate?: string;
-  @IsOptional() @IsNumber() estimatedHours?: number;
-  @IsOptional() @IsNumber() actualHours?: number;
+  @IsOptional() @IsNumber() @Min(0) @Max(10_000) estimatedHours?: number;
+  @IsOptional() @IsNumber() @Min(0) @Max(10_000) actualHours?: number;
   @IsOptional() @IsArray() labels?: unknown[];
   @IsOptional() @IsArray() attachments?: unknown[];
   @IsOptional() @IsObject() customFields?: Record<string, unknown>;
@@ -55,7 +57,7 @@ export class CreateTaskDto {
 // PATCH: every task field optional (kanban move = PATCH status + position).
 export class UpdateTaskDto {
   @IsOptional() @IsString() @MaxLength(100) hierarchyId?: string;
-  @TrimmedText() @IsOptional() @IsString() @IsNotEmpty() @MaxLength(500) title?: string;
+  @StrictString() @TrimmedText() @IsOptional() @IsString() @IsNotEmpty() @MaxLength(500) title?: string;
   @IsOptional() @IsString() sprintId?: string;
   @IsOptional() @IsString() epicId?: string;
   @IsOptional() @IsString() functionalRequirementId?: string;
@@ -70,8 +72,8 @@ export class UpdateTaskDto {
   @IsOptional() @IsArray() assignedToNames?: string[];
   @IsOptional() @IsArray() watcherIds?: string[];
   @IsOptional() @IsString() dueDate?: string;
-  @IsOptional() @IsNumber() estimatedHours?: number;
-  @IsOptional() @IsNumber() actualHours?: number;
+  @IsOptional() @IsNumber() @Min(0) @Max(10_000) estimatedHours?: number;
+  @IsOptional() @IsNumber() @Min(0) @Max(10_000) actualHours?: number;
   @IsOptional() @IsArray() labels?: unknown[];
   @IsOptional() @IsArray() attachments?: unknown[];
   @IsOptional() @IsObject() customFields?: Record<string, unknown>;
@@ -103,7 +105,7 @@ export class CreateTaskCommentDto {
   @IsString() taskId!: string;
   // Capped and trimmed: an uncapped body meant a ~102 KB comment came back as a
   // bare HTTP 500, and a whitespace-only one posted an empty bubble.
-  @TrimmedText() @IsString() @IsNotEmpty() @MaxLength(10_000) content!: string;
+  @StrictString() @TrimmedText() @IsString() @IsNotEmpty() @MaxLength(10_000) content!: string;
   @IsOptional() @IsArray() mentions?: unknown[];
   @IsOptional() @IsArray() attachments?: unknown[];
 }

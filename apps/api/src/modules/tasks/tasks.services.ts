@@ -81,6 +81,56 @@ export class TasksService extends ScopedCrudService<Task, ReturnType<typeof task
     return ids.map((id) => byId.get(id)).filter((n): n is string => Boolean(n));
   }
 
+  /**
+   * Every assignee must be a member of the workspace the task lives in.
+   *
+   * Unvalidated, `assigneeIds` accepted arbitrary strings: a task stored
+   * `["definitely-not-a-user"]` with a 201, and the board then rendered a chip
+   * for somebody who does not exist — or, worse, silently assigned work to an
+   * id belonging to another tenant's account.
+   */
+  private async assertAssignable(workspaceId: string, ids: readonly string[]): Promise<void> {
+    if (ids.length === 0) return;
+    const unique = [...new Set(ids)];
+    const members = await this.prisma.workspaceMember.findMany({
+      where: { workspaceId, userId: { in: unique }, status: 'ACTIVE' },
+      select: { userId: true },
+    });
+    const ok = new Set(members.map((m) => m.userId));
+    const bad = unique.filter((id) => !ok.has(id));
+    if (bad.length > 0) {
+      throw new BadRequestException(
+        `Cannot assign this task to somebody who is not an active member of the workspace.`,
+      );
+    }
+  }
+
+  /**
+   * A parent chain must not close into a loop.
+   *
+   * `assertNoSelfReference` catches only the one-step case (A parenting itself).
+   * A two-node cycle was accepted: make B a child of A, then make A a child of B
+   * and both rows point at each other. Nothing that walks the tree — the
+   * deletion cascade, the hierarchy-id builder — can terminate on that.
+   */
+  private async assertNoParentCycle(id: string, parentTaskId: string): Promise<void> {
+    let cursor: string | null = parentTaskId;
+    // The chain cannot be longer than the task count; this bound is a
+    // belt-and-braces stop in case the data is already looped.
+    for (let hops = 0; cursor && hops < 100; hops += 1) {
+      if (cursor === id) {
+        throw new BadRequestException(
+          'That would make the two tasks parents of each other. Pick a different parent task.',
+        );
+      }
+      const next: { parentTaskId: string | null } | null = await this.prisma.task.findUnique({
+        where: { id: cursor },
+        select: { parentTaskId: true },
+      });
+      cursor = next?.parentTaskId || null;
+    }
+  }
+
   async create(user: User, dto: CreateTaskDto) {
     const assignees = dto.assigneeIds ?? dto.assignedTo ?? [];
     // Same reasoning one field over: a client that names an assigner by id only
@@ -98,6 +148,16 @@ export class TasksService extends ScopedCrudService<Task, ReturnType<typeof task
       dto.functionalRequirementId, dto.projectId,
     );
     await assertLinkInProject(this.prisma, 'task', 'Parent task', dto.parentTaskId, dto.projectId);
+    await this.assertAssignable(dto.workspaceId, assignees);
+    // A brand-new task cannot have been reviewed, so it cannot be done. PATCH
+    // has enforced the REVIEW gate all along (patchStatus), but create accepted
+    // `status: 'DONE'` outright and stamped completedAt — the New Task dialog
+    // even offered it. That is the same rule, skipped by the other door.
+    if (dto.status === 'DONE') {
+      throw new BadRequestException(
+        'A new task cannot start out done — it has to pass through Review first.',
+      );
+    }
     return this.createIn(user, dto.workspaceId, {
       workspaceId: dto.workspaceId,
       projectId: dto.projectId,
@@ -152,6 +212,7 @@ export class TasksService extends ScopedCrudService<Task, ReturnType<typeof task
     if (dto.dueDate !== undefined) data.dueDate = toDate(dto.dueDate, 'Due date');
     // Reassigning by id alone must not blank the names, and the two id views
     // must not drift apart — the same rules create applies.
+    if (dto.parentTaskId) await this.assertNoParentCycle(id, dto.parentTaskId);
     const nextAssignees = dto.assigneeIds ?? dto.assignedTo;
     if (nextAssignees !== undefined) {
       data.assigneeIds = nextAssignees;

@@ -40,11 +40,34 @@ export class SprintsService extends ScopedCrudService<Sprint, ReturnType<typeof 
   protected map(row: Sprint) {
     return sprintResponse(row);
   }
+
+  /** See the note above assertRangeOrdered. `excludeId` is the sprint being edited. */
+  private async assertNoOtherActiveSprint(
+    projectId: string,
+    status: string | undefined,
+    excludeId?: string,
+  ): Promise<void> {
+    if (status !== 'ACTIVE') return;
+    const clash = await this.prisma.sprint.findFirst({
+      where: {
+        projectId,
+        status: 'ACTIVE',
+        ...(excludeId ? { id: { not: excludeId } } : {}),
+      },
+      select: { name: true },
+    });
+    if (clash) {
+      throw new BadRequestException(
+        `"${clash.name}" is already the active sprint for this project. Complete it first.`,
+      );
+    }
+  }
   async create(user: User, dto: CreateSprintDto) {
     const startDate = parseSprintDate(dto.startDate, 'startDate');
     const endDate = parseSprintDate(dto.endDate, 'endDate');
     assertRangeOrdered(startDate, endDate);
     await assertProjectInWorkspace(this.prisma, dto.projectId, dto.workspaceId);
+    await this.assertNoOtherActiveSprint(dto.projectId, dto.status);
     return this.createIn(user, dto.workspaceId, {
       workspaceId: dto.workspaceId,
       projectId: dto.projectId,
@@ -114,6 +137,15 @@ function parseSprintDate(value: string, field: string): Date {
 }
 
 /** end < start makes every downstream duration/burndown computation negative. */
+/**
+ * A project has at most one sprint in flight.
+ *
+ * Two ACTIVE sprints in one project made "the current sprint" ambiguous, and
+ * every screen that resolves it picks the first row it happens to read — so the
+ * board, the backlog and the analytics could each be describing a different
+ * sprint at the same moment. `useActiveSprint` literally queries
+ * `status=ACTIVE` with `limit(1)`.
+ */
 function assertRangeOrdered(startDate: Date, endDate: Date): void {
   if (endDate.getTime() < startDate.getTime()) {
     throw new BadRequestException('endDate must be on or after startDate');

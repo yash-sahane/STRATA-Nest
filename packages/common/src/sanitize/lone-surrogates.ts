@@ -11,11 +11,32 @@ export function stripLoneSurrogates(value: string): string {
   return LONE_SURROGATE.test(value) ? value.replace(LONE_SURROGATE, '') : value;
 }
 
+/**
+ * Characters Postgres refuses in a `text` column.
+ *
+ * NUL is the one that actually arrives: Postgres rejects \u0000 outright, so a
+ * title carrying one came back as a bare 500 "Internal server error". Clients
+ * send them by accident — a stray byte from a file paste, a C-string round trip
+ * — never on purpose, so stripping is the honest response. The other C0 controls
+ * are removed with it because none of them is text a user meant to type; TAB,
+ * LF and CR are deliberately kept, since a textarea legitimately contains them.
+ */
+const UNSTORABLE_CONTROLS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g;
+
+export function stripUnstorableControls(value: string): string {
+  return UNSTORABLE_CONTROLS.test(value) ? value.replace(UNSTORABLE_CONTROLS, '') : value;
+}
+
+/** Everything the inbound sanitiser removes from one string. */
+export function sanitizeText(value: string): string {
+  return stripUnstorableControls(stripLoneSurrogates(value));
+}
+
 /** Depth cap, so a hostile deeply-nested body cannot blow the stack here. */
 const MAX_DEPTH = 12;
 
 function clean(value: unknown, depth: number): unknown {
-  if (typeof value === 'string') return stripLoneSurrogates(value);
+  if (typeof value === 'string') return sanitizeText(value);
   if (depth >= MAX_DEPTH || value === null || typeof value !== 'object') return value;
   if (Buffer.isBuffer(value) || value instanceof Date) return value;
   if (Array.isArray(value)) {
@@ -33,7 +54,8 @@ function clean(value: unknown, depth: number): unknown {
 }
 
 /**
- * Strip unpaired UTF-16 surrogates from every string in an inbound request.
+ * Strip the characters Postgres cannot store from every string in an inbound
+ * request: unpaired UTF-16 surrogates and the C0 control codes (NUL included).
  *
  * A surrogate half is not a character: it cannot be encoded as UTF-8, so
  * Postgres refuses the write and the client gets a bare 500 "Internal server

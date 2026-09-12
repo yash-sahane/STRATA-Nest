@@ -7,7 +7,7 @@ import {
   IsString,
   MaxLength,
 } from 'class-validator';
-import { TrimmedText } from '@strata/common';
+import { StrictString, TrimmedText } from '@strata/common';
 
 /** Sprint lifecycle. A free string here let a sprint hold a status no screen renders. */
 export const SPRINT_STATUSES = ['PLANNING', 'ACTIVE', 'COMPLETED'] as const;
@@ -16,7 +16,7 @@ export const SPRINT_STATUSES = ['PLANNING', 'ACTIVE', 'COMPLETED'] as const;
 export class CreateSprintDto {
   @IsString() workspaceId!: string;
   @IsString() projectId!: string;
-  @TrimmedText() @IsString() @IsNotEmpty() @MaxLength(255) name!: string;
+  @StrictString() @TrimmedText() @IsString() @IsNotEmpty() @MaxLength(255) name!: string;
   // Date-only ("2026-08-11") or full ISO; both are accepted by IsDateString.
   // Without this, `new Date('garbage')` reached Prisma as an Invalid Date.
   @IsDateString() startDate!: string;

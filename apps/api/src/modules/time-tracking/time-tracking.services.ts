@@ -102,6 +102,49 @@ export class TimeEntriesService extends ScopedCrudService<
   protected map(row: TimeEntry) {
     return timeEntryResponse(row);
   }
+
+  /** Whether the caller may see the whole workspace's entries, or only their own. */
+  private async canApprove(user: User, workspaceId?: string | string[]): Promise<boolean> {
+    if (this.access.isPlatformAdmin(user)) return true;
+    if (typeof workspaceId !== 'string' || !workspaceId) return false;
+    return this.access.can(user, workspaceId, Permission.TimeApprove);
+  }
+
+  /**
+   * A time entry is personal data, and a BILLABLE one carries a rate.
+   *
+   * There was no override here, so the base class scoped reads to the caller's
+   * workspaces and nothing further: every member — including the read-only
+   * MEMBER role — could list every colleague's entries, descriptions and
+   * billable rates. Measured: MEMBER read a developer's entry complete with its
+   * 250/hour rate. Same rule as attendance now: your own rows, unless you hold
+   * the permission that exists to review other people's.
+   */
+  async list(
+    user: User,
+    query: Record<string, string | string[] | undefined>,
+  ): Promise<PaginatedResponse<ReturnType<typeof timeEntryResponse>>> {
+    if (await this.canApprove(user, query.workspaceId)) return super.list(user, query);
+    // Drop every caller-supplied userId predicate before forcing the caller's
+    // own id. Overwriting the `userId` KEY alone is not enough: the suffixed
+    // forms (`userId__ne`, `userId__in`, `userId__not_in`) are separate keys that
+    // parseListQuery merges onto the same `where.userId` last-one-wins, so
+    // `?userId=me&userId__ne=__none__` would replace the forced equality with a
+    // negation. Same shape as attendance and leave.
+    const scoped: Record<string, string | string[] | undefined> = {};
+    for (const [key, value] of Object.entries(query)) {
+      if (key === 'userId' || key.startsWith('userId__')) continue;
+      scoped[key] = value;
+    }
+    return super.list(user, { ...scoped, userId: user.id });
+  }
+
+  /** By-id reads need the same rule the list does. */
+  async retrieve(user: User, id: string) {
+    const row = await this.findScoped(user, id);
+    await this.assertRowOwnership(user, row);
+    return this.map(row);
+  }
   async create(user: User, dto: CreateTimeEntryDto) {
     const startTime = toRequiredDate(dto.startTime, 'Start time');
     const endTime = toRequiredDate(dto.endTime, 'End time');

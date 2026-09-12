@@ -65,7 +65,7 @@ export interface GeneratedHierarchy {
 /**
  * Call AI via Next.js API route (supports HuggingFace + Gemini fallback)
  */
-async function callAI(prompt: string, maxRetries = 3): Promise<string> {
+async function callAI(prompt: string, maxRetries = 3, workspaceId?: string): Promise<string> {
   const response = await fetch('/api/ai-generate', {
     method: 'POST',
     headers: {
@@ -74,6 +74,9 @@ async function callAI(prompt: string, maxRetries = 3): Promise<string> {
     body: JSON.stringify({
       prompt,
       maxRetries,
+      // The route checks the caller holds requirement:write HERE before it
+      // spends the operator's model quota, so it has to be told where "here" is.
+      workspaceId,
     }),
   });
 
@@ -153,7 +156,11 @@ Rules:
  * This is the optimized version that saves tokens
  */
 export async function generateProjectHierarchyUnified(
-  documentText: string
+  documentText: string,
+  // The route checks requirement:write in THIS workspace before spending the
+  // operator's model quota, so the caller has to say which one it is authoring
+  // into.
+  workspaceId?: string
 ): Promise<GeneratedHierarchy> {
   try {
     // Truncate very long input text to save tokens (keep first 8000 chars)
@@ -164,7 +171,7 @@ export async function generateProjectHierarchyUnified(
 
     const prompt = `${UNIFIED_GENERATION_PROMPT}\n\nDocument:\n${truncatedDoc}`;
 
-    let text = await callAI(prompt);
+    let text = await callAI(prompt, 3, workspaceId);
 
     // Clean up response - remove markdown code blocks if present
     text = text
