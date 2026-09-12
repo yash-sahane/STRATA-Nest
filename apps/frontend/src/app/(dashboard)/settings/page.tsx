@@ -9,6 +9,7 @@ import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useTheme } from 'next-themes';
 import { DeleteWorkspaceDialog } from '@/components/workspace/delete-workspace-dialog';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { PASSWORD_RULES, passwordFailures } from '@/lib/password-policy';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -216,8 +217,9 @@ function SettingsPageContent() {
       toast.error('Please fill in all password fields');
       return;
     }
-    if (pwForm.next.length < 8) {
-      toast.error('New password must be at least 8 characters');
+    const pwFailures = passwordFailures(pwForm.next);
+    if (pwFailures.length > 0) {
+      toast.error(`New password must have: ${pwFailures.join(', ')}.`);
       return;
     }
     if (pwForm.next !== pwForm.confirm) {
@@ -583,6 +585,22 @@ function SettingsPageContent() {
                         {showPw.next ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                       </button>
                     </div>
+              {/* The policy the server enforces — see lib/password-policy. */}
+                    <ul className="text-xs text-muted-foreground space-y-1">
+                      {PASSWORD_RULES.map((rule) => {
+                        const met = rule.test(pwForm.next);
+                        return (
+                          <li key={rule.id} className="flex items-center gap-2">
+                            <div
+                              aria-hidden="true"
+                              className={`h-1 w-1 rounded-full ${met ? 'bg-green-500' : 'bg-gray-400'}`}
+                            />
+                            <span className={met ? 'text-success-text' : undefined}>{rule.label}</span>
+                            <span className="sr-only">{met ? ' — met' : ' — not met yet'}</span>
+                          </li>
+                        );
+                      })}
+                    </ul>
                   </div>
 
                   <div className="grid gap-2">

@@ -13,11 +13,13 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Lock, Eye, EyeOff, Loader2, Shield, CheckCircle2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { logger } from '@/lib/logger';
+import { PASSWORD_RULES, passwordFailures } from '@/lib/password-policy';
+import Link from 'next/link';
 
 function ChangePasswordContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, refreshUser } = useAuth();
+  const { user, loading: authLoading, backendUnreachable, refreshUser } = useAuth();
 
   const [formData, setFormData] = React.useState({
     currentPassword: '',
@@ -41,12 +43,10 @@ function ChangePasswordContent() {
   const isForced = searchParams.get('forced') === 'true';
   const hasTempPassword = user?.hasTempPassword === true;
 
-  // Redirect if not forced and the user does not have a temporary password.
-  React.useEffect(() => {
-    if (!isForced && user && !hasTempPassword) {
-      router.push('/dashboard');
-    }
-  }, [isForced, hasTempPassword, router, user]);
+  // No redirect here on purpose. Bouncing a signed-in visitor to /dashboard is
+  // what made the profile page's "Change Password" button dead: it pushed this
+  // route, this effect pushed straight back, and the click looked like nothing
+  // but a flash. Changing your own password on purpose is the ordinary case.
 
   // Calculate password strength
   React.useEffect(() => {
@@ -102,9 +102,12 @@ function ChangePasswordContent() {
     setLoading(true);
 
     try {
-      // Validation
-      if (formData.newPassword.length < 8) {
-        toast.error('Password must be at least 8 characters');
+      // Validation. Every failed rule at once: correcting them one per
+      // submission is four round trips to learn what the checklist already
+      // showed, and the server refuses the same set.
+      const failures = passwordFailures(formData.newPassword);
+      if (failures.length > 0) {
+        toast.error(`Password must have: ${failures.join(', ')}.`);
         return;
       }
 
@@ -171,13 +174,59 @@ function ChangePasswordContent() {
     }
   };
 
-  if (!user) {
+  // Spin only while the answer is genuinely outstanding. `user === null` after
+  // the provider has settled is an ANSWER — nobody is signed in — and showing
+  // "Loading..." for it left a signed-out visitor on a spinner with no way
+  // forward and no way back but the browser's own button.
+  if (authLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-linear-to-br from-background to-muted">
         <div className="text-center">
           <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4" />
           <p className="text-muted-foreground">Loading...</p>
         </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-linear-to-br from-background to-muted p-4">
+        <Card className="w-full max-w-md">
+          <CardHeader className="text-center">
+            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
+              <Lock className="h-8 w-8 text-primary" />
+            </div>
+            {/* The provider distinguishes "401, nobody is signed in" from "the
+                request never got an answer". Telling somebody they are signed
+                out when the server is simply down sends them to a login form
+                that cannot work either. */}
+            <CardTitle className="text-2xl">
+              {backendUnreachable ? 'Cannot reach the server' : 'Sign in to change your password'}
+            </CardTitle>
+            <CardDescription>
+              {backendUnreachable
+                ? 'Your session could not be checked because the server did not answer. Your sign-in may still be valid — try again in a moment.'
+                : 'Changing a password needs the current one, so this page is only available while you are signed in.'}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {backendUnreachable ? (
+              <Button className="w-full" onClick={() => window.location.reload()}>
+                Try again
+              </Button>
+            ) : (
+              <>
+                <Button asChild className="w-full">
+                  <Link href="/login">Go to sign in</Link>
+                </Button>
+                <Button asChild variant="outline" className="w-full">
+                  <Link href="/forgot-password">I&apos;ve forgotten my password</Link>
+                </Button>
+              </>
+            )}
+          </CardContent>
+        </Card>
       </div>
     );
   }
@@ -315,39 +364,23 @@ function ChangePasswordContent() {
             {/* Password Requirements */}
             <div className="rounded-lg border bg-muted/50 p-3">
               <p className="text-sm font-medium mb-2">Password Requirements:</p>
+              {/* One list, shared with the policy the server enforces — see
+                  lib/password-policy. A dot that is not merely decorative also
+                  needs to reach a screen reader, hence the per-item state. */}
               <ul className="text-xs text-muted-foreground space-y-1">
-                <li className="flex items-center gap-2">
-                  <div
-                    className={`h-1 w-1 rounded-full ${
-                      formData.newPassword.length >= 8 ? 'bg-green-500' : 'bg-gray-400'
-                    }`}
-                  />
-                  At least 8 characters
-                </li>
-                <li className="flex items-center gap-2">
-                  <div
-                    className={`h-1 w-1 rounded-full ${
-                      /[A-Z]/.test(formData.newPassword) ? 'bg-green-500' : 'bg-gray-400'
-                    }`}
-                  />
-                  One uppercase letter
-                </li>
-                <li className="flex items-center gap-2">
-                  <div
-                    className={`h-1 w-1 rounded-full ${
-                      /[a-z]/.test(formData.newPassword) ? 'bg-green-500' : 'bg-gray-400'
-                    }`}
-                  />
-                  One lowercase letter
-                </li>
-                <li className="flex items-center gap-2">
-                  <div
-                    className={`h-1 w-1 rounded-full ${
-                      /[0-9]/.test(formData.newPassword) ? 'bg-green-500' : 'bg-gray-400'
-                    }`}
-                  />
-                  One number
-                </li>
+                {PASSWORD_RULES.map((rule) => {
+                  const met = rule.test(formData.newPassword);
+                  return (
+                    <li key={rule.id} className="flex items-center gap-2">
+                      <div
+                        aria-hidden="true"
+                        className={`h-1 w-1 rounded-full ${met ? 'bg-green-500' : 'bg-gray-400'}`}
+                      />
+                      <span className={met ? 'text-success-text' : undefined}>{rule.label}</span>
+                      <span className="sr-only">{met ? ' — met' : ' — not met yet'}</span>
+                    </li>
+                  );
+                })}
               </ul>
             </div>
 

@@ -7,7 +7,7 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
-import { TrimmedText } from '@strata/common';
+import { StrongPassword, TrimmedText } from '@strata/common';
 
 /**
  * Trim before validating an address.
@@ -36,7 +36,7 @@ export class RegisterDto {
   email!: string;
 
   @IsString()
-  @MinLength(8)
+  @StrongPassword()
   password!: string;
 
   @TrimmedText()
@@ -61,7 +61,7 @@ export class ChangePasswordDto {
   currentPassword!: string;
 
   @IsString()
-  @MinLength(8)
+  @StrongPassword()
   newPassword!: string;
 }
 
@@ -105,6 +105,6 @@ export class PasswordResetConfirmDto {
   token!: string;
 
   @IsString()
-  @MinLength(8)
+  @StrongPassword()
   newPassword!: string;
 }

@@ -224,11 +224,30 @@ export class UsersService {
     };
   }
 
+  /**
+   * A temporary password that satisfies PASSWORD_RULES — the same policy the
+   * invited user's own replacement is held to. Twelve independent draws from
+   * one 62-character alphabet omit a digit about 11% of the time, so the old
+   * version handed roughly one invitee in nine a password the server would
+   * refuse if they typed it themselves.
+   */
   private tempPassword(length = 12): string {
-    const alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    const bytes = randomBytes(length);
-    let out = '';
-    for (let i = 0; i < length; i += 1) out += alphabet[bytes[i] % alphabet.length];
-    return out;
+    const LOWER = 'abcdefghijklmnopqrstuvwxyz';
+    const UPPER = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    const DIGITS = '0123456789';
+    const all = LOWER + UPPER + DIGITS;
+    // One guaranteed character per class, then fill, then shuffle so the
+    // guaranteed ones are not always in the first three positions.
+    const classes = [LOWER, UPPER, DIGITS];
+    const size = Math.max(length, classes.length);
+    const pools = [...classes, ...Array<string>(size - classes.length).fill(all)];
+    const bytes = randomBytes(size * 2);
+    const chars = pools.map((pool, i) => pool[bytes[i] % pool.length]);
+    // Fisher-Yates, drawing from the second half of the entropy.
+    for (let i = chars.length - 1; i > 0; i -= 1) {
+      const j = bytes[size + i] % (i + 1);
+      [chars[i], chars[j]] = [chars[j], chars[i]];
+    }
+    return chars.join('');
   }
 }

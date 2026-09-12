@@ -5,6 +5,7 @@ import { Suspense } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { authClient } from '@/lib/api/client';
+import { PASSWORD_RULES, passwordFailures } from '@/lib/password-policy';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -41,8 +42,11 @@ function ResetPasswordContent() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (newPassword.length < 8) {
-      toast.error('Password must be at least 8 characters');
+    // Every failed rule at once. This form's token is one-time, so bouncing
+    // off the server one rule at a time is a particularly bad place to do it.
+    const failures = passwordFailures(newPassword);
+    if (failures.length > 0) {
+      toast.error(`Password must have: ${failures.join(', ')}.`);
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -180,9 +184,22 @@ function ResetPasswordContent() {
                 )}
               </div>
 
-              <p className="text-xs text-muted-foreground">
-                Must be at least 8 characters.
-              </p>
+              {/* The policy the server enforces — see lib/password-policy. */}
+              <ul className="text-xs text-muted-foreground space-y-1">
+                {PASSWORD_RULES.map((rule) => {
+                  const met = rule.test(newPassword);
+                  return (
+                    <li key={rule.id} className="flex items-center gap-2">
+                      <div
+                        aria-hidden="true"
+                        className={`h-1 w-1 rounded-full ${met ? 'bg-green-500' : 'bg-gray-400'}`}
+                      />
+                      <span className={met ? 'text-success-text' : undefined}>{rule.label}</span>
+                      <span className="sr-only">{met ? ' — met' : ' — not met yet'}</span>
+                    </li>
+                  );
+                })}
+              </ul>
 
               <Button type="submit" className="w-full" disabled={loading}>
                 {loading ? (
