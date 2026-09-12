@@ -180,6 +180,9 @@ function scoreCorpus(corpus: SearchCorpus, searchQuery: string): SearchResult[] 
       [
         { name: 'name', value: epic.name || '' },
         { name: 'description', value: epic.description || '' },
+        // Epics carry a hierarchyId ('EP-001') too, and both result lists render
+        // it — searching and emitting it keeps epic rows consistent with tasks.
+        { name: 'hierarchyId', value: epic.hierarchyId || '' },
       ],
       searchQuery
     );
@@ -190,6 +193,7 @@ function scoreCorpus(corpus: SearchCorpus, searchQuery: string): SearchResult[] 
         title: epic.name,
         description: epic.description,
         status: epic.status,
+        hierarchyId: epic.hierarchyId,
         projectId: epic.projectId,
         createdAt: epic.createdAt,
         relevanceScore: score * 1.1,
@@ -226,7 +230,11 @@ function scoreCorpus(corpus: SearchCorpus, searchQuery: string): SearchResult[] 
       [
         { name: 'title', value: doc.title || '' },
         { name: 'description', value: doc.description || '' },
-        { name: 'requirementId', value: doc.requirementId || '' },
+        // `hierarchyId` ('FR-001'), NOT `requirementId`: the functional
+        // requirement contract has no such field (requirements/mappers.ts), so
+        // the old name always scored 0 and an FR could never be found by its
+        // code — the one thing users actually type into this box.
+        { name: 'hierarchyId', value: doc.hierarchyId || '' },
       ],
       searchQuery
     );
@@ -237,6 +245,10 @@ function scoreCorpus(corpus: SearchCorpus, searchQuery: string): SearchResult[] 
         title: doc.title,
         description: doc.description,
         status: doc.status,
+        priority: doc.priority,
+        // Both result lists render `hierarchyId` as the leading code badge
+        // (command-palette.tsx, header.tsx); without it FR rows showed none.
+        hierarchyId: doc.hierarchyId,
         projectId: doc.projectId,
         createdAt: doc.createdAt,
         relevanceScore: score,

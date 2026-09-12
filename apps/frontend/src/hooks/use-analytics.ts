@@ -1,170 +1,156 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMemo } from 'react';
+import type { Task } from '@/types';
 import { useWorkspaceTasks } from './use-task';
-import { useSprints } from './use-sprint';
+import { useWorkspaceSprints } from './use-sprint';
 import { useProjects } from './use-project';
+import { useWorkspaceMembers } from './use-workspace';
 
 /**
- * Project Analytics Hook
- * Returns comprehensive metrics for a specific project
+ * When a DONE task actually finished. The API stamps `completedAt` on the
+ * transition into DONE (and the migration backfilled existing DONE rows from
+ * `updated_at`), so `updatedAt` is only a fallback for rows a client edited
+ * before the column existed. Read structurally: the shared `Task` type does not
+ * declare `completedAt` yet, but every response carries it.
  */
-export function useProjectAnalytics(projectId?: string) {
-  const { data: allTasks = [] } = useWorkspaceTasks();
-
-  return useQuery({
-    queryKey: ['project-analytics', projectId],
-    queryFn: async () => {
-      if (!projectId) return null;
-
-      // Filter tasks for this project
-      const projectTasks = allTasks.filter(task => task.projectId === projectId);
-
-      // Task status distribution
-      const statusDistribution = {
-        BACKLOG: projectTasks.filter(t => t.status === 'BACKLOG').length,
-        TODO: projectTasks.filter(t => t.status === 'TODO').length,
-        IN_PROGRESS: projectTasks.filter(t => t.status === 'IN_PROGRESS').length,
-        REVIEW: projectTasks.filter(t => t.status === 'REVIEW').length,
-        DONE: projectTasks.filter(t => t.status === 'DONE').length,
-      };
-
-      // Priority distribution
-      const priorityDistribution = {
-        LOW: projectTasks.filter(t => t.priority === 'LOW').length,
-        MEDIUM: projectTasks.filter(t => t.priority === 'MEDIUM').length,
-        HIGH: projectTasks.filter(t => t.priority === 'HIGH').length,
-        CRITICAL: projectTasks.filter(t => t.priority === 'CRITICAL').length,
-      };
-
-      // Completion metrics
-      const totalTasks = projectTasks.length;
-      const completedTasks = statusDistribution.DONE;
-      const completionRate = totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0;
-
-      // Time tracking
-      const totalEstimatedHours = projectTasks.reduce((sum, t) => sum + (t.estimatedHours || 0), 0);
-      const totalActualHours = projectTasks.reduce((sum, t) => sum + (t.actualHours || 0), 0);
-      const timeEfficiency = totalEstimatedHours > 0
-        ? (totalActualHours / totalEstimatedHours) * 100
-        : 0;
-
-      const totalStoryPoints = projectTasks.reduce((sum, t) => sum + (t.estimatedHours || 0), 0);
-      const completedStoryPoints = projectTasks
-        .filter(t => t.status === 'DONE')
-        .reduce((sum, t) => sum + (t.estimatedHours || 0), 0);
-
-      // Overdue tasks
-      const now = new Date();
-      const overdueTasks = projectTasks.filter(t =>
-        t.dueDate &&
-        new Date(t.dueDate) < now &&
-        t.status !== 'DONE'
-      );
-
-      // Tasks by assignee
-      const assigneeStats = projectTasks.reduce((acc, task) => {
-        const assignees = task.assigneeIds || [];
-        assignees.forEach(assigneeId => {
-          if (!acc[assigneeId]) {
-            acc[assigneeId] = {
-              total: 0,
-              completed: 0,
-              inProgress: 0,
-            };
-          }
-          acc[assigneeId].total++;
-          if (task.status === 'DONE') acc[assigneeId].completed++;
-          if (task.status === 'IN_PROGRESS') acc[assigneeId].inProgress++;
-        });
-        return acc;
-      }, {} as Record<string, { total: number; completed: number; inProgress: number }>);
-
-      // Completion trend (last 30 days)
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
-      const completionTrend = Array.from({ length: 30 }, (_, i) => {
-        const date = new Date(thirtyDaysAgo);
-        date.setDate(date.getDate() + i);
-
-        const completedOnDay = projectTasks.filter(t => {
-          if (!t.updatedAt || t.status !== 'DONE') return false;
-          const updatedDate = new Date(t.updatedAt);
-          return updatedDate.toDateString() === date.toDateString();
-        }).length;
-
-        return {
-          date: date.toISOString().split('T')[0],
-          completed: completedOnDay,
-        };
-      });
-
-      return {
-        totalTasks,
-        completedTasks,
-        completionRate,
-        statusDistribution,
-        priorityDistribution,
-        totalEstimatedHours,
-        totalActualHours,
-        timeEfficiency,
-        totalStoryPoints,
-        completedStoryPoints,
-        overdueTasks: overdueTasks.length,
-        overdueTasksList: overdueTasks,
-        assigneeStats,
-        completionTrend,
-      };
-    },
-    enabled: !!projectId,
-  });
+function completionDate(task: Task): string {
+  return (task as Task & { completedAt?: string | null }).completedAt ?? task.updatedAt;
 }
 
 /**
- * Sprint Analytics Hook
- * Returns metrics for sprint performance
+ * Time efficiency: estimated hours vs actual hours, as a percentage clamped to
+ * [0, 200]. 100 means work matched the estimate; above 100 means work was
+ * completed faster than estimated. Returns null when either side is zero,
+ * since efficiency cannot be measured without both values.
  */
-export function useSprintAnalytics(sprintId?: string) {
-  const { data: allTasks = [] } = useWorkspaceTasks();
+export function computeTimeEfficiency(
+  estimatedHours: number,
+  actualHours: number
+): number | null {
+  if (estimatedHours <= 0 || actualHours <= 0) return null;
+  return Math.min(200, Math.max(0, (estimatedHours / actualHours) * 100));
+}
 
-  return useQuery({
-    queryKey: ['sprint-analytics', sprintId],
-    queryFn: async () => {
-      if (!sprintId) return null;
+/** Format a Date as a local-timezone YYYY-MM-DD string (no UTC conversion). */
+function toLocalDateString(date: Date): string {
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
+}
 
-      // Get sprint tasks
-      const sprintTasks = allTasks.filter(task => task.sprintId === sprintId);
+/**
+ * Project Analytics Hook
+ * Returns comprehensive metrics for a specific project.
+ *
+ * Derived synchronously (useMemo) from the workspace task query so the metrics
+ * always recompute when the source data arrives or changes.
+ */
+export function useProjectAnalytics(projectId?: string, workspaceId?: string) {
+  const tasksQuery = useWorkspaceTasks(workspaceId);
+  const allTasks = tasksQuery.data;
 
-      const taskBreakdown = {
-        total: sprintTasks.length,
-        completed: sprintTasks.filter(t => t.status === 'DONE').length,
-        inProgress: sprintTasks.filter(t => t.status === 'IN_PROGRESS').length,
-        todo: sprintTasks.filter(t => t.status === 'TODO').length,
-        blocked: sprintTasks.filter(t => t.status === 'REVIEW').length,
-      };
+  const data = useMemo(() => {
+    if (!projectId || !allTasks) return null;
 
-      // Use estimatedHours as a proxy for story points (1 hour ≈ 1 point)
-      const totalPoints = sprintTasks.reduce((sum, t) => sum + (t.estimatedHours || 1), 0);
-      const completedPoints = sprintTasks
-        .filter(t => t.status === 'DONE')
-        .reduce((sum, t) => sum + (t.estimatedHours || 1), 0);
-      const remainingPoints = totalPoints - completedPoints;
-      const velocity = completedPoints;
+    // Filter tasks for this project
+    const projectTasks = allTasks.filter(task => task.projectId === projectId);
 
-      // Scope change: tasks added after sprint started (use position as a rough proxy)
-      const scopeChange = 0;
+    // Task status distribution
+    const statusDistribution = {
+      BACKLOG: projectTasks.filter(t => t.status === 'BACKLOG').length,
+      TODO: projectTasks.filter(t => t.status === 'TODO').length,
+      IN_PROGRESS: projectTasks.filter(t => t.status === 'IN_PROGRESS').length,
+      REVIEW: projectTasks.filter(t => t.status === 'REVIEW').length,
+      DONE: projectTasks.filter(t => t.status === 'DONE').length,
+    };
+
+    // Priority distribution
+    const priorityDistribution = {
+      LOW: projectTasks.filter(t => t.priority === 'LOW').length,
+      MEDIUM: projectTasks.filter(t => t.priority === 'MEDIUM').length,
+      HIGH: projectTasks.filter(t => t.priority === 'HIGH').length,
+      CRITICAL: projectTasks.filter(t => t.priority === 'CRITICAL').length,
+    };
+
+    // Completion metrics
+    const totalTasks = projectTasks.length;
+    const completedTasks = statusDistribution.DONE;
+    const completionRate = totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0;
+
+    // Time tracking
+    const totalEstimatedHours = projectTasks.reduce((sum, t) => sum + (t.estimatedHours || 0), 0);
+    const totalActualHours = projectTasks.reduce((sum, t) => sum + (t.actualHours || 0), 0);
+    const timeEfficiency = computeTimeEfficiency(totalEstimatedHours, totalActualHours);
+
+    const completedEstimatedHours = projectTasks
+      .filter(t => t.status === 'DONE')
+      .reduce((sum, t) => sum + (t.estimatedHours || 0), 0);
+
+    // Overdue tasks
+    const now = new Date();
+    const overdueTasks = projectTasks.filter(t =>
+      t.dueDate &&
+      new Date(t.dueDate) < now &&
+      t.status !== 'DONE'
+    );
+
+    // Tasks by assignee
+    const assigneeStats = projectTasks.reduce((acc, task) => {
+      const assignees = task.assigneeIds || [];
+      assignees.forEach(assigneeId => {
+        if (!acc[assigneeId]) {
+          acc[assigneeId] = {
+            total: 0,
+            completed: 0,
+            inProgress: 0,
+          };
+        }
+        acc[assigneeId].total++;
+        if (task.status === 'DONE') acc[assigneeId].completed++;
+        if (task.status === 'IN_PROGRESS') acc[assigneeId].inProgress++;
+      });
+      return acc;
+    }, {} as Record<string, { total: number; completed: number; inProgress: number }>);
+
+    // Completion trend over a 30-day window ending today (inclusive), so today's
+    // completions still get a bucket. Bucketed on the real completion date.
+    const trendStart = new Date();
+    trendStart.setDate(trendStart.getDate() - 29);
+
+    const completionTrend = Array.from({ length: 30 }, (_, i) => {
+      const date = new Date(trendStart);
+      date.setDate(date.getDate() + i);
+
+      const completedOnDay = projectTasks.filter(t => {
+        if (t.status !== 'DONE') return false;
+        const completed = completionDate(t);
+        if (!completed) return false;
+        return new Date(completed).toDateString() === date.toDateString();
+      }).length;
 
       return {
-        totalPoints,
-        completedPoints,
-        remainingPoints,
-        velocity,
-        taskBreakdown,
-        scopeChange,
-        completionRate: totalPoints > 0 ? (completedPoints / totalPoints) * 100 : 0,
+        date: toLocalDateString(date),
+        completed: completedOnDay,
       };
-    },
-    enabled: !!sprintId,
-  });
+    });
+
+    return {
+      totalTasks,
+      completedTasks,
+      completionRate,
+      statusDistribution,
+      priorityDistribution,
+      totalEstimatedHours,
+      totalActualHours,
+      timeEfficiency,
+      completedEstimatedHours,
+      overdueTasks: overdueTasks.length,
+      overdueTasksList: overdueTasks,
+      assigneeStats,
+      completionTrend,
+    };
+  }, [projectId, allTasks]);
+
+  return { data, isLoading: tasksQuery.isLoading };
 }
 
 /**
@@ -172,75 +158,121 @@ export function useSprintAnalytics(sprintId?: string) {
  * Returns team-wide performance metrics
  */
 export function useTeamAnalytics(workspaceId?: string) {
-  const { data: allTasks = [] } = useWorkspaceTasks(workspaceId);
+  const tasksQuery = useWorkspaceTasks(workspaceId);
+  const membersQuery = useWorkspaceMembers(workspaceId);
+  const allTasks = tasksQuery.data;
+  const members = membersQuery.data;
+  // `members` is undefined both while the roster is loading and after it has
+  // FAILED, and isLoading goes false either way — so without this flag a failed
+  // roster resolves to a leaderboard of identical "Unknown member" rows with
+  // nothing anywhere saying the request died. Surfaced on the return so the
+  // page can say so, and used below to keep the rows distinguishable.
+  const rosterFailed = membersQuery.isError;
 
-  return useQuery({
-    queryKey: ['team-analytics', workspaceId],
-    queryFn: async () => {
-      if (!workspaceId) return null;
+  const data = useMemo(() => {
+    if (!workspaceId || !allTasks) return null;
 
-      // Get unique team members
-      const teamMembers = new Set<string>();
-      allTasks.forEach(task => {
-        (task.assigneeIds || []).forEach(id => teamMembers.add(id));
-      });
+    // Members that currently hold at least one task
+    const teamMembers = new Set<string>();
+    allTasks.forEach(task => {
+      (task.assigneeIds || []).forEach(id => teamMembers.add(id));
+    });
 
-      // Individual performance
-      const memberPerformance = Array.from(teamMembers).map(memberId => {
-        const memberTasks = allTasks.filter(t =>
-          (t.assigneeIds || []).includes(memberId)
-        );
+    // Every row this hook returns is keyed by user id, and the screens that
+    // render them had nothing else to show — so the leaderboard and the
+    // workload axis both read "Member rJJUvZYp". The roster is already loaded
+    // here (teamSize below counts it), so the name is resolved once, centrally.
+    const nameById = new Map((members ?? []).map(m => [m.userId, m.name || m.email]));
+    // Two different misses. Roster loaded but this assignee is not on it: they
+    // genuinely left the workspace, so "Unknown member" is the truth. Roster
+    // failed: there is no name to look up for ANYONE, and labelling every row
+    // the same would collapse the whole leaderboard into one indistinguishable
+    // block — worse than the raw ids this hook was added to replace. Fall back
+    // to a short id there and let the page explain the failure.
+    const nameOf = (id: string) =>
+      nameById.get(id) ?? (rosterFailed ? `Member ${id.slice(0, 8)}` : 'Unknown member');
 
-        const completed = memberTasks.filter(t => t.status === 'DONE').length;
-        const inProgress = memberTasks.filter(t => t.status === 'IN_PROGRESS').length;
-        const total = memberTasks.length;
+    // Individual performance
+    const memberPerformance = Array.from(teamMembers).map(memberId => {
+      const memberTasks = allTasks.filter(t =>
+        (t.assigneeIds || []).includes(memberId)
+      );
 
-        const velocityPoints = memberTasks.filter(t => t.status === 'DONE').length;
+      const completed = memberTasks.filter(t => t.status === 'DONE').length;
+      const inProgress = memberTasks.filter(t => t.status === 'IN_PROGRESS').length;
+      const total = memberTasks.length;
 
-        // Time efficiency
-        const estimatedHours = memberTasks.reduce((sum, t) => sum + (t.estimatedHours || 0), 0);
-        const actualHours = memberTasks.reduce((sum, t) => sum + (t.actualHours || 0), 0);
+      // Velocity expressed as completed task count
+      const velocityPoints = completed;
 
-        return {
-          memberId,
-          totalTasks: total,
-          completedTasks: completed,
-          inProgressTasks: inProgress,
-          completionRate: total > 0 ? (completed / total) * 100 : 0,
-          velocity: velocityPoints,
-          estimatedHours,
-          actualHours,
-          efficiency: estimatedHours > 0 ? (actualHours / estimatedHours) * 100 : 0,
-        };
-      });
-
-      // Team averages
-      const avgCompletionRate = memberPerformance.length > 0
-        ? memberPerformance.reduce((sum, m) => sum + m.completionRate, 0) / memberPerformance.length
-        : 0;
-
-      const avgVelocity = memberPerformance.length > 0
-        ? memberPerformance.reduce((sum, m) => sum + m.velocity, 0) / memberPerformance.length
-        : 0;
-
-      // Workload distribution
-      const workloadDistribution = memberPerformance.map(m => ({
-        memberId: m.memberId,
-        taskCount: m.totalTasks,
-        percentage: allTasks.length > 0 ? (m.totalTasks / allTasks.length) * 100 : 0,
-      }));
+      // Time efficiency
+      const estimatedHours = memberTasks.reduce((sum, t) => sum + (t.estimatedHours || 0), 0);
+      const actualHours = memberTasks.reduce((sum, t) => sum + (t.actualHours || 0), 0);
 
       return {
-        teamSize: teamMembers.size,
-        totalTasks: allTasks.length,
-        memberPerformance,
-        avgCompletionRate,
-        avgVelocity,
-        workloadDistribution,
+        memberId,
+        memberName: nameOf(memberId),
+        totalTasks: total,
+        completedTasks: completed,
+        inProgressTasks: inProgress,
+        completionRate: total > 0 ? (completed / total) * 100 : 0,
+        velocity: velocityPoints,
+        estimatedHours,
+        actualHours,
+        efficiency: computeTimeEfficiency(estimatedHours, actualHours),
       };
-    },
-    enabled: !!workspaceId,
-  });
+    });
+
+    // Team averages
+    const avgCompletionRate = memberPerformance.length > 0
+      ? memberPerformance.reduce((sum, m) => sum + m.completionRate, 0) / memberPerformance.length
+      : 0;
+
+    const avgVelocity = memberPerformance.length > 0
+      ? memberPerformance.reduce((sum, m) => sum + m.velocity, 0) / memberPerformance.length
+      : 0;
+
+    // Workload distribution. The denominator is the number of assignments, not
+    // the number of tasks: a task with three assignees counts once per assignee,
+    // so shares of a task-count denominator would sum to well over 100%.
+    const totalAssignments = allTasks.reduce(
+      (sum, t) => sum + (t.assigneeIds || []).length,
+      0
+    );
+
+    const workloadDistribution = memberPerformance.map(m => ({
+      memberId: m.memberId,
+      memberName: m.memberName,
+      taskCount: m.totalTasks,
+      percentage: totalAssignments > 0 ? (m.totalTasks / totalAssignments) * 100 : 0,
+    }));
+
+    return {
+      // Team size is the workspace roster — members without an assigned task are
+      // still part of the team. `activeAssignees` is the subset holding tasks.
+      // null, not 0, when the roster request failed: "this workspace has no
+      // members" is a claim, and it is not one this hook can make from an
+      // errored query.
+      teamSize: rosterFailed ? null : (members?.length ?? 0),
+      activeAssignees: teamMembers.size,
+      totalTasks: allTasks.length,
+      memberPerformance,
+      avgCompletionRate,
+      avgVelocity,
+      workloadDistribution,
+    };
+  }, [workspaceId, allTasks, members, rosterFailed]);
+
+  return {
+    data,
+    isLoading: tasksQuery.isLoading || membersQuery.isLoading,
+    /**
+     * The workspace roster failed to load. Everything derived from tasks is
+     * still sound; team size is unknown and member rows carry ids, not names.
+     */
+    isRosterError: rosterFailed,
+    refetchRoster: membersQuery.refetch,
+  };
 }
 
 /**
@@ -248,99 +280,122 @@ export function useTeamAnalytics(workspaceId?: string) {
  * Returns high-level KPIs for the entire workspace
  */
 export function useWorkspaceAnalytics(workspaceId?: string) {
-  const { data: projects = [] } = useProjects(workspaceId);
-  const { data: sprints = [] } = useSprints(workspaceId);
-  const { data: allTasks = [] } = useWorkspaceTasks(workspaceId);
+  const projectsQuery = useProjects(workspaceId);
+  const sprintsQuery = useWorkspaceSprints(workspaceId);
+  const tasksQuery = useWorkspaceTasks(workspaceId);
+  const membersQuery = useWorkspaceMembers(workspaceId);
 
-  return useQuery({
-    queryKey: ['workspace-analytics', workspaceId],
-    queryFn: async () => {
-      if (!workspaceId) return null;
+  const projects = projectsQuery.data;
+  const sprints = sprintsQuery.data;
+  const allTasks = tasksQuery.data;
+  const members = membersQuery.data;
+  const rosterFailed = membersQuery.isError;
 
-      // Project health
-      const activeProjects = projects.filter(p => p.status === 'ACTIVE' || p.status === 'PLANNING').length;
-      const completedProjects = projects.filter(p => p.status === 'COMPLETED').length;
-      const onHoldProjects = projects.filter(p => p.status === 'ON_HOLD').length;
+  const data = useMemo(() => {
+    if (!workspaceId || !projects || !sprints || !allTasks) return null;
 
-      // Sprint health
-      const activeSprints = sprints.filter(s => s.status === 'ACTIVE').length;
-      const completedSprints = sprints.filter(s => s.status === 'COMPLETED').length;
+    // Project health
+    const planningProjects = projects.filter(p => p.status === 'PLANNING').length;
+    const activeProjects = projects.filter(p => p.status === 'ACTIVE').length;
+    const completedProjects = projects.filter(p => p.status === 'COMPLETED').length;
+    const onHoldProjects = projects.filter(p => p.status === 'ON_HOLD').length;
 
-      // Overall task metrics
-      const totalTasks = allTasks.length;
-      const completedTasks = allTasks.filter(t => t.status === 'DONE').length;
-      const inProgressTasks = allTasks.filter(t => t.status === 'IN_PROGRESS').length;
+    // Sprint health
+    const activeSprints = sprints.filter(s => s.status === 'ACTIVE').length;
+    const completedSprints = sprints.filter(s => s.status === 'COMPLETED').length;
 
-      // Time metrics
-      const totalEstimatedHours = allTasks.reduce((sum, t) => sum + (t.estimatedHours || 0), 0);
-      const totalActualHours = allTasks.reduce((sum, t) => sum + (t.actualHours || 0), 0);
+    // Overall task metrics
+    const totalTasks = allTasks.length;
+    const completedTasks = allTasks.filter(t => t.status === 'DONE').length;
+    const inProgressTasks = allTasks.filter(t => t.status === 'IN_PROGRESS').length;
 
-      // Budget: uses estimated vs actual hours as a proxy for planned vs spent effort.
-      // To track monetary budget, add `budget` and `hourlyRate` fields to the Project type.
-      const totalBudget = totalEstimatedHours;
-      const spentBudget = totalActualHours;
+    // Time metrics
+    const totalEstimatedHours = allTasks.reduce((sum, t) => sum + (t.estimatedHours || 0), 0);
+    const totalActualHours = allTasks.reduce((sum, t) => sum + (t.actualHours || 0), 0);
 
-      // Team size
-      const teamMembers = new Set<string>();
-      allTasks.forEach(task => {
-        (task.assigneeIds || []).forEach(id => teamMembers.add(id));
-      });
+    // Budget: uses estimated vs actual hours as a proxy for planned vs spent effort.
+    // To track monetary budget, add `budget` and `hourlyRate` fields to the Project type.
+    const totalBudget = totalEstimatedHours;
+    const spentBudget = totalActualHours;
 
-      // Monthly trends (last 6 months)
-      const monthlyTrends = Array.from({ length: 6 }, (_, i) => {
-        const date = new Date();
-        date.setMonth(date.getMonth() - (5 - i));
+    // Members that currently hold at least one task
+    const teamMembers = new Set<string>();
+    allTasks.forEach(task => {
+      (task.assigneeIds || []).forEach(id => teamMembers.add(id));
+    });
 
-        const monthStart = new Date(date.getFullYear(), date.getMonth(), 1);
-        const monthEnd = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+    // Monthly trends (last 6 months), bucketed on the real completion date.
+    const monthlyTrends = Array.from({ length: 6 }, (_, i) => {
+      const date = new Date();
+      date.setMonth(date.getMonth() - (5 - i));
 
-        const tasksCompletedInMonth = allTasks.filter(t => {
-          if (!t.updatedAt || t.status !== 'DONE') return false;
-          const updated = new Date(t.updatedAt);
-          return updated >= monthStart && updated <= monthEnd;
-        }).length;
+      const monthStart = new Date(date.getFullYear(), date.getMonth(), 1);
+      const nextMonthStart = new Date(date.getFullYear(), date.getMonth() + 1, 1);
 
-        return {
-          month: date.toLocaleString('default', { month: 'short', year: 'numeric' }),
-          completed: tasksCompletedInMonth,
-        };
-      });
+      const tasksCompletedInMonth = allTasks.filter(t => {
+        if (t.status !== 'DONE') return false;
+        const completed = completionDate(t);
+        if (!completed) return false;
+        const completedOn = new Date(completed);
+        return completedOn >= monthStart && completedOn < nextMonthStart;
+      }).length;
 
       return {
-        projects: {
-          total: projects.length,
-          active: activeProjects,
-          completed: completedProjects,
-          onHold: onHoldProjects,
-        },
-        sprints: {
-          total: sprints.length,
-          active: activeSprints,
-          completed: completedSprints,
-        },
-        tasks: {
-          total: totalTasks,
-          completed: completedTasks,
-          inProgress: inProgressTasks,
-          completionRate: totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0,
-        },
-        budget: {
-          total: totalBudget,
-          spent: spentBudget,
-          remaining: totalBudget - spentBudget,
-          utilization: totalBudget > 0 ? (spentBudget / totalBudget) * 100 : 0,
-        },
-        time: {
-          estimated: totalEstimatedHours,
-          actual: totalActualHours,
-          efficiency: totalEstimatedHours > 0 ? (totalActualHours / totalEstimatedHours) * 100 : 0,
-        },
-        team: {
-          size: teamMembers.size,
-        },
-        monthlyTrends,
+        month: date.toLocaleString('default', { month: 'short', year: 'numeric' }),
+        completed: tasksCompletedInMonth,
       };
-    },
-    enabled: !!workspaceId,
-  });
+    });
+
+    return {
+      projects: {
+        total: projects.length,
+        planning: planningProjects,
+        active: activeProjects,
+        completed: completedProjects,
+        onHold: onHoldProjects,
+      },
+      sprints: {
+        total: sprints.length,
+        active: activeSprints,
+        completed: completedSprints,
+      },
+      tasks: {
+        total: totalTasks,
+        completed: completedTasks,
+        inProgress: inProgressTasks,
+        completionRate: totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0,
+      },
+      budget: {
+        total: totalBudget,
+        spent: spentBudget,
+        remaining: totalBudget - spentBudget,
+        utilization: totalBudget > 0 ? (spentBudget / totalBudget) * 100 : 0,
+      },
+      time: {
+        estimated: totalEstimatedHours,
+        actual: totalActualHours,
+        efficiency: computeTimeEfficiency(totalEstimatedHours, totalActualHours),
+      },
+      team: {
+        // Roster size, not assignee count — see useTeamAnalytics for the same
+        // distinction between team membership and active assignment, and for
+        // why a failed roster reports null rather than a confident 0.
+        size: rosterFailed ? null : (members?.length ?? 0),
+        activeAssignees: teamMembers.size,
+      },
+      monthlyTrends,
+    };
+  }, [workspaceId, projects, sprints, allTasks, members, rosterFailed]);
+
+  return {
+    data,
+    isLoading:
+      projectsQuery.isLoading ||
+      sprintsQuery.isLoading ||
+      tasksQuery.isLoading ||
+      membersQuery.isLoading,
+    /** The workspace roster failed to load, so `team.size` is null. */
+    isRosterError: rosterFailed,
+    refetchRoster: membersQuery.refetch,
+  };
 }

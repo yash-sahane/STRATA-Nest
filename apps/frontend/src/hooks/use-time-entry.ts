@@ -3,9 +3,28 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { resources } from '@/lib/api/client';
 import { query } from '@/lib/api/client';
+import { restClient } from '@/lib/api/rest-client';
 import type { TimeEntry, ActiveTimer, TimeEntryStatus } from '@/types';
 import { toast } from 'sonner';
 import { logger } from '@/lib/logger';
+
+/**
+ * A PATCH body for one entry — exactly the fields UpdateTimeEntryDto honours.
+ * Anything else (status, duration, taskId) is dropped by the server's
+ * whitelisting pipe or recomputed, so it has no business being in the body.
+ *
+ * `billableRate` accepts `null` on purpose: an absent key means "leave the
+ * stored rate alone", so an explicit `null` is the ONLY way to clear one —
+ * `undefined` is dropped by JSON.stringify and the server never sees it.
+ */
+export type TimeEntryUpdate = {
+  startTime?: string;
+  endTime?: string;
+  description?: string;
+  isBillable?: boolean;
+  billableRate?: number | null;
+  tags?: string[];
+};
 
 // ============================================
 // QUERIES
@@ -56,8 +75,11 @@ export function useTimeEntries(userId?: string, filters?: {
         queries.push(query.lessThanEqual('endTime', filters.endDate));
       }
 
-      const response = await resources.list('time_entries', queries
-      );
+      // listAll, not list: the API's default page is 100 rows and it is
+      // returned with no pager and no marker, so the screen quietly showed
+      // the first 100 of however many exist and every total computed from
+      // them under-reported.
+      const response = await resources.listAll('time_entries', queries);
 
       return response.items as unknown as TimeEntry[];
     },
@@ -75,7 +97,9 @@ export function useTaskTimeEntries(taskId?: string) {
     queryFn: async () => {
       if (!taskId) return [];
 
-      const response = await resources.list('active_timers', [
+      // Logged time lives in `time_entries`; `active_timers` holds the caller's
+      // single running timer and carries no duration/isBillable/status.
+      const response = await resources.listAll('time_entries', [
         query.equal('taskId', taskId),
         query.orderDesc('createdAt'),
       ]
@@ -118,12 +142,15 @@ export function usePendingTimeEntries(workspaceId?: string) {
     queryFn: async () => {
       if (!workspaceId) return [];
 
-      const response = await resources.list('time_entries', [
+      // listAll, not list: the API's default page is 100 rows and it is
+      // returned with no pager and no marker, so the screen quietly showed
+      // the first 100 of however many exist and every total computed from
+      // them under-reported.
+      const response = await resources.listAll('time_entries', [
         query.equal('workspaceId', workspaceId),
         query.equal('status', 'PENDING'),
         query.orderDesc('createdAt'),
-      ]
-      );
+      ]);
 
       return response.items as unknown as TimeEntry[];
     },
@@ -157,7 +184,8 @@ export function useCreateTimeEntry() {
       endTime: string;
       duration: number;
       isBillable: boolean;
-      billableRate?: number;
+      /** `null` for "no rate" — see TimeEntryUpdate. */
+      billableRate?: number | null;
       tags?: string[];
     }) => {
       const timeEntry = await resources.create('time_entries', 'unique()',
@@ -165,7 +193,7 @@ export function useCreateTimeEntry() {
           ...data,
           type: 'MANUAL',
           status: 'PENDING',
-          tags: data.tags ? JSON.stringify(data.tags) : '[]',
+          tags: data.tags ?? [],
         }
       );
 
@@ -204,22 +232,23 @@ export function useStartTimer() {
       const existingTimers = await resources.list('active_timers', [query.equal('userId', data.userId)]
       );
 
-      // Delete existing timer if any
+      // Delete existing timer if any (the server allows only one per user)
       if (existingTimers.items.length > 0) {
         await resources.remove('active_timers', existingTimers.items[0].id
         );
       }
 
-      const timer = await resources.create('active_timers', 'unique()',
-        {
-          ...data,
-          startTime: new Date().toISOString(),
-          isPaused: false,
-          totalPausedTime: 0,
-          type: data.type || 'TIMER',
-          pomodoroSettings: data.pomodoroSettings ? JSON.stringify(data.pomodoroSettings) : null,
-        }
-      );
+      // Server-owned lifecycle: startTime comes from the server clock, and
+      // pause/resume accumulate paused time the client cannot write.
+      const timer = await restClient.post('/api/v1/active_timers/start/', {
+        taskId: data.taskId,
+        taskTitle: data.taskTitle,
+        taskHierarchyId: data.taskHierarchyId,
+        projectId: data.projectId,
+        description: data.description,
+        type: data.type || 'TIMER',
+        ...(data.pomodoroSettings ? { pomodoroSettings: data.pomodoroSettings } : {}),
+      });
 
       return timer as unknown as ActiveTimer;
     },
@@ -241,17 +270,12 @@ export function useToggleTimer() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (data: {
-      timerId: string;
-      userId: string;
-      isPaused: boolean;
-      pausedAt?: string;
-      totalPausedTime?: number;
-    }) => {
-      const { timerId, userId, ...updateData } = data;
-
-      const timer = await resources.update('active_timers', timerId,
-        updateData
+    mutationFn: async (data: { userId: string; isPaused: boolean }) => {
+      // Dedicated endpoints: the server stamps pausedAt and accumulates
+      // totalPausedTime (both are read-only to clients, so a PATCH would be
+      // silently dropped and the paused interval billed as worked time).
+      const timer = await restClient.post(
+        `/api/v1/active_timers/${data.isPaused ? 'pause' : 'resume'}/`
       );
 
       return timer as unknown as ActiveTimer;
@@ -275,58 +299,20 @@ export function useStopTimer() {
 
   return useMutation({
     mutationFn: async (data: {
-      timerId: string;
       userId: string;
       workspaceId: string;
-      userName: string;
-      userEmail: string;
       taskId?: string;
-      taskTitle?: string;
-      taskHierarchyId?: string;
-      projectId?: string;
-      projectName?: string;
-      description: string;
-      startTime: string;
-      totalPausedTime: number;
       isBillable: boolean;
       billableRate?: number;
-      type: 'TIMER' | 'POMODORO';
     }) => {
-      const endTime = new Date().toISOString();
-      const startTime = new Date(data.startTime);
-      const endTimeDate = new Date(endTime);
-
-      // Calculate duration in minutes (excluding paused time)
-      const totalMinutes = Math.floor((endTimeDate.getTime() - startTime.getTime()) / 1000 / 60);
-      const duration = Math.max(0, totalMinutes - data.totalPausedTime);
-
-      // Create time entry
-      const timeEntry = await resources.create('time_entries', 'unique()',
-        {
-          workspaceId: data.workspaceId,
-          userId: data.userId,
-          userName: data.userName,
-          userEmail: data.userEmail,
-          taskId: data.taskId || null,
-          taskTitle: data.taskTitle || null,
-          taskHierarchyId: data.taskHierarchyId || null,
-          projectId: data.projectId || null,
-          projectName: data.projectName || null,
-          description: data.description,
-          startTime: data.startTime,
-          endTime,
-          duration,
-          isBillable: data.isBillable,
-          billableRate: data.billableRate || null,
-          type: data.type,
-          status: 'PENDING',
-          tags: '[]',
-        }
-      );
-
-      // Delete active timer
-      await resources.remove('active_timers', data.timerId
-      );
+      // The server closes the timer: it computes the duration from its own
+      // clock minus the accumulated paused time, creates the time entry and
+      // deletes the timer in one transaction.
+      const timeEntry = await restClient.post('/api/v1/active_timers/stop/', {
+        workspaceId: data.workspaceId,
+        isBillable: data.isBillable,
+        ...(data.billableRate !== undefined ? { billableRate: data.billableRate } : {}),
+      });
 
       return timeEntry as unknown as TimeEntry;
     },
@@ -353,7 +339,7 @@ export function useUpdateTimeEntry() {
     mutationFn: async (data: {
       id: string;
       userId: string;
-      updates: Partial<TimeEntry>;
+      updates: TimeEntryUpdate;
     }) => {
       const { id, updates } = data;
 
@@ -363,8 +349,11 @@ export function useUpdateTimeEntry() {
 
       return timeEntry as unknown as TimeEntry;
     },
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['time-entries', variables.userId] });
+    onSuccess: () => {
+      // Every time-entry list, not just the owner's: editing an entry that had
+      // already been approved or rejected re-opens it as PENDING server-side, so
+      // the task card and the approver's queue are stale too.
+      queryClient.invalidateQueries({ queryKey: ['time-entries'] });
       toast.success('Time entry updated');
     },
     onError: (error: unknown) => {
@@ -408,13 +397,9 @@ export function useApproveTimeEntry() {
       workspaceId: string;
       approvedBy: string;
     }) => {
-      const timeEntry = await resources.update('time_entries', data.id,
-        {
-          status: 'APPROVED',
-          approvedBy: data.approvedBy,
-          approvedAt: new Date().toISOString(),
-        }
-      );
+      // Dedicated approval endpoint: the server authorizes the manager, blocks
+      // self-approval and records approver/timestamp itself.
+      const timeEntry = await restClient.post(`/api/v1/time_entries/${data.id}/approve/`);
 
       return timeEntry as unknown as TimeEntry;
     },
@@ -442,12 +427,11 @@ export function useRejectTimeEntry() {
       workspaceId: string;
       rejectionReason: string;
     }) => {
-      const timeEntry = await resources.update('time_entries', data.id,
-        {
-          status: 'REJECTED',
-          rejectionReason: data.rejectionReason,
-        }
-      );
+      // Dedicated rejection endpoint: the server authorizes the manager and
+      // records the decision itself.
+      const timeEntry = await restClient.post(`/api/v1/time_entries/${data.id}/reject/`, {
+        reason: data.rejectionReason,
+      });
 
       return timeEntry as unknown as TimeEntry;
     },

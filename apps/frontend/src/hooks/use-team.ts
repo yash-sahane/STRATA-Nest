@@ -17,6 +17,13 @@ export interface TeamMember {
   | 'TESTER'
   | 'CONTENT_ENGINEER'
   | 'MEMBER';
+  /**
+   * The role exactly as stored on the membership. `role` above is normalized
+   * for display and collapses anything unrecognised (a custom workspace role)
+   * to MEMBER, so writes must round-trip THIS value or they silently demote
+   * the member.
+   */
+  rawRole: string;
   workspaceId: string;
   status: 'ACTIVE' | 'INACTIVE' | 'INVITED';
   createdAt: string;
@@ -49,15 +56,24 @@ function normalizeRole(role: string): TeamMember['role'] {
   return roleMap[role] || 'MEMBER';
 }
 
+/** Clamp to the three states the UI renders — an unmodelled one would make
+ *  every STATUS_CONFIG lookup undefined and crash the whole table. */
+function normalizeStatus(status: string): TeamMember['status'] {
+  return status === 'INACTIVE' || status === 'INVITED' || status === 'ACTIVE' ? status : 'ACTIVE';
+}
+
 export function useTeamMembers(workspaceId?: string) {
   return useQuery({
     queryKey: ['team-members', workspaceId],
     queryFn: async () => {
       if (!workspaceId) return [];
 
-      const response = await resources.list('workspace_members', [
+      // listAll, not list: the caller's own membership is what the whole
+      // client-side permission model is derived from, and a single page would
+      // drop it (and its role) in a workspace with more members than the page
+      // size.
+      const response = await resources.listAll('workspace_members', [
         query.equal('workspaceId', workspaceId),
-        query.limit(100),
       ]);
 
       // Map workspace_members to TeamMember interface
@@ -69,8 +85,9 @@ export function useTeamMembers(workspaceId?: string) {
         phone: doc.phone || '',
         avatar: doc.avatar || '',
         role: normalizeRole(doc.role),
+        rawRole: doc.role || 'MEMBER',
         workspaceId: doc.workspaceId,
-        status: doc.status || 'ACTIVE',
+        status: normalizeStatus(doc.status || 'ACTIVE'),
         createdAt: doc.createdAt,
         updatedAt: doc.updatedAt,
       })) as TeamMember[];
@@ -110,11 +127,17 @@ export function useCreateTeamMember() {
   });
 }
 
+/** role/status are the only fields a membership PATCH accepts. */
+export type TeamMemberUpdate = {
+  role?: string;
+  status?: TeamMember['status'];
+};
+
 export function useUpdateTeamMember() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ id, data }: { id: string; data: Partial<TeamMember> }) => {
+    mutationFn: async ({ id, data }: { id: string; data: TeamMemberUpdate }) => {
       const response = await resources.update('workspace_members', id, data);
 
       return response as unknown as TeamMember;
@@ -182,8 +205,11 @@ export const STATUS_CONFIG = {
     label: 'Inactive',
     color: 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200',
   },
+  // Spelled out because it is not what it sounds like: the API authorizes on
+  // `status: 'ACTIVE'` alone, so an INVITED membership is a lockout, not a
+  // pending welcome — and a bare "Invited" badge read as the opposite.
   INVITED: {
-    label: 'Invited',
+    label: 'Invited (no access)',
     color: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200',
   },
 } as const;
@@ -260,12 +286,19 @@ export function useMemberTaskCounts(workspaceId?: string) {
   });
 }
 
-// Helper to get workload level label
+/**
+ * Workload level label and its text colour.
+ *
+ * Semantic *-text tokens rather than raw palette shades: the 600-weight colours
+ * this used to return measure ~3.2:1 on a light card, under the 4.5:1 AA floor,
+ * and carried no dark-mode variant at all. Only "Moderate" keeps a raw shade —
+ * there is no token between warning and success — pinned to 700 so it passes.
+ */
 export function getWorkloadLevel(activeTasks: number): { label: string; color: string } {
-  if (activeTasks === 0) return { label: 'Available', color: 'text-green-600' };
-  if (activeTasks <= 3) return { label: 'Light', color: 'text-green-600' };
-  if (activeTasks <= 6) return { label: 'Moderate', color: 'text-yellow-600' };
-  if (activeTasks <= 10) return { label: 'Busy', color: 'text-orange-600' };
-  return { label: 'Overloaded', color: 'text-red-600' };
+  if (activeTasks === 0) return { label: 'Available', color: 'text-success-text' };
+  if (activeTasks <= 3) return { label: 'Light', color: 'text-success-text' };
+  if (activeTasks <= 6) return { label: 'Moderate', color: 'text-yellow-700 dark:text-yellow-400' };
+  if (activeTasks <= 10) return { label: 'Busy', color: 'text-warning-text' };
+  return { label: 'Overloaded', color: 'text-destructive-text' };
 }
 

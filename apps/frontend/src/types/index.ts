@@ -124,6 +124,8 @@ export interface ClientRequirement {
 // Functional Requirements
 export type FRComplexity = 'LOW' | 'MEDIUM' | 'HIGH' | 'VERY_HIGH';
 
+export type FRType = 'FUNCTIONAL' | 'NON_FUNCTIONAL' | 'TECHNICAL' | 'BUSINESS';
+
 export interface FunctionalRequirement {
   id: string;
   workspaceId: string;
@@ -132,8 +134,12 @@ export interface FunctionalRequirement {
   epicId?: string; // ✅ FIXED: Link to parent epic (primary parent)
   sprintId?: string; // ✅ NEW: Optional sprint assignment
   clientRequirementId?: string; // Keep for traceability
+  /** Parent FR for sub-requirements; '' (not undefined) for a top-level FR. */
+  parentRequirementId?: string;
   title: string;
   description: string;
+  /** Classification the create/edit dialogs send; server defaults to FUNCTIONAL. */
+  type?: FRType;
   complexity: FRComplexity;
   priority?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'; // ✅ NEW: Priority field
   status: FunctionalRequirementStatus;
@@ -223,6 +229,13 @@ export interface Task {
   blockedBy: string[]; // Array of task IDs that block this task
   blocks: string[]; // Array of task IDs that this task blocks
   createdAt: string;
+  /**
+   * When the task last entered DONE (null while it is not done). Burndowns and
+   * completion trends must bucket on this, not `updatedAt` — any edit to a done
+   * task moves updatedAt and would re-date the completion.
+   * The API returns it on every task (apps/api/src/modules/tasks/mappers.ts).
+   */
+  completedAt?: string | null;
   updatedAt: string;
 }
 
@@ -532,7 +545,9 @@ export interface ActiveTimer {
   startTime: string;
   isPaused: boolean;
   pausedAt?: string;
-  totalPausedTime: number; // in minutes
+  // SECONDS, not minutes: the column is `total_paused_time` and
+  // TimeTrackingWorkflows increments it by elapsed seconds on every resume.
+  totalPausedTime: number;
   type: 'TIMER' | 'POMODORO';
   pomodoroSettings?: {
     workDuration: number; // in minutes (default: 25)
@@ -586,24 +601,27 @@ export interface TimesheetDay {
 // Join Requests
 export type JoinRequestStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 
+/**
+ * Mirrors `joinRequestResponse` on the API. Everything the server actually
+ * serialises is required here; the display fields below it are NOT on the wire
+ * and must be joined in client-side (they used to be typed as required, so any
+ * consumer reading `userName`/`inviteCode` silently got `undefined`).
+ */
 export interface JoinRequest {
   id: string;
   workspaceId: string;
-  workspaceName: string;
   userId: string;
-  userName: string;
-  userEmail: string;
-  userAvatar?: string;
-  inviteCode: string;
+  message: string; // '' when the requester left no note
   status: JoinRequestStatus;
-  message?: string; // Optional message from user when requesting
-  requestedAt: string;
-  processedAt?: string;
-  processedBy?: string; // Admin/Manager userId who processed
-  processorName?: string;
-  rejectionReason?: string;
+  handledBy?: string | null; // Admin/Manager userId who approved or rejected
   createdAt: string;
   updatedAt: string;
+
+  // --- Not returned by the API: resolve from the workspace/user caches. ---
+  workspaceName?: string;
+  userName?: string;
+  userEmail?: string;
+  userAvatar?: string;
 }
 
 // Workspace Roles

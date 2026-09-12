@@ -12,13 +12,26 @@ import { toast as sonnerToast } from 'sonner';
  * signature onto sonner, so all existing call sites (9 data hooks + several
  * components) surface feedback again with no per-call changes required.
  *
- * The historical variant set was only `'default' | 'destructive'`. In this
- * codebase the `'default'` variant is used exclusively for positive
- * confirmations (`title: 'Success'`, `'Sprint created'`, …), so it maps to a
- * success toast. `'destructive'` maps to an error toast. `'warning'`/`'info'`
- * are also accepted for code migrated to be explicit about intent.
+ * The historical variant set was only `'default' | 'destructive'`.
+ * `'destructive'` maps to an error toast. `'warning'`/`'info'`/`'success'` are
+ * accepted for code migrated to be explicit about intent.
  *
- * New code should import `toast` from `'sonner'` directly.
+ * `'default'` (i.e. no variant) maps to a SUCCESS toast, which is a legacy
+ * compatibility mapping, not the intent of the name: ~35 call sites across the
+ * data hooks (`title: 'Success'`, `'Sprint created'`, `'Checked In'`, …) are
+ * confirmations of a user-initiated mutation and omit the variant, so a neutral
+ * default would silently strip the green confirmation off all of them.
+ *
+ * It is only WRONG at the informational sites, which must therefore pass a
+ * variant explicitly — currently `components/notifications/notification-center.tsx`
+ * ('New Notification', whose description is an inbound payload title that can
+ * read 'Leave Request Rejected' on a green card) needs `variant: 'info'`. Once
+ * every informational site is explicit AND the confirmation sites pass
+ * `variant: 'success'`, flip the `'default'` arm below to `sonnerToast.message`.
+ * Both halves have to land together — this file cannot do it alone.
+ *
+ * New code should import `toast` from `'sonner'` directly, or pass an explicit
+ * variant here.
  */
 
 type ToastVariant = 'default' | 'destructive' | 'success' | 'warning' | 'info';
@@ -36,7 +49,12 @@ export interface ToastReturn {
   update: (options: ToastOptions) => void;
 }
 
-function toast(options: ToastOptions = {}): ToastReturn {
+/**
+ * Route one toast to the sonner function that matches its variant. Passing an
+ * existing `id` makes sonner replace that toast in place instead of stacking a
+ * new one.
+ */
+function emit(options: ToastOptions, id?: string | number): string | number {
   const { title, description, variant = 'default', duration } = options;
 
   // If a title is present it becomes the toast's main line and the description
@@ -47,36 +65,34 @@ function toast(options: ToastOptions = {}): ToastReturn {
   const sonnerOptions = {
     description: hasTitle ? description : undefined,
     duration,
+    id,
   };
 
-  let id: string | number;
   switch (variant) {
     case 'destructive':
-      id = sonnerToast.error(message, sonnerOptions);
-      break;
+      return sonnerToast.error(message, sonnerOptions);
     case 'warning':
-      id = sonnerToast.warning(message, sonnerOptions);
-      break;
+      return sonnerToast.warning(message, sonnerOptions);
     case 'info':
-      id = sonnerToast.info(message, sonnerOptions);
-      break;
+      return sonnerToast.info(message, sonnerOptions);
     case 'success':
     case 'default':
     default:
-      id = sonnerToast.success(message, sonnerOptions);
-      break;
+      return sonnerToast.success(message, sonnerOptions);
   }
+}
+
+function toast(options: ToastOptions = {}): ToastReturn {
+  const id = emit(options);
 
   return {
     id,
     dismiss: () => sonnerToast.dismiss(id),
+    // Re-emit under the same id so the update keeps the variant. The previous
+    // implementation always called sonnerToast.message, which silently
+    // downgraded an error toast to a neutral card on update.
     update: (next: ToastOptions) => {
-      const nextHasTitle =
-        next.title !== undefined && next.title !== null && next.title !== '';
-      sonnerToast.message(nextHasTitle ? next.title : (next.description ?? ''), {
-        id,
-        description: nextHasTitle ? next.description : undefined,
-      });
+      emit(next, id);
     },
   };
 }

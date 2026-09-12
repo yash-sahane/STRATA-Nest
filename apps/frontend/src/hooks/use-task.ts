@@ -1,9 +1,12 @@
 ﻿import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { resources } from '@/lib/api/client';
 import { query, id } from '@/lib/api/client';
+import { restClient } from '@/lib/api/rest-client';
 import type { Task, TaskStatus, TaskPriority, FunctionalRequirement } from '@/types';
 import { toast } from 'sonner';
 import { createBulkNotifications } from '@/hooks/use-notification';
+import { deriveEpicMetrics } from '@/hooks/use-epic';
+import { calculateFRStatusFromTasks } from '@/hooks/use-functional-requirement';
 import { generateTaskId, generateTaskIdWithoutFR } from '@/lib/hierarchy-id-generator';
 import { logger } from '@/lib/logger';
 
@@ -12,6 +15,50 @@ type TaskDependencyMutation = {
   targetTaskId: string;
   type: 'blocks' | 'blockedBy';
 };
+
+/**
+ * A refusal raised by a client-side task gate (review-before-done, role check).
+ * Thrown rather than returned so React Query treats the mutation as FAILED —
+ * otherwise onSuccess would run and fire the success toast, the parent-progress
+ * writes and the completion notifications for a change that never happened.
+ */
+class TaskGateError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TaskGateError';
+  }
+}
+
+/**
+ * Client-side affordance for the completion rules. The AUTHORITY is
+ * `TasksService.patchStatus` on the server, which rejects a non-REVIEW → DONE
+ * transition and requires `task:write`; this exists only so the user gets an
+ * immediate, specific message instead of a round trip.
+ *
+ * `canMarkDone` is deliberately tri-state:
+ *   true      — permitted, proceed
+ *   false     — resolved and refused, so say so now
+ *   undefined — NOT YET KNOWN (the membership request has not settled) — do not
+ *               refuse. The old gate read an unresolved role as the empty string
+ *               and denied, so a genuine manager dragging a card onto Done on
+ *               first paint was told they were not a manager. Letting it through
+ *               costs one request and the server answers correctly.
+ *
+ * The previous test was `role.includes('manager') || role.includes('admin')`,
+ * which no custom role could satisfy, which no platform admin could pass (they
+ * hold no membership row, so the role was null), and whose 'admin'/'owner' arms
+ * named roles that do not exist in this system at all.
+ */
+function assertCanMarkDone(currentStatus: string, canMarkDone?: boolean): void {
+  if (currentStatus !== 'REVIEW') {
+    throw new TaskGateError(
+      'Tasks must be reviewed before marking as done. Please move to Review first.'
+    );
+  }
+  if (canMarkDone === false) {
+    throw new TaskGateError('Only managers or assistant managers can mark tasks as done.');
+  }
+}
 
 function normalizeIdList(value: unknown): string[] {
   if (Array.isArray(value)) return value.filter((id): id is string => typeof id === 'string');
@@ -26,64 +73,162 @@ function normalizeIdList(value: unknown): string[] {
   }
 }
 
-function addUniqueId(ids: string[], id: string): string[] {
-  return ids.includes(id) ? ids : [...ids, id];
+// The API returns labels/attachments/customFields as native JSON (Prisma `Json`
+// columns passed straight through by taskResponse). Legacy Appwrite rows stored
+// them as JSON strings, so keep parsing those — but the native shape must win,
+// otherwise every real value is replaced by an empty literal.
+function normalizeJsonArray(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== 'string' || !value.trim()) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
-// Update FR and Epic progress based on task completion.
-async function updateParentProgress(task: Task) {
+function normalizeJsonObject(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value !== 'string' || !value.trim()) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Single normalizer for a task row from the API, shared by every read hook. */
+export function normalizeTask(doc: Record<string, unknown>): Task {
+  return {
+    ...doc,
+    labels: normalizeJsonArray(doc.labels),
+    attachments: normalizeJsonArray(doc.attachments),
+    customFields: normalizeJsonObject(doc.customFields),
+    assigneeIds: normalizeIdList(doc.assigneeIds),
+    // ? assignedTo and assignedToNames are array types in DB - use directly
+    assignedTo: Array.isArray(doc.assignedTo) ? doc.assignedTo : normalizeIdList(doc.assigneeIds),
+    assignedToNames: Array.isArray(doc.assignedToNames) ? doc.assignedToNames : [],
+    blockedBy: normalizeIdList(doc.blockedBy),
+    blocks: normalizeIdList(doc.blocks),
+  } as unknown as Task;
+}
+
+/** The parent links a task change can invalidate. */
+type ParentLinks = { functionalRequirementId?: string; epicId?: string };
+
+/**
+ * Recompute the FR's and Epic's rollups from their CURRENT task sets.
+ *
+ * Called after every create, status change and delete — not just status edits.
+ * The FR dialog labels Status "(Auto-calculated from tasks)", so it has to
+ * track task creation and deletion too; before this, linking the first task to
+ * an FR or deleting its last one left both the progress bar and the status
+ * frozen at their previous values.
+ *
+ * `calculateFRStatusFromTasks` is the FR module's own definition of that
+ * mapping — shared rather than re-derived so the two can never disagree.
+ *
+ * Exported because `recalculateFRRollup` in use-functional-requirement.ts is a
+ * second copy of the FR half of this (the sprint-assignment branch creates its
+ * task with `resources.create`, bypassing useCreateTask). That copy should call
+ * this instead; it is exported here rather than moved next to
+ * `calculateFRStatusFromTasks` only because this file does not own that one.
+ */
+export async function updateParentProgress(task: ParentLinks) {
   logger.debug('updateParentProgress called with task', {
-    taskId: task.id,
     functionalRequirementId: task.functionalRequirementId,
     epicId: task.epicId,
-    status: task.status,
   });
+
+  // The two rollups are INDEPENDENT and are attempted independently.
+  //
+  // They used to share one try/catch, so any failure on the functional
+  // requirement — most often a 403, because the delivery roles can move a task
+  // but not write a requirement — threw before the epic write was even issued.
+  // A developer dragging a card to Done left BOTH the requirement and the epic
+  // frozen, and the epic write was never the one that was refused.
+  let failed = false;
 
   try {
     // Update FR progress if task is linked to an FR
     if (task.functionalRequirementId) {
       // Get all tasks for this FR
-      const frTasks = await resources.list('tasks', [
+      const frTasks = await resources.listAll('tasks', [
         query.equal('functionalRequirementId', task.functionalRequirementId),
-        query.limit(100),
       ]);
 
-      if (frTasks.total > 0) {
-        const completedTasks = frTasks.items.filter((t: any) => t.status === 'DONE').length;
-        const progress = Math.round((completedTasks / frTasks.total) * 100);
+      const frItems = frTasks.items as unknown as Task[];
+      const completedTasks = frItems.filter((t) => t.status === 'DONE').length;
+      // An emptied FR is 0%, not "keep the last number you saw".
+      const progress = frItems.length > 0 ? Math.round((completedTasks / frItems.length) * 100) : 0;
+      // The FR's CURRENT status is load-bearing input, not decoration:
+      // calculateFRStatusFromTasks needs it to keep DEPLOYED terminal (a
+      // shipped FR must not fall back to TESTED when a teammate edits one of
+      // its tasks) and to leave a task-less FR where a human put it instead of
+      // snapping it to DRAFT.
+      const currentFR = (await resources
+        .get('functional_requirements', task.functionalRequirementId)
+        .catch(() => null)) as { status?: FunctionalRequirement['status'] } | null;
+      const status = calculateFRStatusFromTasks(frItems, currentFR?.status);
 
-        logger.debug('Updating FR progress', {
-          frId: task.functionalRequirementId,
-          totalTasks: frTasks.total,
-          completedTasks,
-          progress,
-        });
+      logger.debug('Updating FR progress', {
+        frId: task.functionalRequirementId,
+        totalTasks: frItems.length,
+        completedTasks,
+        progress,
+        status,
+      });
 
-        // Update FR progress
-        await resources.update('functional_requirements', task.functionalRequirementId,
-          { progress }
-        );
-      }
+      await resources.update('functional_requirements', task.functionalRequirementId, {
+        progress,
+        status,
+      });
     }
+  } catch (error) {
+    logger.error('Failed to update functional requirement progress', { error });
+    failed = true;
+  }
 
+  try {
     // Update Epic progress if task is linked to an Epic
     if (task.epicId) {
       // Get all tasks for this Epic
-      const epicTasks = await resources.list('tasks', [
+      const epicTasks = await resources.listAll('tasks', [
         query.equal('epicId', task.epicId),
-        query.limit(100),
       ]);
 
-      if (epicTasks.total > 0) {
-        const completedTasks = epicTasks.items.filter((t: any) => t.status === 'DONE').length;
-        const progress = Math.round((completedTasks / epicTasks.total) * 100);
+      const epicItems = epicTasks.items as unknown as Task[];
+      // deriveEpicMetrics is the app's ONE definition of an epic's rollup — the
+      // same function the /epics cards, the stat tiles and the epic dialog
+      // render, and the same rule EpicsService.deriveRollup applies server-side.
+      //
+      // The inline rule that used to live here derived status from the ROUNDED
+      // percentage: `progress === 100 ? 'DONE' : ...`. Math.round(240/241*100)
+      // is 100, so an epic with one task still open was written
+      // {progress:100, status:'DONE'} and then rendered "In Progress" by the
+      // very cards above it. "Every task is done" is a count comparison
+      // (completed === total), never a percentage.
+      const { progress, status: epicStatus, totalTasks, completedTasks } =
+        deriveEpicMetrics(epicItems);
 
-        // Update Epic progress and status
-        const epicStatus = progress === 100 ? 'DONE' : progress > 0 ? 'IN_PROGRESS' : 'TODO';
-
+      // Same rule as the FR above: an epic whose last task was just deleted has
+      // no task set to derive a status from, so writing 'TODO' would silently
+      // undo whatever a human set. Progress still goes to 0.
+      if (totalTasks === 0) {
+        // Progress still goes to 0, but there is no task set to derive a status
+        // from. Fall through rather than returning: the failure tail below is
+        // shared, and an early return used to skip it.
+        await resources.update('epics', task.epicId, { progress });
+      } else {
         logger.debug('Updating Epic progress', {
           epicId: task.epicId,
-          totalTasks: epicTasks.total,
+          totalTasks,
           completedTasks,
           progress,
           epicStatus,
@@ -96,8 +241,48 @@ async function updateParentProgress(task: Task) {
       }
     }
   } catch (error) {
-    logger.error('Failed to update parent progress', { error });
-    // Don't throw - progress update is not critical
+    logger.error('Failed to update epic progress', { error });
+    failed = true;
+  }
+
+  if (failed) {
+    // Still don't throw: the task write itself already succeeded, and the
+    // rollup is derived data that the next successful recompute repairs.
+    // But it must not be SILENT either — a 403 on the FR/Epic write used to
+    // leave the progress bar quietly frozen with nothing on screen to say so.
+    // A stable id collapses a burst of failures (one per task in a bulk edit)
+    // into a single toast.
+    toast.warning('Epic / requirement progress could not be updated.', {
+      id: 'parent-rollup-failed',
+      description: 'Your task change was saved — only the rolled-up progress is stale.',
+    });
+  }
+}
+
+/** Invalidate everything that reads an FR/Epic rollup after the writes above. */
+function invalidateParents(
+  queryClient: ReturnType<typeof useQueryClient>,
+  projectId: string,
+  links: ParentLinks,
+) {
+  queryClient.invalidateQueries({ queryKey: ['functional-requirements', projectId] });
+  queryClient.invalidateQueries({ queryKey: ['epics', projectId] });
+  if (links.functionalRequirementId) {
+    queryClient.invalidateQueries({
+      queryKey: ['functional-requirement', links.functionalRequirementId],
+    });
+    // useTasksByFunctionalRequirement keys on ['tasks', 'functional-requirement',
+    // frId], which does NOT share a prefix with the ['tasks', projectId]
+    // invalidation the callers already issue — TanStack matches keys
+    // element-by-element, and 'functional-requirement' !== projectId. Without
+    // this the FR detail dialog's linked-task list and its progress bar stayed
+    // stale after a task was created, deleted or re-pointed at another FR.
+    queryClient.invalidateQueries({
+      queryKey: ['tasks', 'functional-requirement', links.functionalRequirementId],
+    });
+  }
+  if (links.epicId) {
+    queryClient.invalidateQueries({ queryKey: ['epic', links.epicId] });
   }
 }
 
@@ -107,43 +292,15 @@ export function useTasks(projectId?: string) {
     queryFn: async () => {
       if (!projectId) return [];
 
-      const response = await resources.list('tasks', [
+      // listAll, not list: a single page stops at the server's default of 100
+      // rows, which would silently hide tasks and make every board/analytics
+      // rollup computed from this hook wrong.
+      const response = await resources.listAll('tasks', [
         query.equal('projectId', projectId),
         query.orderAsc('position'),
       ]);
 
-      // Parse JSON fields
-      const tasks = response.items.map((doc) => ({
-        ...doc,
-        labels: typeof doc.labels === 'string' && doc.labels ? JSON.parse(doc.labels) : [],
-        attachments:
-          typeof doc.attachments === 'string' && doc.attachments ? JSON.parse(doc.attachments) : [],
-        customFields:
-          typeof doc.customFields === 'string' && doc.customFields
-            ? JSON.parse(doc.customFields)
-            : {},
-        assigneeIds:
-          typeof doc.assigneeIds === 'string' && doc.assigneeIds ? JSON.parse(doc.assigneeIds) : [],
-        // ? assignedTo and assignedToNames are array types in DB - use directly
-        assignedTo: Array.isArray(doc.assignedTo)
-          ? doc.assignedTo
-          : Array.isArray(doc.assigneeIds)
-            ? doc.assigneeIds
-            : [],
-        assignedToNames: Array.isArray(doc.assignedToNames) ? doc.assignedToNames : [],
-        blockedBy: doc.blockedBy
-          ? typeof doc.blockedBy === 'string'
-            ? JSON.parse(doc.blockedBy)
-            : doc.blockedBy
-          : [],
-        blocks: doc.blocks
-          ? typeof doc.blocks === 'string'
-            ? JSON.parse(doc.blocks)
-            : doc.blocks
-          : [],
-      })) as unknown as Task[];
-
-      return tasks;
+      return response.items.map(normalizeTask);
     },
     enabled: !!projectId,
   });
@@ -156,40 +313,14 @@ export function useWorkspaceTasks(workspaceId?: string) {
     queryFn: async () => {
       if (!workspaceId) return [];
 
-      const response = await resources.list('tasks', [
+      // This hook feeds every workspace/team analytic, so it must walk all
+      // pages — a single limit(1000) truncates without any warning.
+      const response = await resources.listAll('tasks', [
         query.equal('workspaceId', workspaceId),
         query.orderDesc('createdAt'),
-        query.limit(1000),
       ]);
 
-      // Parse JSON fields
-      const tasks = response.items.map((doc) => ({
-        ...doc,
-        labels: typeof doc.labels === 'string' && doc.labels ? JSON.parse(doc.labels) : [],
-        attachments:
-          typeof doc.attachments === 'string' && doc.attachments ? JSON.parse(doc.attachments) : [],
-        customFields:
-          typeof doc.customFields === 'string' && doc.customFields
-            ? JSON.parse(doc.customFields)
-            : {},
-        assigneeIds:
-          typeof doc.assigneeIds === 'string' && doc.assigneeIds ? JSON.parse(doc.assigneeIds) : [],
-        // ? assignedTo and assignedToNames are array types in DB - use directly
-        assignedTo: Array.isArray(doc.assignedTo) ? doc.assignedTo : [],
-        assignedToNames: Array.isArray(doc.assignedToNames) ? doc.assignedToNames : [],
-        blockedBy: doc.blockedBy
-          ? typeof doc.blockedBy === 'string'
-            ? JSON.parse(doc.blockedBy)
-            : doc.blockedBy
-          : [],
-        blocks: doc.blocks
-          ? typeof doc.blocks === 'string'
-            ? JSON.parse(doc.blocks)
-            : doc.blocks
-          : [],
-      })) as unknown as Task[];
-
-      return tasks;
+      return response.items.map(normalizeTask);
     },
     enabled: !!workspaceId,
   });
@@ -203,39 +334,7 @@ export function useTask(taskId?: string) {
 
       const response = await resources.get('tasks', taskId);
 
-      // Parse JSON fields
-      const task = {
-        ...response,
-        labels:
-          typeof response.labels === 'string' && response.labels ? JSON.parse(response.labels) : [],
-        attachments:
-          typeof response.attachments === 'string' && response.attachments
-            ? JSON.parse(response.attachments)
-            : [],
-        customFields:
-          typeof response.customFields === 'string' && response.customFields
-            ? JSON.parse(response.customFields)
-            : {},
-        assigneeIds:
-          typeof response.assigneeIds === 'string' && response.assigneeIds
-            ? JSON.parse(response.assigneeIds)
-            : [],
-        // ? assignedTo and assignedToNames are array types in DB - use directly
-        assignedTo: Array.isArray(response.assignedTo) ? response.assignedTo : [],
-        assignedToNames: Array.isArray(response.assignedToNames) ? response.assignedToNames : [],
-        blockedBy: response.blockedBy
-          ? typeof response.blockedBy === 'string'
-            ? JSON.parse(response.blockedBy)
-            : response.blockedBy
-          : [],
-        blocks: response.blocks
-          ? typeof response.blocks === 'string'
-            ? JSON.parse(response.blocks)
-            : response.blocks
-          : [],
-      } as unknown as Task;
-
-      return task;
+      return normalizeTask(response);
     },
     enabled: !!taskId,
   });
@@ -248,38 +347,12 @@ export function useTasksByFunctionalRequirement(functionalRequirementId?: string
     queryFn: async () => {
       if (!functionalRequirementId) return [];
 
-      const response = await resources.list('tasks', [
+      const response = await resources.listAll('tasks', [
         query.equal('functionalRequirementId', functionalRequirementId),
         query.orderAsc('position'),
       ]);
 
-      // Parse JSON fields
-      const tasks = response.items.map((doc) => ({
-        ...doc,
-        labels: typeof doc.labels === 'string' && doc.labels ? JSON.parse(doc.labels) : [],
-        attachments:
-          typeof doc.attachments === 'string' && doc.attachments ? JSON.parse(doc.attachments) : [],
-        customFields:
-          typeof doc.customFields === 'string' && doc.customFields
-            ? JSON.parse(doc.customFields)
-            : {},
-        assigneeIds:
-          typeof doc.assigneeIds === 'string' && doc.assigneeIds ? JSON.parse(doc.assigneeIds) : [],
-        assignedTo: Array.isArray(doc.assignedTo) ? doc.assignedTo : [],
-        assignedToNames: Array.isArray(doc.assignedToNames) ? doc.assignedToNames : [],
-        blockedBy: doc.blockedBy
-          ? typeof doc.blockedBy === 'string'
-            ? JSON.parse(doc.blockedBy)
-            : doc.blockedBy
-          : [],
-        blocks: doc.blocks
-          ? typeof doc.blocks === 'string'
-            ? JSON.parse(doc.blocks)
-            : doc.blocks
-          : [],
-      })) as unknown as Task[];
-
-      return tasks;
+      return response.items.map(normalizeTask);
     },
     enabled: !!functionalRequirementId,
   });
@@ -315,8 +388,9 @@ export function useCreateTask() {
         throw new Error('Workspace id is required. Please select a workspace first.');
       }
 
-      // Get current tasks for counting
-      const existingTasks = await resources.list('tasks', [
+      // Get current tasks for counting. listAll: a truncated first page would
+      // freeze the sequence counter and re-issue hierarchy ids that exist.
+      const existingTasks = await resources.listAll('tasks', [
         query.equal('projectId', data.projectId),
       ]);
 
@@ -331,12 +405,30 @@ export function useCreateTask() {
         const siblings = existingTasks.items.filter(
           (t) => t.parentTaskId === data.parentTaskId
         );
-        const subtaskNumber = (siblings.length + 1).toString().padStart(2, '0');
+        // Advance past the HIGHEST existing suffix, not the sibling count:
+        // deleting a subtask would otherwise re-issue an id still in use.
+        const highestSuffix = siblings.reduce((max, t) => {
+          const n = Number.parseInt(String(t.hierarchyId ?? '').split('.').pop() ?? '', 10);
+          return Number.isFinite(n) && n > max ? n : max;
+        }, 0);
+        const subtaskNumber = (highestSuffix + 1).toString().padStart(2, '0');
         hierarchyId = `${parentHierarchyId}.${subtaskNumber}`;
       } else {
         // Top-level task: generate from FR ? Sprint ? Task hierarchy
         const topLevelTasks = existingTasks.items.filter((t) => !t.parentTaskId);
-        const taskSequence = topLevelTasks.length + 1;
+        // Same reasoning as subtasks: never go backwards past an id already issued.
+        // The trailing group is the sequence number in ALL THREE shapes this
+        // function emits: `PTES-LOG-01` and `ABC-FR-01-API-02` from
+        // hierarchy-id-generator, AND `ABC-T01` from the three plain-project
+        // fallbacks below. `/-(\d+)$/` missed the last of those — the `-` is
+        // followed by `T`, not a digit — so for a project whose tasks are all
+        // `-T##` the reduce returned 0, the sequence fell back to
+        // `topLevelTasks.length`, and deleting any task re-issued a live id.
+        const highestTaskNumber = topLevelTasks.reduce((max, t) => {
+          const n = Number.parseInt(/-T?(\d+)$/.exec(String(t.hierarchyId ?? ''))?.[1] ?? '', 10);
+          return Number.isFinite(n) && n > max ? n : max;
+        }, 0);
+        const taskSequence = Math.max(topLevelTasks.length, highestTaskNumber) + 1;
 
         if (data.functionalRequirementId && data.sprintId) {
           // Full hierarchy: FR ? Sprint ? Task
@@ -391,7 +483,7 @@ export function useCreateTask() {
         description: data.description || '',
         status: data.status,
         priority: data.priority,
-        assigneeIds: JSON.stringify(data.assigneeIds || []),
+        assigneeIds: data.assigneeIds || [],
         assignedTo: data.assigneeIds || [],
         assignedToNames: [],
         assignedBy: data.assignedBy || data.createdBy, // Who assigned (defaults to creator)
@@ -399,15 +491,20 @@ export function useCreateTask() {
         createdBy: data.createdBy,
         createdByName: data.createdByName || '', // Creator name for display
         dueDate: data.dueDate,
-        estimatedHours: data.estimatedHours || 0,
+        // NOT `|| 0`: that turned a blank Estimated Hours field into a stored 0,
+        // which every surface then printed as "0h" (and made the Hours sort and the
+        // time-efficiency analytics read a real estimate where there was none).
+        // TasksService.create writes `dto.estimatedHours ?? null`, so leaving it
+        // undefined is exactly how "no estimate" survives to the row as NULL.
+        estimatedHours: data.estimatedHours,
         actualHours: 0,
         sprintId: data.sprintId,
         epicId: data.epicId,
         functionalRequirementId: data.functionalRequirementId, // NEW: Store FR link
         parentTaskId: data.parentTaskId,
-        labels: JSON.stringify(data.labels || []),
-        attachments: JSON.stringify([]),
-        customFields: JSON.stringify({}),
+        labels: data.labels || [],
+        attachments: [],
+        customFields: {},
         position: existingTasks.total,
         blockedBy: [],
         blocks: [],
@@ -421,6 +518,17 @@ export function useCreateTask() {
     },
     onSuccess: async (createdTask, variables) => {
       queryClient.invalidateQueries({ queryKey: ['tasks', variables.projectId] });
+
+      // A new task changes its FR's/Epic's denominator (and can flip an empty
+      // FR out of DRAFT), so the rollups have to be recomputed on create too.
+      if (variables.functionalRequirementId || variables.epicId) {
+        const links = {
+          functionalRequirementId: variables.functionalRequirementId,
+          epicId: variables.epicId,
+        };
+        await updateParentProgress(links);
+        invalidateParents(queryClient, variables.projectId, links);
+      }
 
       // Send notifications to assignees
       if (variables.assigneeIds && variables.assigneeIds.length > 0) {
@@ -478,46 +586,24 @@ export function useUpdateTask() {
       taskId: string;
       projectId: string;
       updates: Partial<Task>;
-      currentUserRole?: string; // ? Pass user role for permission check
+      /** Tri-state capability answer — see `assertCanMarkDone`. */
+      canMarkDone?: boolean;
+      /** Suppress the success toast (bulk callers toast once for the batch). */
+      silent?: boolean;
     }) => {
-      const { taskId, updates, currentUserRole } = data;
+      const { taskId, updates, canMarkDone } = data;
 
-      // ? Check permission for status changes to DONE
+      // Affordance only; TasksService.patchStatus is the enforcement point.
       if (updates.status === 'DONE') {
-        // Get current task to check its status
         const currentTask = await resources.get('tasks', taskId);
-
-        // ? ENFORCE: Tasks must be in REVIEW before marking as DONE
-        if (currentTask.status !== 'REVIEW') {
-          toast.warning(
-            'Tasks must be reviewed before marking as done. Please move to Review first.'
-          );
-          return currentTask as unknown as Task; // Return unchanged task
-        }
-
-        // ? ENFORCE: Only managers/assistant managers can mark tasks as DONE
-        const role = currentUserRole?.toLowerCase() || '';
-        const canMarkDone = role.includes('manager') || role.includes('admin') || role === 'owner';
-        if (!canMarkDone) {
-          toast.warning('Only managers or assistant managers can mark tasks as done.');
-          return currentTask as unknown as Task; // Return unchanged task
+        if (currentTask.status !== 'DONE') {
+          assertCanMarkDone(currentTask.status, canMarkDone);
         }
       }
 
-      // Stringify complex fields if they exist in updates
+      // labels/assigneeIds/attachments/customFields pass through unchanged —
+      // the API validates them as native arrays/objects.
       const processedUpdates: any = { ...updates };
-      if (updates.labels) {
-        processedUpdates.labels = JSON.stringify(updates.labels);
-      }
-      if (updates.assigneeIds) {
-        processedUpdates.assigneeIds = JSON.stringify(updates.assigneeIds);
-      }
-      if (updates.attachments) {
-        processedUpdates.attachments = JSON.stringify(updates.attachments);
-      }
-      if (updates.customFields) {
-        processedUpdates.customFields = JSON.stringify(updates.customFields);
-      }
 
       // ? Handle assignedTo and assignedToNames as arrays (not strings)
       // These fields are array types in the database
@@ -565,66 +651,58 @@ export function useUpdateTask() {
       if (context?.previousTasks) {
         queryClient.setQueryData(['tasks', variables.projectId], context.previousTasks);
       }
+      // A refused gate is not a failure of the app — keep the softer tone.
+      if (error instanceof TaskGateError) {
+        toast.warning(error.message);
+        return;
+      }
       toast.error(
         (error instanceof Error ? error.message : String(error)) || 'Failed to update task'
       );
     },
-    onSuccess: async (updatedTask, variables) => {
+    onSuccess: async (updatedTask, variables, context) => {
       queryClient.invalidateQueries({ queryKey: ['task', variables.taskId] });
       queryClient.invalidateQueries({ queryKey: ['tasks', variables.projectId] });
 
-      // ? Update FR and Epic progress if status changed
-      if (variables.updates.status) {
-        await updateParentProgress(updatedTask as unknown as Task);
-        // Invalidate FR and Epic queries to reflect progress
-        queryClient.invalidateQueries({
-          queryKey: ['functional-requirements', variables.projectId],
-        });
-        queryClient.invalidateQueries({ queryKey: ['epics', variables.projectId] });
-      }
-
-      // ? AUTO-SYNC FR STATUS: If task is linked to FR and status changed, update FR status
-      if (updatedTask.functionalRequirementId && variables.updates.status) {
-        try {
-          // Get all tasks linked to this FR
-          const frTasks = await resources.list('tasks', [
-            query.equal('functionalRequirementId', updatedTask.functionalRequirementId),
-          ]);
-
-          // Calculate new FR status from all its tasks
-          const tasks = frTasks.items as unknown as Task[];
-          const allDone = tasks.length > 0 && tasks.every((t) => t.status === 'DONE');
-          const anyInProgress = tasks.some(
-            (t) => t.status === 'IN_PROGRESS' || t.status === 'REVIEW'
-          );
-
-          let newFRStatus: FunctionalRequirement['status'];
-          // If there are no tasks linked, FR should remain or become DRAFT
-          if (tasks.length === 0) {
-            newFRStatus = 'DRAFT';
-          } else if (allDone) {
-            newFRStatus = 'TESTED'; // All tasks complete = FR is tested
-          } else if (anyInProgress) {
-            newFRStatus = 'IMPLEMENTED'; // Some tasks in progress
-          } else {
-            newFRStatus = 'APPROVED'; // Tasks exist but none started
-          }
-
-          // Update FR status
-          await resources.update('functional_requirements', updatedTask.functionalRequirementId,
-            { status: newFRStatus }
-          );
-
-          // Invalidate FR queries
-          queryClient.invalidateQueries({
-            queryKey: ['functional-requirement', updatedTask.functionalRequirementId],
+      // Refresh the FR/Epic rollups (progress AND the auto-calculated FR status,
+      // which used to be recomputed here by a second, slightly different copy of
+      // the same rules). Re-pointing a task at another FR/Epic invalidates BOTH
+      // ends, so the previous parents are refreshed too.
+      // The optimistic snapshot only exists when ['tasks', projectId] happened
+      // to be cached — it is NOT for a task opened from the dashboard, calendar
+      // or team page (those read ['workspace-tasks', wsId]). Falling back to the
+      // single-task cache keeps the OLD parent's rollup from going stale
+      // forever when a task is re-pointed at a different FR/Epic.
+      const previousTask =
+        context?.previousTasks?.find((t) => t.id === variables.taskId) ??
+        queryClient.getQueryData<Task>(['task', variables.taskId]) ??
+        queryClient
+          .getQueryData<Task[]>(['workspace-tasks', updatedTask.workspaceId])
+          ?.find((t) => t.id === variables.taskId);
+      const linkChanged =
+        variables.updates.functionalRequirementId !== undefined ||
+        variables.updates.epicId !== undefined;
+      if (variables.updates.status || linkChanged) {
+        const parents: ParentLinks[] = [
+          {
+            functionalRequirementId: updatedTask.functionalRequirementId,
+            epicId: updatedTask.epicId,
+          },
+        ];
+        if (
+          linkChanged &&
+          previousTask &&
+          (previousTask.functionalRequirementId !== updatedTask.functionalRequirementId ||
+            previousTask.epicId !== updatedTask.epicId)
+        ) {
+          parents.push({
+            functionalRequirementId: previousTask.functionalRequirementId,
+            epicId: previousTask.epicId,
           });
-          queryClient.invalidateQueries({
-            queryKey: ['functional-requirements', variables.projectId],
-          });
-        } catch (error) {
-          logger.error('Error syncing FR status', { error });
-          // Don't fail the task update if FR sync fails
+        }
+        for (const links of parents) {
+          await updateParentProgress(links);
+          invalidateParents(queryClient, variables.projectId, links);
         }
       }
 
@@ -647,13 +725,8 @@ export function useUpdateTask() {
 
       // Notification for task assignment changes
       if (updates.assigneeIds) {
-        const task = await resources.get('tasks', updatedTask.id);
-        logger.debug('Task fetched for notification check', { taskId: task.id });
-
-        const previousTask = queryClient
-          .getQueryData<Task[]>(['tasks', variables.projectId])
-          ?.find((t) => t.id === variables.taskId);
-
+        // `previousTask` above is the snapshot captured in onMutate BEFORE the
+        // optimistic cache update — the live cache already has the new assignees.
         if (previousTask) {
           // Ensure assigneeIds is an array
           const updatesAssignees = Array.isArray(updates.assigneeIds)
@@ -721,7 +794,9 @@ export function useUpdateTask() {
         }
       }
 
-      toast.success('Task updated successfully!');
+      if (!variables.silent) {
+        toast.success('Task updated successfully!');
+      }
     },
   });
 }
@@ -735,29 +810,16 @@ export function useUpdateTaskStatus() {
       projectId: string;
       status: TaskStatus;
       position: number;
-      currentUserRole?: string; // ? Pass user role for permission check
+      /** Tri-state capability answer — see `assertCanMarkDone`. */
+      canMarkDone?: boolean;
     }) => {
-      const { taskId, status, position, currentUserRole } = data;
+      const { taskId, status, position, canMarkDone } = data;
 
-      // ? Get current task to check its status
       const currentTask = await resources.get('tasks', taskId);
 
-      // ? ENFORCE: Tasks must be in REVIEW before marking as DONE
-      if (status === 'DONE' && currentTask.status !== 'REVIEW') {
-        toast.warning(
-          'Tasks must be reviewed before marking as done. Please move to Review first.'
-        );
-        return currentTask as unknown as Task; // Return unchanged task
-      }
-
-      // ? ENFORCE: Only managers/assistant managers can mark tasks as DONE
-      if (status === 'DONE') {
-        const role = currentUserRole?.toLowerCase() || '';
-        const canMarkDone = role.includes('manager') || role.includes('admin') || role === 'owner';
-        if (!canMarkDone) {
-          toast.warning('Only managers or assistant managers can mark tasks as done.');
-          return currentTask as unknown as Task; // Return unchanged task
-        }
+      // Affordance only; TasksService.patchStatus is the enforcement point.
+      if (status === 'DONE' && currentTask.status !== 'DONE') {
+        assertCanMarkDone(currentTask.status, canMarkDone);
       }
 
       const response = await resources.update('tasks', taskId, {
@@ -791,6 +853,10 @@ export function useUpdateTaskStatus() {
       if (context?.previousTasks) {
         queryClient.setQueryData(['tasks', variables.projectId], context.previousTasks);
       }
+      if (error instanceof TaskGateError) {
+        toast.warning(error.message);
+        return;
+      }
       toast.error(
         (error instanceof Error ? error.message : String(error)) || 'Failed to update task status'
       );
@@ -801,11 +867,9 @@ export function useUpdateTaskStatus() {
       // Silent success, already updated optimistically
       queryClient.invalidateQueries({ queryKey: ['tasks', variables.projectId] });
 
-      // ? Update FR and Epic progress based on task completion
-      await updateParentProgress(updatedTask as unknown as Task);
-      // Invalidate FR and Epic queries to reflect progress
-      queryClient.invalidateQueries({ queryKey: ['functional-requirements', variables.projectId] });
-      queryClient.invalidateQueries({ queryKey: ['epics', variables.projectId] });
+      // ? Update FR and Epic progress/status based on task completion
+      await updateParentProgress(updatedTask);
+      invalidateParents(queryClient, variables.projectId, updatedTask);
 
       // Fetch project name for notifications
       let projectName = updatedTask.projectId;
@@ -817,11 +881,13 @@ export function useUpdateTaskStatus() {
         logger.error('Failed to fetch project name', { error });
       }
 
-      // Create notification if task was completed - notify managers for review
-      if (variables.status === 'DONE') {
+      // Create notification if task was completed - notify managers for review.
+      // Gate on the RESOLVED task, not the requested status: a transition the
+      // server did not apply must not fan out completion notifications.
+      if (updatedTask.status === 'DONE') {
         try {
           // query workspace members to find managers/admins
-          const membersResponse = await resources.list('workspace_members', [query.equal('workspaceId', updatedTask.workspaceId)]
+          const membersResponse = await resources.listAll('workspace_members', [query.equal('workspaceId', updatedTask.workspaceId)]
           );
 
           // Filter for managers and admins
@@ -885,9 +951,9 @@ export function useUpdateTaskStatus() {
       }
 
       // ? Notify managers when task moves to REVIEW
-      if (variables.status === 'REVIEW') {
+      if (updatedTask.status === 'REVIEW') {
         try {
-          const membersResponse = await resources.list('workspace_members', [query.equal('workspaceId', updatedTask.workspaceId)]
+          const membersResponse = await resources.listAll('workspace_members', [query.equal('workspaceId', updatedTask.workspaceId)]
           );
 
           // Filter for managers and assistant managers
@@ -921,17 +987,16 @@ export function useUpdateTaskStatus() {
       }
 
       // ? Check if all sprint tasks are complete - notify managers to close sprint
-      if (variables.status === 'DONE' && updatedTask.sprintId) {
+      if (updatedTask.status === 'DONE' && updatedTask.sprintId) {
         try {
-          const sprintTasks = await resources.list('tasks', [
+          const sprintTasks = await resources.listAll('tasks', [
             query.equal('sprintId', updatedTask.sprintId),
-            query.limit(500),
           ]);
 
           const allTasksDone = sprintTasks.items.every((t: any) => t.status === 'DONE');
 
           if (allTasksDone && sprintTasks.total > 0) {
-            const membersResponse = await resources.list('workspace_members', [query.equal('workspaceId', updatedTask.workspaceId)]
+            const membersResponse = await resources.listAll('workspace_members', [query.equal('workspaceId', updatedTask.workspaceId)]
             );
 
             const managers = membersResponse.items
@@ -968,7 +1033,7 @@ export function useUpdateTaskStatus() {
       }
 
       // Create notification for status changes (except to DONE and REVIEW, already handled)
-      if (variables.status !== 'DONE' && variables.status !== 'REVIEW') {
+      if (updatedTask.status !== 'DONE' && updatedTask.status !== 'REVIEW') {
         // Ensure assignees is always an array
         const assigneesData = updatedTask.assigneeIds || [];
         const assignees = Array.isArray(assigneesData)
@@ -992,7 +1057,7 @@ export function useUpdateTaskStatus() {
               projectId: updatedTask.projectId,
               projectName: projectName,
               changerName: updatedTask.createdByName || 'Team Member',
-              newStatus: variables.status,
+              newStatus: updatedTask.status,
               entityType: 'TASK',
             },
           });
@@ -1007,11 +1072,31 @@ export function useDeleteTask() {
 
   return useMutation({
     mutationFn: async (data: { taskId: string; projectId: string }) => {
+      // Read the parent links BEFORE the delete — afterwards there is no row to
+      // learn them from, and the FR/Epic rollups have to be recomputed without
+      // this task or they keep counting it forever.
+      let links: ParentLinks = {};
+      try {
+        const doomed = await resources.get('tasks', data.taskId);
+        links = {
+          functionalRequirementId: doomed.functionalRequirementId,
+          epicId: doomed.epicId,
+        };
+      } catch (error) {
+        logger.error('Failed to read task before delete', { error });
+      }
+
       await resources.remove('tasks', data.taskId);
-      return data;
+      return { ...data, links };
     },
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       queryClient.invalidateQueries({ queryKey: ['tasks', data.projectId] });
+
+      if (data.links.functionalRequirementId || data.links.epicId) {
+        await updateParentProgress(data.links);
+        invalidateParents(queryClient, data.projectId, data.links);
+      }
+
       toast.success('Task deleted successfully!');
     },
     onError: (error: Error) => {
@@ -1056,34 +1141,14 @@ export function useAddTaskDependency() {
 
   return useMutation({
     mutationFn: async (data: TaskDependencyMutation) => {
-      const task = await resources.get('tasks', data.taskId);
-      const targetTask = await resources.get('tasks', data.targetTaskId
-      );
-
-      const blockedBy = normalizeIdList(task.blockedBy);
-      const blocks = normalizeIdList(task.blocks);
-      const targetBlockedBy = normalizeIdList(targetTask.blockedBy);
-      const targetBlocks = normalizeIdList(targetTask.blocks);
-
-      if (data.type === 'blockedBy') {
-        await resources.update('tasks', data.taskId, {
-          blockedBy: addUniqueId(blockedBy, data.targetTaskId),
-          blocks,
-        });
-        await resources.update('tasks', data.targetTaskId, {
-          blockedBy: targetBlockedBy,
-          blocks: addUniqueId(targetBlocks, data.taskId),
-        });
-      } else {
-        await resources.update('tasks', data.taskId, {
-          blockedBy,
-          blocks: addUniqueId(blocks, data.targetTaskId),
-        });
-        await resources.update('tasks', data.targetTaskId, {
-          blockedBy: addUniqueId(targetBlockedBy, data.taskId),
-          blocks: targetBlocks,
-        });
-      }
+      // One transactional call, not two PATCHes: the server writes both halves
+      // of the edge together and refuses one that would close a cycle. Writing
+      // them separately from here could leave `blockedBy` and `blocks` out of
+      // sync if the second request failed, and no cycle check ran server-side.
+      await restClient.post(`/api/v1/tasks/${data.taskId}/dependencies/`, {
+        targetTaskId: data.targetTaskId,
+        type: data.type,
+      });
 
       return data;
     },
@@ -1105,34 +1170,12 @@ export function useRemoveTaskDependency() {
 
   return useMutation({
     mutationFn: async (data: TaskDependencyMutation) => {
-      const task = await resources.get('tasks', data.taskId);
-      const targetTask = await resources.get('tasks', data.targetTaskId
+      // Same reasoning as the add: the server clears both halves of the edge in
+      // one transaction, so a failure can no longer strand a one-sided link.
+      await restClient.delete(
+        `/api/v1/tasks/${data.taskId}/dependencies/${data.targetTaskId}/`,
+        { params: { type: data.type } },
       );
-
-      const blockedBy = normalizeIdList(task.blockedBy);
-      const blocks = normalizeIdList(task.blocks);
-      const targetBlockedBy = normalizeIdList(targetTask.blockedBy);
-      const targetBlocks = normalizeIdList(targetTask.blocks);
-
-      if (data.type === 'blockedBy') {
-        await resources.update('tasks', data.taskId, {
-          blockedBy: blockedBy.filter((id) => id !== data.targetTaskId),
-          blocks,
-        });
-        await resources.update('tasks', data.targetTaskId, {
-          blockedBy: targetBlockedBy,
-          blocks: targetBlocks.filter((id) => id !== data.taskId),
-        });
-      } else {
-        await resources.update('tasks', data.taskId, {
-          blockedBy,
-          blocks: blocks.filter((id) => id !== data.targetTaskId),
-        });
-        await resources.update('tasks', data.targetTaskId, {
-          blockedBy: targetBlockedBy.filter((id) => id !== data.taskId),
-          blocks: targetBlocks,
-        });
-      }
 
       return data;
     },

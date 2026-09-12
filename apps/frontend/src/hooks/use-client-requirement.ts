@@ -1,6 +1,7 @@
 ﻿import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { resources } from '@/lib/api/client';
 import { query, id } from '@/lib/api/client';
+import { ApiError, restClient } from '@/lib/api/rest-client';
 import type { ClientRequirement, RequirementPriority, RequirementStatus } from '@/types';
 import { toast } from '@/hooks/use-toast';
 import { createBulkNotifications } from '@/hooks/use-notification';
@@ -12,14 +13,15 @@ export function useClientRequirements(projectId?: string) {
     queryFn: async () => {
       if (!projectId) return [];
 
-      const response = await resources.list('client_requirements', [query.equal('projectId', projectId), query.orderDesc('createdAt')]
+      const response = await resources.listAll('client_requirements', [query.equal('projectId', projectId), query.orderDesc('createdAt')]
       );
 
-      // Parse attachments from JSON string
+      // Normalize attachments: the API returns a native array, but a legacy row
+      // could still hold anything. Never JSON.parse inside a queryFn — one bad
+      // row would fail the whole list query with no way to recover.
       const requirements = response.items.map((doc) => ({
         ...doc,
-        attachments:
-          typeof doc.attachments === 'string' ? JSON.parse(doc.attachments) : doc.attachments || [],
+        attachments: Array.isArray(doc.attachments) ? doc.attachments : [],
       })) as unknown as ClientRequirement[];
 
       return requirements;
@@ -39,10 +41,7 @@ export function useClientRequirement(requirementId?: string) {
 
       const requirement = {
         ...response,
-        attachments:
-          typeof response.attachments === 'string'
-            ? JSON.parse(response.attachments)
-            : response.attachments || [],
+        attachments: Array.isArray(response.attachments) ? response.attachments : [],
       } as unknown as ClientRequirement;
 
       return requirement;
@@ -73,7 +72,7 @@ export function useCreateClientRequirement() {
         clientName: data.clientName,
         priority: data.priority,
         status: 'DRAFT' as RequirementStatus,
-        attachments: JSON.stringify([]),
+        attachments: [],
         createdBy: data.createdBy,
         createdByName: data.createdByName || '',
       };
@@ -100,7 +99,9 @@ export function useCreateClientRequirement() {
         }
 
         // Get workspace members to notify
-        const membersResponse = await resources.list('workspace_members', [query.equal('workspaceId', variables.workspaceId)]
+        // listAll: every member is notified, so a 100-row first page would
+        // silently skip the rest of a larger workspace.
+        const membersResponse = await resources.listAll('workspace_members', [query.equal('workspaceId', variables.workspaceId)]
         );
 
         const memberIds = membersResponse.items
@@ -191,94 +192,36 @@ export function useDeleteClientRequirement() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (data: { requirementId: string; projectId: string }) => {
-      // ? CASCADE DELETE: Delete all Epics linked to this client requirement
-      const linkedEpics = await resources.list('epics', [
-        query.equal('requirementId', data.requirementId),
-        query.limit(100),
-      ]);
-
-      // For each Epic, delete all linked FRs and their tasks
-      for (const epic of linkedEpics.items) {
-        // Get all FRs linked to this epic
-        const linkedFRs = await resources.list('functional_requirements', [
-          query.equal('epicId', epic.id),
-          query.limit(100),
-        ]);
-
-        // For each FR, delete all linked tasks first
-        for (const fr of linkedFRs.items) {
-          const linkedTasks = await resources.list('tasks', [
-            query.equal('functionalRequirementId', fr.id),
-            query.limit(100),
-          ]);
-
-          // Delete all tasks linked to this FR
-          await Promise.all(
-            linkedTasks.items.map((task) =>
-              resources.remove('tasks', task.id)
-            )
-          );
-
-          // Delete the FR
-          await resources.remove('functional_requirements', fr.id);
-        }
-
-        // Delete any tasks directly linked to this epic
-        const epicTasks = await resources.list('tasks', [
-          query.equal('epicId', epic.id),
-          query.limit(100),
-        ]);
-
-        await Promise.all(
-          epicTasks.items.map((task) =>
-            resources.remove('tasks', task.id)
-          )
-        );
-
-        // Delete the epic
-        await resources.remove('epics', epic.id);
-      }
-
-      // ? Also delete FRs directly linked to this client requirement (without Epic)
-      const directFRs = await resources.list('functional_requirements', [
-        query.equal('clientRequirementId', data.requirementId),
-        query.limit(100),
-      ]);
-
-      for (const fr of directFRs.items) {
-        const linkedTasks = await resources.list('tasks', [
-          query.equal('functionalRequirementId', fr.id),
-          query.limit(100),
-        ]);
-
-        // Delete all tasks linked to this FR
-        await Promise.all(
-          linkedTasks.items.map((task) =>
-            resources.remove('tasks', task.id)
-          )
-        );
-
-        // Delete the FR
-        await resources.remove('functional_requirements', fr.id);
-      }
-
-      // Finally, delete the client requirement
-      await resources.remove('client_requirements', data.requirementId
+    mutationFn: async (data: { requirementId: string; projectId: string; cascade?: boolean }) => {
+      // The server owns the cascade: without the cascade flag it responds 409
+      // when dependent requirements exist; with cascade=true it deletes the
+      // descendant functional requirements and unlinks any tasks (kept).
+      await restClient.delete(
+        `/api/v1/client_requirements/${data.requirementId}/`,
+        data.cascade ? { params: { cascade: 'true' } } : undefined,
       );
       return data;
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['client-requirements', data.projectId] });
+      queryClient.invalidateQueries({ queryKey: ['client-requirement', data.requirementId] });
       queryClient.invalidateQueries({ queryKey: ['epics', data.projectId] });
-      queryClient.invalidateQueries({ queryKey: ['functional-requirements', data.projectId] });
+      // Root prefix: a cascade deletes linked FRs anywhere in the project, and
+      // the epic-/sprint-scoped FR lists do not share ['...', projectId].
+      queryClient.invalidateQueries({ queryKey: ['functional-requirements'] });
       queryClient.invalidateQueries({ queryKey: ['tasks', data.projectId] });
       toast({
         title: 'Success',
-        description: 'Client requirement and all linked items deleted successfully!',
+        description: 'Client requirement deleted successfully!',
       });
     },
     onError: (error: Error) => {
+      // A 409 is a DESIGNED step of this flow, not a failure: the dialog
+      // catches it and offers the cascade. react-query runs onError before the
+      // caller's catch, so without this the user saw a red toast carrying the
+      // server's raw "retry with cascade=true" developer instruction at the
+      // same moment the polished prompt (with that sentence stripped) rendered.
+      if (error instanceof ApiError && error.code === 409) return;
       toast({
         title: 'Error',
         description:

@@ -1,7 +1,10 @@
-﻿import { useQuery } from '@tanstack/react-query';
+import { useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { resources } from '@/lib/api/client';
 import { query } from '@/lib/api/client';
-import { getCurrentDate, getMonthDateRange } from '@/lib/attendance-utils';
+import { getCurrentDate, getMonthDateRange, isWorkingDay } from '@/lib/attendance-utils';
+import { useHolidays } from '@/hooks/use-holidays';
+import type { HolidayDates } from '@/lib/utils/working-days';
 
 // ============================================================================
 // Types
@@ -16,7 +19,8 @@ export interface TeamMemberAttendance {
     attendance?: {
         id: string;
         date: string;
-        checkInTime: string;
+        /** Absent on an ON_LEAVE marker row — that day has no real arrival. */
+        checkInTime?: string;
         checkOutTime?: string;
         workHours?: number;
         status: string;
@@ -34,6 +38,8 @@ export interface TeamAttendanceAnalytics {
     attendanceRate: number;
     averageWorkHours: number;
     totalWorkHours: number;
+    /** False on Sundays and non-working Saturdays — the rate is not meaningful then. */
+    isWorkingDay: boolean;
 }
 
 // ============================================================================
@@ -45,26 +51,29 @@ export interface TeamAttendanceAnalytics {
  * Manager-only feature
  */
 export function useTeamAttendance(workspaceId?: string, date?: string) {
+    // A public holiday is not a working day, so nobody is 'ABSENT' on one.
+    const { data: holidays = [] } = useHolidays(workspaceId);
     const targetDate = date || getCurrentDate();
 
     return useQuery({
-        queryKey: ['teamAttendance', workspaceId, targetDate],
+        // `holidays` is part of the key: the queryFn closes over it, so without
+        // it a cached roster keeps the pre-holiday WEEKEND/ABSENT split forever.
+        queryKey: ['teamAttendance', workspaceId, targetDate, holidays],
         queryFn: async () => {
             if (!workspaceId) return [];
 
-            // Fetch all workspace members
-            const membersResponse = await resources.list('workspace_members', [
+            // Fetch all workspace members (listAll: a single page silently
+            // truncates the roster past 100 members and skews every counter)
+            const membersResponse = await resources.listAll('workspace_members', [
                 query.equal('workspaceId', workspaceId),
                 query.equal('status', 'ACTIVE'),
-                query.limit(100),
             ]
             );
 
             // Fetch attendance records for the date
-            const attendanceResponse = await resources.list('attendance', [
+            const attendanceResponse = await resources.listAll('attendance', [
                 query.equal('workspaceId', workspaceId),
                 query.equal('date', targetDate),
-                query.limit(100),
             ]
             );
 
@@ -74,15 +83,20 @@ export function useTeamAttendance(workspaceId?: string, date?: string) {
                 attendanceMap.set(record.userId, record);
             });
 
+            const dateIsWorking = isWorkingDay(targetDate, holidays);
+
             // Combine member data with attendance
             const teamAttendance: TeamMemberAttendance[] = membersResponse.items.map((member: any) => {
                 const attendance = attendanceMap.get(member.userId);
 
-                // Determine status
-                let status: TeamMemberAttendance['status'] = 'ABSENT';
+                // A persisted row always wins over the "no check-in ⇒ absent"
+                // fallback — approving leave materialises an ON_LEAVE row, which
+                // is how this hook can surface leave at all.
+                let status: TeamMemberAttendance['status'] = dateIsWorking ? 'ABSENT' : 'WEEKEND';
                 if (attendance) {
                     status = attendance.status as TeamMemberAttendance['status'];
                 }
+                const onLeave = status === 'ON_LEAVE';
 
                 return {
                     userId: member.userId,
@@ -93,7 +107,10 @@ export function useTeamAttendance(workspaceId?: string, date?: string) {
                     attendance: attendance ? {
                         id: attendance.id,
                         date: attendance.date,
-                        checkInTime: attendance.checkInTime,
+                        // An ON_LEAVE marker pins checkInTime to the day marker
+                        // (UTC midnight) because the column is non-null; passing
+                        // it on would render as a literal 12:00 AM arrival.
+                        checkInTime: onLeave ? undefined : attendance.checkInTime,
                         checkOutTime: attendance.checkOutTime,
                         workHours: attendance.workHours,
                         status: attendance.status,
@@ -110,81 +127,64 @@ export function useTeamAttendance(workspaceId?: string, date?: string) {
     });
 }
 
+/** Summarize the joined roster. Every counter comes from the SAME member list,
+ *  so present + absent + on-leave always add up to the roster (subtracting two
+ *  independently fetched cardinalities could even go negative). */
+function summarizeTeamAttendance(
+    team: TeamMemberAttendance[],
+    date: string,
+    holidays?: HolidayDates
+): TeamAttendanceAnalytics {
+    const totalMembers = team.length;
+    const attended = team.filter(
+        (m) => m.status === 'PRESENT' || m.status === 'LATE' || m.status === 'HALF_DAY'
+    ).length;
+    const lateCount = team.filter((m) => m.status === 'LATE').length;
+    const onLeaveCount = team.filter((m) => m.status === 'ON_LEAVE').length;
+    const absentCount = team.filter((m) => m.status === 'ABSENT').length;
+
+    const totalWorkHours = team.reduce((sum, m) => sum + (m.attendance?.workHours || 0), 0);
+    const withHours = team.filter((m) => (m.attendance?.workHours || 0) > 0).length;
+    const averageWorkHours = withHours > 0 ? totalWorkHours / withHours : 0;
+
+    // Members on approved leave are not expected in, so they are out of the
+    // denominator rather than counted as a miss.
+    const expected = Math.max(0, totalMembers - onLeaveCount);
+    const dateIsWorking = isWorkingDay(date, holidays);
+
+    return {
+        totalMembers,
+        presentCount: attended,
+        absentCount,
+        lateCount,
+        onLeaveCount,
+        attendanceRate: dateIsWorking && expected > 0 ? Math.round((attended / expected) * 100) : 0,
+        averageWorkHours: Math.round(averageWorkHours * 10) / 10,
+        totalWorkHours: Math.round(totalWorkHours * 10) / 10,
+        isWorkingDay: dateIsWorking,
+    };
+}
+
 /**
  * Get team attendance analytics for a specific date
  * Manager-only feature
+ *
+ * Derived from useTeamAttendance's cache entry (same query key), so the cards
+ * and the roster below them can never disagree, and the data is fetched once.
  */
 export function useTeamAttendanceAnalytics(workspaceId?: string, date?: string) {
     const targetDate = date || getCurrentDate();
+    const { data: team, ...rest } = useTeamAttendance(workspaceId, targetDate);
+    // Same set the roster above was built with, so the header cards and the rows
+    // beneath them cannot disagree about whether today is a working day.
+    const { data: holidays = [] } = useHolidays(workspaceId);
 
-    return useQuery({
-        queryKey: ['teamAttendanceAnalytics', workspaceId, targetDate],
-        queryFn: async () => {
-            if (!workspaceId) return null;
+    const analytics = useMemo(
+        () => (team ? summarizeTeamAttendance(team, targetDate, holidays) : null),
+        [team, targetDate, holidays]
+    );
 
-            // Fetch all workspace members
-            const membersResponse = await resources.list('workspace_members', [
-                query.equal('workspaceId', workspaceId),
-                query.equal('status', 'ACTIVE'),
-                query.limit(100),
-            ]
-            );
-
-            // Fetch attendance records for the date
-            const attendanceResponse = await resources.list('attendance', [
-                query.equal('workspaceId', workspaceId),
-                query.equal('date', targetDate),
-                query.limit(100),
-            ]
-            );
-
-            const totalMembers = membersResponse.items.length;
-            const attendanceRecords = attendanceResponse.items as any[];
-
-            // Calculate metrics
-            const presentCount = attendanceRecords.filter(
-                (r) => r.status === 'PRESENT' || r.status === 'LATE'
-            ).length;
-
-            const absentCount = totalMembers - attendanceRecords.length;
-
-            const lateCount = attendanceRecords.filter(
-                (r) => r.status === 'LATE'
-            ).length;
-
-            const onLeaveCount = attendanceRecords.filter(
-                (r) => r.status === 'ON_LEAVE'
-            ).length;
-
-            const totalWorkHours = attendanceRecords.reduce(
-                (sum, r) => sum + (r.workHours || 0),
-                0
-            );
-
-            const averageWorkHours = attendanceRecords.length > 0
-                ? totalWorkHours / attendanceRecords.length
-                : 0;
-
-            const attendanceRate = totalMembers > 0
-                ? Math.round((presentCount / totalMembers) * 100)
-                : 0;
-
-            const analytics: TeamAttendanceAnalytics = {
-                totalMembers,
-                presentCount,
-                absentCount,
-                lateCount,
-                onLeaveCount,
-                attendanceRate,
-                averageWorkHours: Math.round(averageWorkHours * 10) / 10,
-                totalWorkHours: Math.round(totalWorkHours * 10) / 10,
-            };
-
-            return analytics;
-        },
-        enabled: !!workspaceId,
-        refetchInterval: 30000, // Refetch every 30 seconds
-    });
+    return { ...rest, data: analytics };
 }
 
 /**
@@ -207,12 +207,11 @@ export function useTeamAttendanceRange(
             if (!workspaceId) return [];
 
             // Fetch attendance records for the date range
-            const response = await resources.list('attendance', [
+            const response = await resources.listAll('attendance', [
                 query.equal('workspaceId', workspaceId),
                 query.greaterThanEqual('date', start),
                 query.lessThanEqual('date', end),
                 query.orderDesc('date'),
-                query.limit(1000),
             ]
             );
 
@@ -221,4 +220,3 @@ export function useTeamAttendanceRange(
         enabled: !!workspaceId,
     });
 }
-

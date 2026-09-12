@@ -1,6 +1,7 @@
 ﻿import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { resources } from '@/lib/api/client';
 import { query, id } from '@/lib/api/client';
+import { restClient } from '@/lib/api/rest-client';
 import type { Sprint, Task } from '@/types';
 import { toast } from '@/hooks/use-toast';
 import { createBulkNotifications } from '@/hooks/use-notification';
@@ -11,7 +12,8 @@ export function useSprints(projectId?: string) {
     queryFn: async () => {
       if (!projectId) return [];
 
-      const response = await resources.list('sprints', [
+      // listAll, not list: a single page stops at the server default of 100.
+      const response = await resources.listAll('sprints', [
         query.equal('projectId', projectId),
         query.orderDesc('createdAt'),
       ]);
@@ -29,10 +31,9 @@ export function useWorkspaceSprints(workspaceId?: string) {
     queryFn: async () => {
       if (!workspaceId) return [];
 
-      const response = await resources.list('sprints', [
+      const response = await resources.listAll('sprints', [
         query.equal('workspaceId', workspaceId),
         query.orderDesc('createdAt'),
-        query.limit(1000),
       ]);
 
       return response.items as unknown as Sprint[];
@@ -210,10 +211,9 @@ export function useStartSprint() {
 
       // 2. Find all tasks linked to this sprint that are in BACKLOG
       // Tasks get their sprintId set when their FR is assigned to a sprint
-      const sprintTasksResponse = await resources.list('tasks', [
+      const sprintTasksResponse = await resources.listAll('tasks', [
         query.equal('sprintId', sprintId),
         query.equal('status', 'BACKLOG'),
-        query.limit(500),
       ]);
       const tasksToUpdate = sprintTasksResponse.items as unknown as Task[];
 
@@ -312,12 +312,18 @@ export function useCompleteSprint() {
       completedTasks?: number;
       totalTasks?: number;
     }) => {
-      const response = await resources.update('sprints', sprintId,
-        {
-          status: 'COMPLETED',
-          retrospectiveNotes: retrospectiveNotes || '',
-        }
-      );
+      // POST /sprints/:id/complete is the transactional path: it guards against
+      // completing twice, seeds the retrospective and emits SprintCompleted —
+      // which is what rolls unfinished tasks out of the sprint. A plain PATCH
+      // of `status` skips all three.
+      const response = await restClient.post(`/api/v1/sprints/${sprintId}/complete/`, {});
+
+      // Only write notes when the caller actually supplied them. Coercing an
+      // absent value to '' would erase the sprint's existing retrospective notes.
+      if (typeof retrospectiveNotes === 'string' && retrospectiveNotes.trim()) {
+        const withNotes = await resources.update('sprints', sprintId, { retrospectiveNotes });
+        return withNotes as unknown as Sprint;
+      }
       return response as unknown as Sprint;
     },
     onSuccess: async (
@@ -334,6 +340,8 @@ export function useCompleteSprint() {
       queryClient.invalidateQueries({ queryKey: ['sprint', variables.sprintId] });
       queryClient.invalidateQueries({ queryKey: ['sprints', variables.projectId] });
       queryClient.invalidateQueries({ queryKey: ['sprint', 'active', variables.projectId] });
+      // Completion rolls unfinished tasks out of the sprint server-side.
+      queryClient.invalidateQueries({ queryKey: ['tasks', variables.projectId] });
 
       // Send SPRINT_COMPLETED notifications to team members
       if (variables.teamMemberIds && variables.teamMemberIds.length > 0) {

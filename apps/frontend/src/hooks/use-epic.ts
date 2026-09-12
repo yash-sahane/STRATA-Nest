@@ -1,10 +1,50 @@
 ﻿import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { resources } from '@/lib/api/client';
 import { query, id } from '@/lib/api/client';
-import type { Epic } from '@/types';
+import type { Epic, Task } from '@/types';
 import { toast } from '@/hooks/use-toast';
 import { createBulkNotifications } from '@/hooks/use-notification';
 import { logger } from '@/lib/logger';
+
+/**
+ * The one definition of an epic's rollup.
+ *
+ * Epic status and progress are labelled "(Auto-calculated from tasks)" wherever
+ * they are shown and no screen lets a human set them, so the stored columns are
+ * only a cache — and a lossy one: the delete-last-task path in use-task.ts
+ * writes progress=0 but deliberately leaves `status` alone, which stranded
+ * epics whose card read "Done - 0% - Tasks 0 / 0" above a detail dialog that
+ * said "Todo". Derive both from the task set on every surface so the card, the
+ * stat tiles and the dialog cannot disagree.
+ *
+ * Status is COUNT equality (`completed === total`), never `progress === 100`:
+ * Math.round reports 100% at 999 of 1000 done, and a writer using the rounded
+ * number would store DONE for an epic this function then renders as In
+ * Progress. EpicsService.deriveRollup on the API applies the identical rule,
+ * and re-derives status itself on any rollup PATCH that carries a progress, so
+ * a stale client cannot reintroduce the contradiction.
+ *
+ * Every client-side writer of the epic rollup now goes through this function —
+ * updateParentProgress in use-task.ts and recalculateParentRollups in
+ * use-functional-requirement.ts. Do not hand-roll the arithmetic again.
+ */
+export function deriveEpicMetrics(tasks: Pick<Task, 'status'>[]) {
+  const totalTasks = tasks.length;
+  const completedTasks = tasks.filter((t) => t.status === 'DONE').length;
+  const status: Epic['status'] =
+    totalTasks > 0 && completedTasks === totalTasks
+      ? 'DONE'
+      : completedTasks > 0
+        ? 'IN_PROGRESS'
+        : 'TODO';
+
+  return {
+    totalTasks,
+    completedTasks,
+    progress: totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0,
+    status,
+  };
+}
 
 export function useEpics(projectId?: string) {
   return useQuery({
@@ -12,7 +52,8 @@ export function useEpics(projectId?: string) {
     queryFn: async () => {
       if (!projectId) return [];
 
-      const response = await resources.list('epics', [
+      // listAll, not list: a single page stops at the server default of 100.
+      const response = await resources.listAll('epics', [
         query.equal('projectId', projectId),
         query.orderDesc('createdAt'),
       ]);
@@ -44,7 +85,7 @@ export function useEpicsByRequirement(requirementId?: string) {
     queryFn: async () => {
       if (!requirementId) return [];
 
-      const response = await resources.list('epics', [
+      const response = await resources.listAll('epics', [
         query.equal('requirementId', requirementId),
         query.orderDesc('createdAt'),
       ]);
@@ -78,13 +119,22 @@ export function useCreateEpic() {
         throw new Error('Workspace id is required. Please select a workspace first.');
       }
 
-      // Get existing epics to generate hierarchyId
-      const existingEpics = await resources.list('epics', [
+      // Get existing epics to generate hierarchyId (listAll: a truncated first
+      // page would freeze the counter and re-issue ids that already exist).
+      const existingEpics = await resources.listAll<{ hierarchyId?: string | null }>('epics', [
         query.equal('projectId', data.projectId),
       ]);
 
-      // Generate hierarchical id (e.g., ABC-EPIC-01, ABC-EPIC-02)
-      const epicNumber = (existingEpics.items.length + 1).toString().padStart(2, '0');
+      // Generate hierarchical id (e.g., ABC-EPIC-01, ABC-EPIC-02). Advance past
+      // the HIGHEST existing number rather than counting rows — deleting an epic
+      // must not make the next create re-use a live id.
+      const highest = existingEpics.items.reduce((max: number, e) => {
+        const n = Number.parseInt(/-EPIC-(\d+)$/.exec(String(e.hierarchyId ?? ''))?.[1] ?? '', 10);
+        return Number.isFinite(n) && n > max ? n : max;
+      }, 0);
+      const epicNumber = (Math.max(existingEpics.items.length, highest) + 1)
+        .toString()
+        .padStart(2, '0');
       const hierarchyId = `${data.projectCode}-EPIC-${epicNumber}`;
 
       const epicData = {
@@ -131,7 +181,7 @@ export function useCreateEpic() {
         }
 
         // Get workspace members to notify
-        const membersResponse = await resources.list('workspace_members', [query.equal('workspaceId', variables.workspaceId)]
+        const membersResponse = await resources.listAll('workspace_members', [query.equal('workspaceId', variables.workspaceId)]
         );
 
         const memberIds = membersResponse.items
@@ -230,43 +280,8 @@ export function useDeleteEpic() {
 
   return useMutation({
     mutationFn: async (data: { epicId: string; projectId: string }) => {
-      // ? CASCADE DELETE: Delete all FRs linked to this epic
-      const linkedFRs = await resources.list('functional_requirements', [
-        query.equal('epicId', data.epicId),
-        query.limit(100),
-      ]);
-
-      // For each FR, delete all linked tasks first
-      for (const fr of linkedFRs.items) {
-        const linkedTasks = await resources.list('tasks', [
-          query.equal('functionalRequirementId', fr.id),
-          query.limit(100),
-        ]);
-
-        // Delete all tasks linked to this FR
-        await Promise.all(
-          linkedTasks.items.map((task) =>
-            resources.remove('tasks', task.id)
-          )
-        );
-
-        // Delete the FR
-        await resources.remove('functional_requirements', fr.id);
-      }
-
-      // ? Also delete any tasks directly linked to this epic (without FR)
-      const directTasks = await resources.list('tasks', [
-        query.equal('epicId', data.epicId),
-        query.limit(100),
-      ]);
-
-      await Promise.all(
-        directTasks.items.map((task) =>
-          resources.remove('tasks', task.id)
-        )
-      );
-
-      // Finally, delete the epic
+      // The server unlinks linked tasks and functional requirements
+      // (epicId -> null) and deletes only the epic itself.
       await resources.remove('epics', data.epicId);
       return data;
     },
@@ -276,7 +291,7 @@ export function useDeleteEpic() {
       queryClient.invalidateQueries({ queryKey: ['tasks', data.projectId] });
       toast({
         title: 'Success',
-        description: 'Epic and all linked items deleted successfully!',
+        description: 'Epic deleted. Linked tasks and requirements were kept.',
       });
     },
     onError: (error: Error) => {
