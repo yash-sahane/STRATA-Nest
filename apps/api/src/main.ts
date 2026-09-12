@@ -9,11 +9,12 @@ loadEnv({ path: join(__dirname, '../../../.env') });
 import 'reflect-metadata';
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { Logger } from 'nestjs-pino';
-import { AllExceptionsFilter } from '@strata/common';
+import { AllExceptionsFilter, StripLoneSurrogatesPipe } from '@strata/common';
 import { corsOrigins, validateEnv } from '@strata/config';
 import { AppModule } from './app.module';
 import { NormalizedWsAdapter } from './modules/realtime/normalized-ws-adapter';
@@ -22,7 +23,20 @@ async function bootstrap(): Promise<void> {
   const env = validateEnv(process.env as Record<string, unknown>);
   // rawBody: capture the exact request bytes so inbound webhooks can verify
   // provider HMAC signatures over the raw payload.
-  const app = await NestFactory.create(AppModule, { bufferLogs: true, rawBody: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    bufferLogs: true,
+    rawBody: true,
+  });
+  /**
+   * body-parser defaults to 100 KB, and its PayloadTooLargeError is not an
+   * HttpException — so it fell through AllExceptionsFilter as a bare HTTP 500
+   * "Internal server error". That is what killed avatar uploads (the picker
+   * advertises 2 MB; base64 inflates 4/3, so the real ceiling was ~74 KB of
+   * image) and any task comment over ~102 KB. The limit now clears a 2 MB
+   * avatar with headroom, and the filter maps the overflow to a real 413.
+   */
+  app.useBodyParser('json', { limit: '4mb' });
+  app.useBodyParser('urlencoded', { limit: '4mb', extended: true });
   app.useLogger(app.get(Logger)); // structured pino logging + correlation ids
   // Raw WebSocket gateway at /ws/collections/. NormalizedWsAdapter normalizes a
   // trailing-slash path mismatch in the stock WsAdapter (the client URL has a
@@ -43,7 +57,11 @@ async function bootstrap(): Promise<void> {
     ),
   );
   app.enableCors({ origin: corsOrigins(env), credentials: true });
+  // StripLoneSurrogatesPipe runs FIRST, on the raw payload: a surrogate half is
+  // not encodable as UTF-8, so it reaches Postgres as a bare 500 rather than
+  // anything a client can act on. See its docstring.
   app.useGlobalPipes(
+    new StripLoneSurrogatesPipe(),
     new ValidationPipe({ whitelist: true, transform: true, transformOptions: { enableImplicitConversion: true } }),
   );
   app.useGlobalFilters(new AllExceptionsFilter());

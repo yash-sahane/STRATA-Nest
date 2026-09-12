@@ -41,6 +41,13 @@ export class RealtimeSubscriber {
     });
   }
 
+  @OnEvent(PlanningEvents.SprintStarted)
+  onSprintStarted(e: DomainEvent<SprintLifecyclePayload>): void {
+    this.realtime.emitEvent('sprints', e.name, e.payload.sprintId, e.payload.workspaceId, {
+      ...e.payload,
+    });
+  }
+
   @OnEvent(PlanningEvents.SprintCompleted)
   onSprintCompleted(e: DomainEvent<SprintLifecyclePayload>): void {
     this.realtime.emitEvent('sprints', e.name, e.payload.sprintId, e.payload.workspaceId, {

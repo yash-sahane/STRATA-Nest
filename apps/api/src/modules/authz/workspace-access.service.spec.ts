@@ -48,9 +48,50 @@ describe('WorkspaceAccessService', () => {
     await expect(svc.assertMember(user(), 'w1')).rejects.toThrow();
   });
 
-  it('RBAC off → assertPermission requires only membership', async () => {
+  it('RBAC off → assertPermission requires only membership for ordinary writes', async () => {
     const svc = new WorkspaceAccessService(makePrisma({ membership: { role: 'MEMBER' } }), config(false));
-    await expect(svc.assertPermission(user(), 'w1', Permission.WorkspaceDelete)).resolves.toBeUndefined();
+    await expect(svc.assertPermission(user(), 'w1', Permission.TaskWrite)).resolves.toBeUndefined();
+  });
+
+  it('RBAC off → destructive operations still require the real permission', async () => {
+    const asMember = new WorkspaceAccessService(makePrisma({ membership: { role: 'MEMBER' } }), config(false));
+    await expect(asMember.assertPermission(user(), 'w1', Permission.WorkspaceDelete)).rejects.toThrow();
+
+    const asManager = new WorkspaceAccessService(makePrisma({ membership: { role: 'MANAGER' } }), config(false));
+    await expect(asManager.assertPermission(user(), 'w1', Permission.WorkspaceDelete)).resolves.toBeUndefined();
+  });
+
+  it('RBAC off → privilege-granting operations still require the real permission', async () => {
+    const asMember = new WorkspaceAccessService(makePrisma({ membership: { role: 'MEMBER' } }), config(false));
+    await expect(asMember.assertPermission(user(), 'w1', Permission.MemberUpdate)).rejects.toThrow();
+    await expect(asMember.assertPermission(user(), 'w1', Permission.MemberInvite)).rejects.toThrow();
+    await expect(asMember.assertPermission(user(), 'w1', Permission.InviteManage)).rejects.toThrow();
+    await expect(asMember.assertPermission(user(), 'w1', Permission.JoinManage)).rejects.toThrow();
+
+    const asManager = new WorkspaceAccessService(makePrisma({ membership: { role: 'MANAGER' } }), config(false));
+    await expect(asManager.assertPermission(user(), 'w1', Permission.MemberUpdate)).resolves.toBeUndefined();
+  });
+
+  it('assertValidRole accepts built-ins and workspace-local roles, rejects the rest', async () => {
+    const noCustom = new WorkspaceAccessService(makePrisma({ role: null }), config(true));
+    await expect(noCustom.assertValidRole('w1', 'MANAGER')).resolves.toBeUndefined();
+    await expect(noCustom.assertValidRole('w1', 'Manager (Admin)')).rejects.toThrow(
+      'Unknown role "Manager (Admin)" for this workspace.',
+    );
+
+    const withCustom = new WorkspaceAccessService(makePrisma({ role: { permissions: [] } }), config(true));
+    await expect(withCustom.assertValidRole('w1', 'Auditor')).resolves.toBeUndefined();
+  });
+
+  it('assertValidRole rejects Object.prototype keys, which used to pass as built-ins', async () => {
+    // `ROLE_PERMISSIONS['constructor']` is truthy on a plain object literal, so
+    // the membership was written and every later permissionsForRole call threw.
+    const svc = new WorkspaceAccessService(makePrisma({ role: null }), config(true));
+    for (const key of ['constructor', 'toString', '__proto__']) {
+      await expect(svc.assertValidRole('w1', key)).rejects.toThrow(
+        `Unknown role "${key}" for this workspace.`,
+      );
+    }
   });
 
   it('RBAC on → MEMBER cannot delete, MANAGER can', async () => {

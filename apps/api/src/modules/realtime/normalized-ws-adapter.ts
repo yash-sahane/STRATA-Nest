@@ -1,7 +1,22 @@
 import type { INestApplicationContext } from '@nestjs/common';
 import { WsAdapter } from '@nestjs/platform-ws';
+import { createServer } from 'node:http';
 import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import type { Socket } from 'node:net';
+
+/** One entry of the base class's private `wsServersRegistry` — the shape this
+ *  override reaches into. Spelled out rather than typed as `Function` so the
+ *  two calls below are actually checked against how ws uses them. */
+interface RegisteredWsServer {
+  path: string;
+  handleUpgrade(
+    request: IncomingMessage,
+    socket: Socket,
+    head: Buffer,
+    callback: (ws: unknown) => void,
+  ): void;
+  emit(event: string, ...args: unknown[]): void;
+}
 
 /**
  * RC finding (live-verified, critical): `@nestjs/platform-ws`'s WsAdapter
@@ -30,11 +45,11 @@ export class NormalizedWsAdapter extends WsAdapter {
     const registry = (this as unknown as { httpServersRegistry: Map<number, HttpServer> })
       .httpServersRegistry;
     const wsRegistry = (
-      this as unknown as { wsServersRegistry: Map<number, Array<{ path: string; handleUpgrade: Function; emit: Function }>> }
+      this as unknown as { wsServersRegistry: Map<number, RegisteredWsServer[]> }
     ).wsServersRegistry;
 
     if (registry.has(port)) return undefined as unknown as HttpServer;
-    const server = httpServer ?? (require('node:http').createServer() as HttpServer);
+    const server = httpServer ?? (createServer() as unknown as HttpServer);
     registry.set(port, server);
 
     server.on('upgrade', (request: IncomingMessage, socket: Socket, head: Buffer) => {

@@ -29,7 +29,12 @@ export const Permission = {
   PlanningWrite: 'planning:write',
   // Tasks (task + labels; comments/kanban are unscoped, see task.prisma)
   TaskRead: 'task:read',
+  /** Create, delete, label, and mark done. Managers. */
   TaskWrite: 'task:write',
+  /** Change an existing task — status, title, progress, assignees, dependency
+   *  edges. Split out from TaskWrite so the delivery team can work the board
+   *  without also gaining the ability to create or delete tasks. */
+  TaskUpdate: 'task:update',
   // HR (attendance, leave, time). Members submit their own records
   // (HrWrite is in the baseline); only managers approve (Leave/Time Approve).
   HrRead: 'hr:read',
@@ -42,8 +47,8 @@ export const Permission = {
   NotificationWrite: 'notification:write',
   ActivityRead: 'activity:read',
   ActivityWrite: 'activity:write',
-  // Files. Upload/delete require only authenticated membership (no
-  // extra role check), so both are in the member baseline.
+  // Files. Reading is baseline; uploading and deleting take file:write, which
+  // the delivery roles and managers hold.
   FileRead: 'file:read',
   FileWrite: 'file:write',
   // Integrations, scoped by project→workspace membership. Reads are
@@ -56,6 +61,8 @@ export const Permission = {
 export type PermissionKey = (typeof Permission)[keyof typeof Permission];
 
 const ALL: PermissionKey[] = Object.values(Permission);
+/** Every valid permission string — used to reject unknown keys on custom roles. */
+export const PERMISSION_KEYS: ReadonlySet<string> = new Set<string>(ALL);
 /** Member baseline: all reads + submitting one's own HR records. */
 const READ_ONLY: PermissionKey[] = [
   Permission.WorkspaceRead,
@@ -71,28 +78,68 @@ const READ_ONLY: PermissionKey[] = [
   Permission.ActivityRead,
   Permission.ActivityWrite,
   Permission.FileRead,
-  Permission.FileWrite,
+  // FileWrite is NOT baseline. MEMBER is the documented read-only observer, and
+  // it could upload into any project it could see and delete ANY file in the
+  // workspace, including files a manager had uploaded. Delivery roles keep it
+  // (they attach mockups and specs); MEMBER does not.
   Permission.IntegrationRead,
   // IntegrationWrite is NOT baseline — writes carry access tokens, so under
   // enforced RBAC only managers manage integrations (membership floor when off).
 ];
 
-/** Default permissions for the 7 built-in roles. Tunable; seeded into
- *  the normalized tables when those are enabled. */
-export const ROLE_PERMISSIONS: Record<string, PermissionKey[]> = {
-  MANAGER: ALL,
-  ASSISTANT_MANAGER: ALL.filter((p) => p !== Permission.WorkspaceDelete),
-  SOFTWARE_DEVELOPER: READ_ONLY,
-  DEVELOPER_INTERN: READ_ONLY,
-  TESTER: READ_ONLY,
-  CONTENT_ENGINEER: READ_ONLY,
-  MEMBER: READ_ONLY,
-};
+/**
+ * Delivery roles: the member baseline plus `task:update`.
+ *
+ * Without this the whole delivery team was read-only on tasks — a developer
+ * could not move a card assigned to them, edit its title, or record progress,
+ * which makes the board unusable for the people who actually work it.
+ *
+ * `file:write` comes with it: the delivery team attaches mockups and specs.
+ *
+ * Deliberately NOT `task:write`: that one permission also covers creating and
+ * deleting tasks and marking them done, so granting it to work the board would
+ * have handed an intern the ability to delete work. Creation, deletion, labels
+ * and the DONE transition stay with managers. MEMBER keeps the plain read-only
+ * floor as the generic observer role.
+ */
+const DELIVERY: PermissionKey[] = [...READ_ONLY, Permission.TaskUpdate, Permission.FileWrite];
+
+/**
+ * Default permissions for the 7 built-in roles. Tunable; seeded into
+ * the normalized tables when those are enabled.
+ *
+ * Null-prototype on purpose: role names are caller-supplied strings, and on a
+ * plain object literal `ROLE_PERMISSIONS['constructor' | 'toString' |
+ * '__proto__']` resolves to an INHERITED member. Every truthiness test on the
+ * lookup (`assertValidRole`, `assertNotBuiltIn`, `permissionsForRole`) then
+ * accepted those names as built-in roles and `new Set(Object)` threw a
+ * TypeError on the next permission check — a 500 on every route in the
+ * workspace. `isBuiltInRole` below is the checked way to ask the question.
+ */
+export const ROLE_PERMISSIONS: Record<string, PermissionKey[]> = Object.assign(
+  Object.create(null) as Record<string, PermissionKey[]>,
+  {
+    MANAGER: ALL,
+    ASSISTANT_MANAGER: ALL.filter((p) => p !== Permission.WorkspaceDelete),
+    SOFTWARE_DEVELOPER: DELIVERY,
+    DEVELOPER_INTERN: DELIVERY,
+    TESTER: DELIVERY,
+    CONTENT_ENGINEER: DELIVERY,
+    MEMBER: READ_ONLY,
+  },
+);
+
+/** Whether `role` names one of the built-in roles. Own-property test, so no
+ *  Object.prototype key can masquerade as a role. */
+export function isBuiltInRole(role: string): boolean {
+  return Object.prototype.hasOwnProperty.call(ROLE_PERMISSIONS, role);
+}
 
 /** Resolve a role's permission set: built-in map, else custom-role JSON, else read-only floor. */
 export function permissionsForRole(role: string, customRolePermissions?: string[]): Set<string> {
-  const builtin = ROLE_PERMISSIONS[role];
-  if (builtin) return new Set(builtin);
+  const builtin = isBuiltInRole(role) ? ROLE_PERMISSIONS[role] : undefined;
+  // Array.isArray, not truthiness: the lookup must never yield a non-iterable.
+  if (Array.isArray(builtin)) return new Set(builtin);
   if (customRolePermissions && customRolePermissions.length > 0) {
     return new Set(customRolePermissions);
   }

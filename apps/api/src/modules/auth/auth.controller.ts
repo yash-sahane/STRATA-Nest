@@ -6,6 +6,7 @@ import type { Request, Response } from 'express';
 import type { User } from '@prisma/client';
 import { THROTTLE } from '../../throttling/throttle.constants';
 import { AuthService } from './auth.service';
+import { AllowTempPassword } from './decorators/allow-temp-password.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { Public } from './decorators/public.decorator';
 import {
@@ -50,6 +51,9 @@ export class AuthController {
     return { user, sessionId };
   }
 
+  // Reachable on a temporary password: a locked-out session must still be able
+  // to read itself, replace the password, and get out.
+  @AllowTempPassword()
   @Post('logout')
   @HttpCode(204)
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
@@ -71,11 +75,13 @@ export class AuthController {
     return { ok: true };
   }
 
+  @AllowTempPassword()
   @Get('me')
   me(@CurrentUser() user: User) {
     return this.auth.me(user);
   }
 
+  @AllowTempPassword()
   @Post('change-password')
   @HttpCode(200) // The frozen API contract requires 200 here; softError paths still set their own status below
   async changePassword(

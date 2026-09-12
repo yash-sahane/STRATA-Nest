@@ -23,6 +23,20 @@ export class RefreshTokenStore {
     return `refresh:${userId}:${jti}`;
   }
 
+  /**
+   * Tombstone for a jti that has been explicitly revoked.
+   *
+   * `isActive` cannot tell "revoked" from "never tracked" — both are a missing
+   * key — which is why the allowlist check is gated behind AUTH_STRICT_REFRESH.
+   * With that flag off (the default) logout was cosmetic: a copy of the refresh
+   * cookie taken beforehand still minted new 7-day sessions. A positive
+   * denylist can be consulted unconditionally without breaking compatibility
+   * mode, because a token that was never tracked is also never tombstoned.
+   */
+  private revokedKey(userId: string, jti: string): string {
+    return `refresh:revoked:${userId}:${jti}`;
+  }
+
   async store(userId: string, jti: string): Promise<void> {
     await this.redis.set(this.key(userId, jti), '1', 'EX', this.ttl);
   }
@@ -33,11 +47,24 @@ export class RefreshTokenStore {
 
   async revoke(userId: string, jti: string): Promise<void> {
     await this.redis.del(this.key(userId, jti));
+    // Outlive the token itself: the tombstone must still be there for as long
+    // as the signature would otherwise be accepted.
+    await this.redis.set(this.revokedKey(userId, jti), '1', 'EX', this.ttl);
+  }
+
+  /** Whether this jti was explicitly revoked (logout, or rotation replay). */
+  async isRevoked(userId: string, jti: string): Promise<boolean> {
+    return (await this.redis.exists(this.revokedKey(userId, jti))) === 1;
   }
 
   /** Revoke every refresh token for a user ("log out everywhere"). */
   async revokeAll(userId: string): Promise<void> {
     const keys = await this.redis.keys(`refresh:${userId}:*`);
-    if (keys.length) await this.redis.del(...keys);
+    const live = keys.filter((k) => !k.startsWith(`refresh:revoked:`));
+    for (const k of live) {
+      const jti = k.slice(`refresh:${userId}:`.length);
+      await this.redis.set(this.revokedKey(userId, jti), '1', 'EX', this.ttl);
+    }
+    if (live.length) await this.redis.del(...live);
   }
 }

@@ -32,6 +32,18 @@ function toBase64Url(input: string): string {
   return Buffer.from(input, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
+/**
+ * Canonical form of an e-mail address for identity lookups.
+ *
+ * An address is an identifier, not a secret: "Ada@Example.com" and
+ * "ada@example.com" are the same account, and the duplicate check already
+ * treats them that way (`mode: 'insensitive'`). Registration and login must
+ * agree on one form or a capital letter at sign-up locks the account out.
+ */
+export function normalizeEmail(email: string): string {
+  return String(email ?? '').trim().toLowerCase();
+}
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -57,7 +69,11 @@ export class AuthService {
   // --- login / register ---------------------------------------------------
 
   async login(email: string, password: string): Promise<{ user: UserResponse; sessionId: string; tokens: SessionTokens }> {
-    const user = await this.prisma.user.findUnique({ where: { email } });
+    // Registration lowercases the address before storing it, so an exact-match
+    // lookup locked out anyone who typed a capital letter when signing up —
+    // their own address was reported as "invalid email or password", with no
+    // forgot-password route to recover through.
+    const user = await this.prisma.user.findUnique({ where: { email: normalizeEmail(email) } });
     // Frozen contract: 400 ValidationError (message is a list) on any login failure.
     if (!user || !this.passwords.verify(password, user.password) || !user.isActive) {
       this.audit.loginFailure(email);
@@ -69,7 +85,7 @@ export class AuthService {
   }
 
   async register(dto: RegisterDto): Promise<{ user: UserResponse; sessionId: string; tokens: SessionTokens }> {
-    const email = dto.email.toLowerCase();
+    const email = normalizeEmail(dto.email);
     const existing = await this.prisma.user.findFirst({
       where: { email: { equals: email, mode: 'insensitive' } },
     });
@@ -110,6 +126,13 @@ export class AuthService {
     }
     if (claims.token_type !== 'refresh') {
       this.audit.refreshRejected('wrong_type');
+      return { softError: { status: 401, message: 'Invalid refresh token' } };
+    }
+    // An explicitly revoked token is dead in BOTH modes. Compatibility mode only
+    // exists so a token that predates Redis tracking still works; it was never
+    // meant to resurrect one the user has logged out of.
+    if (await this.refreshStore.isRevoked(claims.user_id, claims.jti)) {
+      this.audit.refreshRejected('revoked_jti');
       return { softError: { status: 401, message: 'Invalid refresh token' } };
     }
     // Compatibility mode accepts any signature-valid refresh token; strict mode requires the jti to be tracked in Redis.

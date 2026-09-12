@@ -37,6 +37,13 @@ export class RealtimeAuthService {
 
     const user = await this.prisma.user.findUnique({ where: { id: claims.user_id } });
     if (!user || !user.isActive) return null;
+    // The same lock JwtAuthGuard applies to every HTTP route. The gateway
+    // authenticates outside the guard chain, so without this an account still
+    // holding its mailed-in-plaintext temporary password could open a socket
+    // and subscribe to every collection it has membership for — reading live
+    // task, comment and HR traffic through a door the REST API had closed.
+    // Such a session may change its password; it may not listen.
+    if (user.hasTempPassword) return null;
 
     const ids = await this.access.accessibleWorkspaceIds(user); // null = admin
     return { user, workspaceIds: ids === null ? null : new Set(ids) };

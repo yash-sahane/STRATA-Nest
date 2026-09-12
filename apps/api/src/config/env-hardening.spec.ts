@@ -50,6 +50,6 @@ describe('validateEnv — production hard gates', () => {
     expect(validateEnv({ ...base, RBAC_ENFORCED: '0' }).RBAC_ENFORCED).toBe(false);
     expect(validateEnv({ ...base, RBAC_ENFORCED: 'true' }).RBAC_ENFORCED).toBe(true);
     expect(validateEnv({ ...base, RBAC_ENFORCED: '1' }).RBAC_ENFORCED).toBe(true);
-    expect(validateEnv(base).RBAC_ENFORCED).toBe(false); // default
+    expect(validateEnv(base).RBAC_ENFORCED).toBe(true); // secure default
   });
 });

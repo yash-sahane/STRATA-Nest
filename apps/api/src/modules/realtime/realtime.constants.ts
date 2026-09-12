@@ -39,3 +39,11 @@ export const MODEL_COLLECTION: Record<string, string> = {
   DiscordIntegration: 'discord_integrations',
   GitCommit: 'git_commits',
 };
+
+/**
+ * Collections whose rows are addressed to ONE user. Workspace membership is not
+ * enough to receive their frames — the row carries private content (a
+ * notification's title/message, e.g. a leave rejection reason), so a frame must
+ * only reach the recipient's own sockets. See `RealtimeService.isAddressedTo`.
+ */
+export const USER_SCOPED_COLLECTIONS: ReadonlySet<string> = new Set(['notifications']);
