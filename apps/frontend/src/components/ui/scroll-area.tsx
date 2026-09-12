@@ -14,7 +14,16 @@ const ScrollArea = React.forwardRef<
     className={cn("relative overflow-hidden", className)}
     {...props}
   >
-    <ScrollAreaPrimitive.Viewport className="h-full w-full rounded-[inherit]">
+    {/* `max-h-[inherit]` picks up a caller's `max-h-*` on the Root. Without it the
+        viewport (height: 100% of an auto-height Root) grows past the cap, never
+        overflows — so no scrollbar appears — and the Root's `overflow-hidden`
+        silently clips the rest. */}
+    {/* tabIndex 0: a region that scrolls must be reachable by keyboard, or its
+        overflowing content is unreachable without a mouse (WCAG 2.1.1). */}
+    <ScrollAreaPrimitive.Viewport
+      tabIndex={0}
+      className="h-full max-h-[inherit] w-full rounded-[inherit] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+    >
       {children}
     </ScrollAreaPrimitive.Viewport>
     <ScrollBar />

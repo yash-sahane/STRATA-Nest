@@ -11,7 +11,11 @@ const TabsList = React.forwardRef<
   <TabsPrimitive.List
     ref={ref}
     className={cn(
-      'inline-flex h-10 items-center justify-center rounded-md bg-muted p-1 text-muted-foreground',
+      // max-w-full + overflow-x-auto: a strip with more tabs than fit (Settings
+      // has five) otherwise overflowed its container with overflow-x visible,
+      // so the trailing tabs were painted outside the viewport with nothing
+      // able to scroll to them — unreachable on a narrow phone.
+      'inline-flex h-10 max-w-full items-center justify-center overflow-x-auto rounded-md bg-muted p-1 text-muted-foreground',
       className
     )}
     {...props}

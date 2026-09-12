@@ -1,0 +1,173 @@
+/**
+ * Canonical working-day and date-only utilities.
+ *
+ * Single source of truth for:
+ * - date-only ('YYYY-MM-DD') <-> Date conversions using LOCAL calendar parts
+ *   (never `toISOString()`, which shifts the day for non-UTC timezones), and
+ * - the working-day rule: Monday-Friday plus alternate working Saturdays
+ *   (weeks 1 and 3 of each month); Sundays and week 2/4/5 Saturdays are off.
+ *
+ * Attendance, leave, and calendar math must all import these helpers so the
+ * subsystems agree about which days count as working days.
+ */
+
+/** Weeks of the month (1-5) whose Saturday is a working day. */
+export const WORKING_SATURDAY_WEEKS = [1, 3];
+
+const pad = (n: number): string => String(n).padStart(2, '0');
+
+/** Format a Date as 'YYYY-MM-DD' using its LOCAL calendar day. */
+export function formatDateOnly(date: Date): string {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/**
+ * Parse the leading 'YYYY-MM-DD' of a date or date-time string into a Date at
+ * LOCAL midnight. (`new Date('YYYY-MM-DD')` is UTC midnight, which reads as
+ * the previous local day in UTC-negative timezones.)
+ */
+export function parseDateOnly(value: string): Date {
+  const [year, month, day] = value.slice(0, 10).split('-').map(Number);
+  return new Date(year, (month || 1) - 1, day || 1);
+}
+
+/** Today's LOCAL calendar date as 'YYYY-MM-DD'. */
+export function todayDateOnly(): string {
+  return formatDateOnly(new Date());
+}
+
+/** Week of the month (1-5) a date falls in. */
+export function getWeekOfMonth(date: string): number {
+  const d = parseDateOnly(date);
+  const firstDayOfWeek = new Date(d.getFullYear(), d.getMonth(), 1).getDay();
+  return Math.ceil((d.getDate() + firstDayOfWeek) / 7);
+}
+
+/** Saturdays of weeks 1 and 3 are working days. */
+export function isSaturdayWorking(date: string): boolean {
+  return WORKING_SATURDAY_WEEKS.includes(getWeekOfMonth(date));
+}
+
+/** Sunday, or a non-working (week 2/4/5) Saturday. */
+export function isWeekend(date: string): boolean {
+  const day = parseDateOnly(date).getDay();
+  if (day === 0) return true;
+  if (day === 6) return !isSaturdayWorking(date);
+  return false;
+}
+
+/**
+ * Public-holiday dates, as 'YYYY-MM-DD' strings or a Set of them. Accepted by
+ * every working-day predicate and counter so a public holiday stops counting as
+ * a working day in attendance and leave denominators. Values may carry a time
+ * component; only the leading date part is compared.
+ */
+export type HolidayDates = ReadonlySet<string> | readonly string[];
+
+const EMPTY_HOLIDAYS: ReadonlySet<string> = new Set<string>();
+
+/**
+ * Normalize a holiday collection to a Set of 'YYYY-MM-DD' keys. Build this once
+ * per render and pass the Set (not the raw array) into the loops below, so a
+ * month's worth of days does not re-normalize the same list 31 times.
+ */
+export function toHolidaySet(holidays?: HolidayDates): ReadonlySet<string> {
+  if (!holidays) return EMPTY_HOLIDAYS;
+  const normalized = new Set<string>();
+  Array.from(holidays as Iterable<string>).forEach((value) => {
+    normalized.add(String(value).slice(0, 10));
+  });
+  return normalized;
+}
+
+/** A Set is trusted to already hold date-only keys (i.e. came from toHolidaySet). */
+function holidaySetOf(holidays: HolidayDates): ReadonlySet<string> {
+  return holidays instanceof Set ? holidays : toHolidaySet(holidays);
+}
+
+/** True when the date falls on a configured public holiday. */
+export function isHoliday(date: string, holidays?: HolidayDates): boolean {
+  if (!holidays) return false;
+  return holidaySetOf(holidays).has(date.slice(0, 10));
+}
+
+/**
+ * Monday-Friday, plus working Saturdays (weeks 1 and 3), minus public holidays.
+ * `holidays` is optional so existing callers keep the weekend-only rule until
+ * they have a holiday list to pass.
+ */
+export function isWorkingDay(date: string, holidays?: HolidayDates): boolean {
+  if (isWeekend(date)) return false;
+  return !holidays || !holidaySetOf(holidays).has(date.slice(0, 10));
+}
+
+/** Count working days in a month, including alternate Saturdays (0-based month). */
+export function countWorkingDaysInMonth(
+  year: number,
+  month: number,
+  holidays?: HolidayDates,
+): number {
+  const holidaySet = toHolidaySet(holidays);
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  let workingDays = 0;
+
+  for (let day = 1; day <= daysInMonth; day++) {
+    if (isWorkingDay(formatDateOnly(new Date(year, month, day)), holidaySet)) {
+      workingDays++;
+    }
+  }
+
+  return workingDays;
+}
+
+/** All working Saturdays in a month as 'YYYY-MM-DD' strings (0-based month). */
+export function getWorkingSaturdaysInMonth(year: number, month: number): string[] {
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const workingSaturdays: string[] = [];
+
+  for (let day = 1; day <= daysInMonth; day++) {
+    const date = new Date(year, month, day);
+    if (date.getDay() === 6) {
+      const dateString = formatDateOnly(date);
+      if (isSaturdayWorking(dateString)) {
+        workingSaturdays.push(dateString);
+      }
+    }
+  }
+
+  return workingSaturdays;
+}
+
+/** First and last day of a month as 'YYYY-MM-DD' (0-based month). */
+export function getMonthDateRange(year: number, month: number): { start: string; end: string } {
+  return {
+    start: formatDateOnly(new Date(year, month, 1)),
+    end: formatDateOnly(new Date(year, month + 1, 0)),
+  };
+}
+
+/**
+ * Count working days in an inclusive date range (date-only strings).
+ * Honors the alternate-Saturday rule so leave durations and attendance
+ * denominators agree about what a working day is. Pass `holidays` to exclude
+ * public holidays from the count as well.
+ */
+export function countWorkingDaysBetween(
+  startDate: string,
+  endDate: string,
+  holidays?: HolidayDates,
+): number {
+  const holidaySet = toHolidaySet(holidays);
+  const end = parseDateOnly(endDate);
+  const current = parseDateOnly(startDate);
+  let count = 0;
+
+  while (current <= end) {
+    if (isWorkingDay(formatDateOnly(current), holidaySet)) {
+      count++;
+    }
+    current.setDate(current.getDate() + 1);
+  }
+
+  return count;
+}

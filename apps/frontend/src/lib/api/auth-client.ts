@@ -71,6 +71,28 @@ async function updatePassword(newPassword: string, currentPassword: string): Pro
   cachedSession = null;
 }
 
+/**
+ * Ask for a reset link. The API answers {ok:true} whether or not the address
+ * exists — deliberately, so the form cannot be used to enumerate accounts —
+ * so callers must show the same confirmation either way.
+ */
+async function requestPasswordReset(email: string): Promise<void> {
+  await restClient.post('/api/v1/auth/password-reset/', { email });
+}
+
+/** Complete a reset from the `uid`/`token` pair the emailed link carries. */
+async function confirmPasswordReset(
+  uid: string,
+  token: string,
+  newPassword: string,
+): Promise<void> {
+  await restClient.post('/api/v1/auth/password-reset/confirm/', { uid, token, newPassword });
+  // The reset clears hasTempPassword server-side; drop the cached profile so
+  // nothing downstream keeps reading the pre-reset one.
+  cachedUser = null;
+  cachedSession = null;
+}
+
 async function updateName(name: string): Promise<ApiModels.User> {
   const user = await restClient.patch('/api/v1/auth/profile/', { name });
   cachedUser = null;
@@ -97,6 +119,8 @@ export const authClient = {
   updatePassword,
   changePassword: (currentPassword: string, newPassword: string) =>
     updatePassword(newPassword, currentPassword),
+  requestPasswordReset,
+  confirmPasswordReset,
   updateName,
   updatePhone,
   updateAvatar,

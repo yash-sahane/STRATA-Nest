@@ -6,7 +6,9 @@ import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog"
 import { type VariantProps } from "class-variance-authority"
 
 import { cn } from "@/lib/utils"
+import { restoreFocusTo } from "@/lib/restore-focus"
 import { buttonVariants } from "@/components/ui/button"
+import { dialogContentSizes } from "@/components/ui/dialog"
 
 const AlertDialog = AlertDialogPrimitive.Root
 
@@ -20,7 +22,7 @@ const AlertDialogOverlay = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <AlertDialogPrimitive.Overlay
     className={cn(
-      "fixed inset-0 z-50 bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+      "fixed inset-0 z-60 bg-black/50 duration-(--duration-overlay) data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
       className
     )}
     {...props}
@@ -29,22 +31,70 @@ const AlertDialogOverlay = React.forwardRef<
 ))
 AlertDialogOverlay.displayName = AlertDialogPrimitive.Overlay.displayName
 
+/**
+ * Shares DialogContent's size scale (SIZE-02) and its centre-anchored entrance —
+ * see the note on DialogContent for why no `slide-*` utilities belong here.
+ *
+ * Stacking bands, all in the root stacking context (everything here portals to
+ * document.body, so z-order decides, not DOM order):
+ *   z-50  surfaces — Dialog, Sheet and their overlays
+ *   z-60  the alert layer — confirms are routinely opened from INSIDE an open
+ *         Dialog and must paint over it rather than rely on portal order
+ *   z-70  portaled poppers — Select / Popover / DropdownMenu / Tooltip content
+ *
+ * The popper band exists because raising only this layer buried them: the
+ * opaque panel below covered the `<SelectContent>` of the Clone-FR flow's
+ * project picker, whose trigger lives inside this very panel. A popper must
+ * always sit above the surface hosting its trigger, so any future bump here
+ * must move the popper band with it.
+ */
 const AlertDialogContent = React.forwardRef<
   React.ElementRef<typeof AlertDialogPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Content>
->(({ className, ...props }, ref) => (
+  React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Content> & {
+    size?: keyof typeof dialogContentSizes
+  }
+>(({ className, children, size = "md", onOpenAutoFocus, onCloseAutoFocus, ...props }, ref) => {
+  /**
+   * Return focus to whatever opened the alert, exactly as DialogContent does.
+   *
+   * Without it every confirm in the app — Delete sprint, Delete task, Delete
+   * project, Delete workspace — dropped focus on <body> when it closed, so a
+   * keyboard user lost their place and had to tab from the top of the page
+   * again (WCAG 2.4.3). A plain Dialog on the same page did not, which made the
+   * inconsistency itself confusing.
+   */
+  const openerRef = React.useRef<HTMLElement | null>(null);
+
+  return (
   <AlertDialogPortal>
     <AlertDialogOverlay />
     <AlertDialogPrimitive.Content
       ref={ref}
+      onOpenAutoFocus={(event) => {
+        openerRef.current = (document.activeElement as HTMLElement | null) ?? null
+        onOpenAutoFocus?.(event)
+      }}
+      onCloseAutoFocus={(event) => {
+        onCloseAutoFocus?.(event)
+        if (event.defaultPrevented) return
+        // Most confirms in this app are opened from a row's ⋮ menu, and that
+        // menu is unmounted by the time the confirm closes — so the captured
+        // opener is gone and Radix falls back to <body>. restoreFocusTo parks
+        // focus on the main region instead.
+        if (restoreFocusTo(openerRef.current)) event.preventDefault()
+      }}
       className={cn(
-        "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg",
+        "fixed left-[50%] top-[50%] z-60 grid max-h-[calc(100dvh-2rem)] w-full grid-rows-[minmax(0,1fr)] translate-x-[-50%] translate-y-[-50%] border bg-background shadow-lg duration-(--duration-overlay) data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 sm:rounded-lg",
+        dialogContentSizes[size],
         className
       )}
       {...props}
-    />
+    >
+      <div className="grid gap-4 overflow-y-auto p-6">{children}</div>
+    </AlertDialogPrimitive.Content>
   </AlertDialogPortal>
-))
+  )
+})
 AlertDialogContent.displayName = AlertDialogPrimitive.Content.displayName
 
 const AlertDialogHeader = ({

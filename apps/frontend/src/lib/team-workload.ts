@@ -104,11 +104,20 @@ export function calculateTeamWorkload(
   };
 }
 
+/**
+ * Text colours for the workload ramp.
+ *
+ * The semantic *-text tokens exist precisely for coloured text on a card: the
+ * raw 600-weight palette shades this used to return measure 3.1-3.4:1 on a
+ * light background, under the 4.5:1 AA floor. Only the "High" step keeps a raw
+ * shade -- there is no distinct token between warning and success -- and it is
+ * pinned to 700, which clears the floor.
+ */
 export function getWorkloadColor(percentage: number): string {
-  if (percentage > 150) return 'text-red-600 dark:text-red-400';
-  if (percentage > 100) return 'text-orange-600 dark:text-orange-400';
-  if (percentage > 70) return 'text-yellow-600 dark:text-yellow-400';
-  return 'text-green-600 dark:text-green-400';
+  if (percentage > 150) return 'text-destructive-text';
+  if (percentage > 100) return 'text-warning-text';
+  if (percentage > 70) return 'text-yellow-700 dark:text-yellow-400';
+  return 'text-success-text';
 }
 
 export function getWorkloadBgColor(percentage: number): string {

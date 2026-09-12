@@ -10,17 +10,22 @@ import { toneStyle, type SemanticTone, type BadgeVariant } from './tone';
  * Tone convention (see docs/DESIGN_SYSTEM.md):
  *   neutral      not-started / draft / planning
  *   info         in-progress / approved-but-not-final / completed-project
+ *   built        delivered, not yet verified (FR IMPLEMENTED)
+ *   verified     checked and passing, not yet released (FR TESTED)
  *   warning      needs-attention: review, on-hold
  *   success      terminal-positive: done, deployed, active-project, present
  *   destructive  rejected / cancelled / blocked
  *
  * Note the deliberate reuse of `success` for both a task's DONE and a project's
  * ACTIVE — disambiguated by context + label, never contradictory on one surface.
+ * Reuse WITHIN one lifecycle is a different matter — see FUNCTIONAL_REQUIREMENT_STATUS.
  */
 export interface StatusConfig {
   label: string;
   tone: SemanticTone;
   badgeVariant: BadgeVariant;
+  /** Pass alongside `badgeVariant`; '' for the token-backed tones. See ToneStyle. */
+  badgeClassName: string;
   dot: string;
   border: string;
   /** Left-edge accent only (e.g. a card's leading border). */
@@ -41,12 +46,27 @@ const EPIC_STATUS: Record<string, SemanticTone> = {
   DONE: 'success',
 };
 
+/**
+ * The FR lifecycle is DRAFT -> REVIEW -> APPROVED -> IMPLEMENTED -> TESTED ->
+ * DEPLOYED, and every one of those six is a distinct tone on purpose.
+ *
+ * APPROVED, IMPLEMENTED and TESTED all used to resolve to `info`, so three
+ * consecutive stages painted one identical fill — rgb(16,104,244) in light,
+ * rgb(38,108,223) in dark — on the epic dialog, the FR detail dot, the sprint
+ * FR card and the status filter alike. A pill exists to be told apart at a
+ * glance; reading the label to work out which of three it is defeats it.
+ * `built` and `verified` were added to lib/semantic/tone.ts for the two middle
+ * stages (contrast measured there).
+ *
+ * This is the one map where reusing a tone is NOT acceptable: unlike DONE vs
+ * ACTIVE, these stages sit next to each other in the same list.
+ */
 const FUNCTIONAL_REQUIREMENT_STATUS: Record<string, SemanticTone> = {
   DRAFT: 'neutral',
   REVIEW: 'warning',
   APPROVED: 'info',
-  IMPLEMENTED: 'info',
-  TESTED: 'info',
+  IMPLEMENTED: 'built',
+  TESTED: 'verified',
   DEPLOYED: 'success',
 };
 
@@ -85,6 +105,14 @@ function titleCase(value: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+/** Time entries move PENDING -> APPROVED | REJECTED, owned by the API's
+ *  approve/reject endpoints (self-approval is refused server-side). */
+const TIME_ENTRY_STATUS: Record<string, SemanticTone> = {
+  PENDING: 'warning',
+  APPROVED: 'success',
+  REJECTED: 'destructive',
+};
+
 function makeResolver(map: Record<string, SemanticTone>) {
   return (status: string | null | undefined): StatusConfig => {
     const key = String(status ?? '').toUpperCase();
@@ -94,6 +122,7 @@ function makeResolver(map: Record<string, SemanticTone>) {
       label: titleCase(key || 'Unknown'),
       tone,
       badgeVariant: style.badgeVariant,
+      badgeClassName: style.badgeClassName,
       dot: style.dot,
       border: style.border,
       borderLeft: style.borderLeft,
@@ -118,3 +147,4 @@ export const getFunctionalRequirementStatusConfig = makeResolver(FUNCTIONAL_REQU
 export const getProjectStatusConfig = makeResolver(PROJECT_STATUS);
 export const getSprintStatusConfig = makeResolver(SPRINT_STATUS);
 export const getRequirementStatusConfig = makeResolver(REQUIREMENT_STATUS);
+export const getTimeEntryStatusConfig = makeResolver(TIME_ENTRY_STATUS);

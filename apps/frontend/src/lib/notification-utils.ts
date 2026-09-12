@@ -85,24 +85,24 @@ export enum NotificationPriority {
 
 export const NOTIFICATION_PRIORITY_CONFIG = {
   [NotificationPriority.LOW]: {
-    text: 'text-gray-600',
-    bg: 'bg-gray-100',
-    border: 'border-gray-200',
+    text: 'text-gray-600 dark:text-gray-400',
+    bg: 'bg-gray-100 dark:bg-gray-950',
+    border: 'border-gray-200 dark:border-gray-900',
   },
   [NotificationPriority.MEDIUM]: {
-    text: 'text-blue-600',
-    bg: 'bg-blue-100',
-    border: 'border-blue-200',
+    text: 'text-blue-600 dark:text-blue-400',
+    bg: 'bg-blue-100 dark:bg-blue-950',
+    border: 'border-blue-200 dark:border-blue-900',
   },
   [NotificationPriority.HIGH]: {
-    text: 'text-orange-600',
-    bg: 'bg-orange-100',
-    border: 'border-orange-200',
+    text: 'text-orange-600 dark:text-orange-400',
+    bg: 'bg-orange-100 dark:bg-orange-950',
+    border: 'border-orange-200 dark:border-orange-900',
   },
   [NotificationPriority.URGENT]: {
-    text: 'text-red-600',
-    bg: 'bg-red-100',
-    border: 'border-red-200',
+    text: 'text-red-600 dark:text-red-400',
+    bg: 'bg-red-100 dark:bg-red-950',
+    border: 'border-red-200 dark:border-red-900',
   },
 };
 
@@ -170,6 +170,18 @@ export const NOTIFICATION_TEMPLATES: Record<string, NotificationTemplate> = {
   TASK_STATUS_CHANGED: {
     title: (data) => `Task Status Changed: ${data.taskTitle}`,
     message: (data) => `${data.changerName} moved "${data.taskTitle}" to ${data.newStatus}`,
+    priority: NotificationPriority.MEDIUM,
+    category: NotificationCategory.TASK,
+    requiresEmail: false,
+  },
+
+  // `generateNotification` returns null for any type with no template here, so a
+  // missing entry silently notifies nobody. use-task.ts emits this one on every
+  // priority change and Settings advertises the toggle — it needs a template.
+  TASK_PRIORITY_CHANGED: {
+    title: (data) => `Task Priority Changed: ${data.taskTitle}`,
+    message: (data) =>
+      `${data.changerName} changed the priority of "${data.taskTitle}" to ${data.newPriority}`,
     priority: NotificationPriority.MEDIUM,
     category: NotificationCategory.TASK,
     requiresEmail: false,
@@ -333,6 +345,14 @@ export const NOTIFICATION_TEMPLATES: Record<string, NotificationTemplate> = {
     requiresEmail: true,
   },
 
+  SPRINT_TASK_ADDED: {
+    title: (data) => `Task Added to Sprint: ${data.sprintName}`,
+    message: (data) => `"${data.taskTitle}" was added to the sprint "${data.sprintName}"`,
+    priority: NotificationPriority.LOW,
+    category: NotificationCategory.SPRINT,
+    requiresEmail: false,
+  },
+
   // Leave Notifications
   LEAVE_REQUESTED: {
     title: (data) => `New Leave Request: ${data.employeeName}`,
@@ -437,9 +457,25 @@ export const NOTIFICATION_TEMPLATES: Record<string, NotificationTemplate> = {
     requiresEmail: true,
   },
 
+  TEAM_MEMBER_REMOVED: {
+    title: (data) => `Removed from ${data.projectName}`,
+    message: (data) => `${data.removerName} removed you from the project "${data.projectName}"`,
+    priority: NotificationPriority.HIGH,
+    category: NotificationCategory.TEAM,
+    requiresEmail: true,
+  },
+
   PROJECT_INVITATION: {
     title: (data) => `Project Invitation: ${data.projectName}`,
     message: (data) => `${data.inviterName} invited you to join "${data.projectName}"`,
+    priority: NotificationPriority.HIGH,
+    category: NotificationCategory.TEAM,
+    requiresEmail: true,
+  },
+
+  WORKSPACE_INVITATION: {
+    title: (data) => `Workspace Invitation: ${data.workspaceName}`,
+    message: (data) => `${data.inviterName} invited you to join "${data.workspaceName}"`,
     priority: NotificationPriority.HIGH,
     category: NotificationCategory.TEAM,
     requiresEmail: true,

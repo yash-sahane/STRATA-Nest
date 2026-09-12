@@ -8,14 +8,59 @@ import { buttonVariants } from '@/components/ui/button';
 
 export type CalendarProps = React.ComponentProps<typeof DayPicker>;
 
+/**
+ * The first real date in whatever `selected` holds, whichever selection mode is
+ * in play: a Date (single), the first Date of an array (multiple), or the
+ * `from`/`to` edge of a range.
+ */
+function firstSelectedDate(selected: unknown): Date | undefined {
+  if (selected instanceof Date) return selected;
+  if (Array.isArray(selected)) return selected.find((d): d is Date => d instanceof Date);
+  if (selected && typeof selected === 'object') {
+    const { from, to } = selected as { from?: Date; to?: Date };
+    if (from instanceof Date) return from;
+    if (to instanceof Date) return to;
+  }
+  return undefined;
+}
+
 function Calendar({ className, classNames, showOutsideDays = true, ...props }: CalendarProps) {
+  // react-day-picker picks the opening month from `month`/`defaultMonth` ONLY
+  // (`getInitialMonth`: `month || defaultMonth || today`) — `selected` never
+  // moves it. A field already holding December therefore opened on today's
+  // month with nothing highlighted, and the cell that LOOKED selected was a
+  // different day, so the obvious next click moved the value months backwards
+  // without a word. Defaulting the opening month here rather than at each call
+  // site is what makes every calendar in the app behave, including the three
+  // that never went through DatePicker (create-sprint, create-task,
+  // manual-time-entry). An explicit `month`/`defaultMonth` from the caller
+  // still wins, because both are folded into the value below.
+  //
+  // `defaultMonth` is applied AFTER the {...props} spread below, so a caller
+  // passing `defaultMonth={undefined}` (a picker whose field is empty) cannot
+  // blank out the value resolved here.
+  const { month, defaultMonth, selected } = props as unknown as {
+    month?: Date;
+    defaultMonth?: Date;
+    selected?: unknown;
+  };
+  const openingMonth = month ?? defaultMonth ?? firstSelectedDate(selected);
+
   return (
     <DayPicker
       showOutsideDays={showOutsideDays}
       className={cn('p-3', className)}
       classNames={{
         months: 'flex flex-col sm:flex-row space-y-4 sm:space-x-4 sm:space-y-0',
-        month: 'space-y-4',
+        // NOT `space-y-4`. The month box has exactly two children — caption and
+        // table — and the caption carries its own `mb-1`, which wins over
+        // Tailwind's zero-specificity `:where(.space-y-4 > :not(:last-child))`.
+        // So the stack utility never did anything here EXCEPT hand compact mode
+        // a selector to shadow: `.compact-mode .space-y-4 > :not(:last-child)`
+        // is unlayered and specificity (0,3,0), so it beat `.mb-1` and GREW the
+        // caption gap 4px -> 12px — compact mode making the calendar taller,
+        // the exact bug class compact mode was being fixed for. Measured live.
+        month: '',
         caption: 'flex justify-center pt-1 relative items-center mb-1',
         caption_label: 'text-sm font-medium',
         caption_dropdowns: 'flex justify-center gap-1',
@@ -57,6 +102,7 @@ function Calendar({ className, classNames, showOutsideDays = true, ...props }: C
         IconRight: () => <ChevronRight className="h-4 w-4" />,
       }}
       {...props}
+      defaultMonth={openingMonth}
     />
   );
 }

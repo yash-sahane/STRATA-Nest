@@ -38,13 +38,6 @@ export function getRealtimeEventType(event: string): 'create' | 'update' | 'dele
   return 'unknown';
 }
 
-export function isRealtimeEvent(
-  response: ApiModels.RealtimeEvent<any>,
-  type: 'create' | 'update' | 'delete',
-): boolean {
-  return getRealtimeEventType(response.event) === type;
-}
-
 export const REALTIME_CONFIG = {
   COLLECTIONS: {
     COMMENTS: 'task_comments',

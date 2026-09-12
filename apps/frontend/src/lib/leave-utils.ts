@@ -1,4 +1,10 @@
 import { LEAVE_REQUEST_TYPES, getBalanceFieldForLeaveType, type LeaveRequestType } from './leave-balance-mapper';
+import {
+  countWorkingDaysBetween,
+  formatDateOnly,
+  parseDateOnly,
+  todayDateOnly,
+} from './utils/working-days';
 
 /**
  * Leave Management Utilities
@@ -13,6 +19,15 @@ import { LEAVE_REQUEST_TYPES, getBalanceFieldForLeaveType, type LeaveRequestType
 export const LEAVE_TYPES = LEAVE_REQUEST_TYPES;
 export type LeaveType = LeaveRequestType;
 
+/**
+ * Types a member may pick in the request form. COMP_OFF is excluded: it is an
+ * EARNED balance and nothing in the product credits it yet, so offering it only
+ * ever produces "Insufficient balance". Existing COMP_OFF records still render.
+ */
+export const SELECTABLE_LEAVE_TYPES = Object.fromEntries(
+  Object.entries(LEAVE_REQUEST_TYPES).filter(([key]) => key !== 'COMP_OFF')
+) as Record<Exclude<LeaveType, 'COMP_OFF'>, string>;
+
 export const LEAVE_STATUS = {
   PENDING: 'Pending',
   APPROVED: 'Approved',
@@ -22,54 +37,49 @@ export const LEAVE_STATUS = {
 
 export type LeaveStatus = keyof typeof LEAVE_STATUS;
 
+/** Default annual allocation the API seeds a member's first balance row with. */
+export const DEFAULT_LEAVE_ALLOCATION = {
+  paidLeave: 21,
+  halfDay: 12,
+  compOff: 0,
+} as const;
+
+/** Label lookups that tolerate a value the UI does not know about. */
+export function getLeaveTypeLabel(leaveType: LeaveType): string {
+  return LEAVE_TYPES[leaveType] || leaveType || 'Unknown';
+}
+
+export function getLeaveStatusLabel(status: LeaveStatus): string {
+  return LEAVE_STATUS[status] || status || 'Unknown';
+}
+
 // ============================================================================
 // Date and Balance Calculation Utilities
 // ============================================================================
 
 /**
- * Calculate number of working days between two dates (excluding weekends)
+ * Working days in an inclusive range of date-only strings. Delegates to the
+ * canonical rule (Mon-Fri plus alternate working Saturdays) so leave durations
+ * and attendance agree about what a working day is.
  */
-export function calculateWorkingDays(startDate: Date, endDate: Date): number {
-  let count = 0;
-  const currentDate = new Date(startDate);
-
-  while (currentDate <= endDate) {
-    const dayOfWeek = currentDate.getDay();
-    // Skip Saturday (6) and Sunday (0)
-    if (dayOfWeek !== 0 && dayOfWeek !== 6) {
-      count++;
-    }
-    currentDate.setDate(currentDate.getDate() + 1);
-  }
-
-  return count;
+export function calculateWorkingDays(startDate: string, endDate: string): number {
+  return countWorkingDaysBetween(startDate, endDate);
 }
 
 /**
- * Calculate leave days considering half-day option
+ * Days a leave request costs. HALF_DAY is a single half-day session; every
+ * other type is whole working days. The server derives the same number from the
+ * stored range, so this is only the preview the form shows.
  */
 export function calculateLeaveDays(
   startDate: string,
   endDate: string,
-  halfDay: boolean = false,
   leaveType?: LeaveType
 ): number {
-  const start = new Date(startDate);
-  const end = new Date(endDate);
-
-  const workingDays = calculateWorkingDays(start, end);
-
-  // Half-day is only allowed for HALF_DAY leave type
-  // All other leave types must be full-day (INTEGER)
-  if (leaveType && leaveType !== 'HALF_DAY') {
-    return Math.ceil(workingDays); // Enforce full-day
+  if (leaveType === 'HALF_DAY') {
+    return startDate === endDate ? 0.5 : 0;
   }
-
-  if (halfDay && workingDays === 1) {
-    return 0.5;
-  }
-
-  return workingDays;
+  return calculateWorkingDays(startDate, endDate);
 }
 
 /**
@@ -80,7 +90,7 @@ export function hasEnoughBalance(
   requestedDays: number,
   dbBalance: { paidLeave: number; unpaidLeave: number; halfDay: number; compOff: number }
 ): boolean {
-  // Unpaid leave has no balance limit
+  // Unpaid leave has no balance limit (unpaidLeave counts the days taken).
   if (leaveType === 'UNPAID') {
     return true;
   }
@@ -98,20 +108,11 @@ export function hasEnoughBalance(
 }
 
 /**
- * Initialize default leave balance for a new user
+ * Units a leave type charges its balance field: HALF_DAY is one session,
+ * everything else is whole days. Mirrors the server's requiredUnits().
  */
-export function initializeLeaveBalance(): {
-  paidLeave: number;
-  unpaidLeave: number;
-  halfDay: number;
-  compOff: number;
-} {
-  return {
-    paidLeave: 21,
-    unpaidLeave: 0,
-    halfDay: 12,
-    compOff: 0,
-  };
+export function requiredBalanceUnits(leaveType: LeaveType, requestedDays: number): number {
+  return Math.max(0, leaveType === 'HALF_DAY' ? 1 : Math.ceil(requestedDays));
 }
 
 /**
@@ -119,18 +120,18 @@ export function initializeLeaveBalance(): {
  */
 export function getLeaveTypeColor(leaveType: LeaveType): string {
   const colors: Record<LeaveType, string> = {
-    CASUAL: 'bg-blue-100 text-blue-800 border-blue-200',
-    SICK: 'bg-red-100 text-red-800 border-red-200',
-    ANNUAL: 'bg-green-100 text-green-800 border-green-200',
-    MATERNITY: 'bg-pink-100 text-pink-800 border-pink-200',
-    PATERNITY: 'bg-indigo-100 text-indigo-800 border-indigo-200',
-    BEREAVEMENT: 'bg-slate-100 text-slate-800 border-slate-200',
-    UNPAID: 'bg-gray-100 text-gray-800 border-gray-200',
-    HALF_DAY: 'bg-amber-100 text-amber-800 border-amber-200',
-    COMP_OFF: 'bg-purple-100 text-purple-800 border-purple-200',
+    CASUAL: 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-950 dark:text-blue-200 dark:border-blue-900',
+    SICK: 'bg-red-100 text-red-800 border-red-200 dark:bg-red-950 dark:text-red-200 dark:border-red-900',
+    ANNUAL: 'bg-green-100 text-green-800 border-green-200 dark:bg-green-950 dark:text-green-200 dark:border-green-900',
+    MATERNITY: 'bg-pink-100 text-pink-800 border-pink-200 dark:bg-pink-950 dark:text-pink-200 dark:border-pink-900',
+    PATERNITY: 'bg-indigo-100 text-indigo-800 border-indigo-200 dark:bg-indigo-950 dark:text-indigo-200 dark:border-indigo-900',
+    BEREAVEMENT: 'bg-slate-100 text-slate-800 border-slate-200 dark:bg-slate-950 dark:text-slate-200 dark:border-slate-900',
+    UNPAID: 'bg-gray-100 text-gray-800 border-gray-200 dark:bg-gray-950 dark:text-gray-200 dark:border-gray-900',
+    HALF_DAY: 'bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-950 dark:text-amber-200 dark:border-amber-900',
+    COMP_OFF: 'bg-purple-100 text-purple-800 border-purple-200 dark:bg-purple-950 dark:text-purple-200 dark:border-purple-900',
   };
 
-  return colors[leaveType] || 'bg-gray-100 text-gray-800 border-gray-200';
+  return colors[leaveType] || 'bg-gray-100 text-gray-800 border-gray-200 dark:bg-gray-950 dark:text-gray-200 dark:border-gray-900';
 }
 
 /**
@@ -138,21 +139,23 @@ export function getLeaveTypeColor(leaveType: LeaveType): string {
  */
 export function getLeaveStatusColor(status: LeaveStatus): string {
   const colors: Record<LeaveStatus, string> = {
-    PENDING: 'bg-yellow-100 text-yellow-800 border-yellow-200',
-    APPROVED: 'bg-green-100 text-green-800 border-green-200',
-    REJECTED: 'bg-red-100 text-red-800 border-red-200',
-    CANCELLED: 'bg-gray-100 text-gray-800 border-gray-200',
+    PENDING: 'bg-yellow-100 text-yellow-800 border-yellow-200 dark:bg-yellow-950 dark:text-yellow-200 dark:border-yellow-900',
+    APPROVED: 'bg-green-100 text-green-800 border-green-200 dark:bg-green-950 dark:text-green-200 dark:border-green-900',
+    REJECTED: 'bg-red-100 text-red-800 border-red-200 dark:bg-red-950 dark:text-red-200 dark:border-red-900',
+    CANCELLED: 'bg-gray-100 text-gray-800 border-gray-200 dark:bg-gray-950 dark:text-gray-200 dark:border-gray-900',
   };
 
-  return colors[status] || 'bg-gray-100 text-gray-800 border-gray-200';
+  return colors[status] || 'bg-gray-100 text-gray-800 border-gray-200 dark:bg-gray-950 dark:text-gray-200 dark:border-gray-900';
 }
 
 /**
  * Format leave date range for display
  */
 export function formatLeaveDateRange(startDate: string, endDate: string): string {
-  const start = new Date(startDate);
-  const end = new Date(endDate);
+  // The API returns date-only strings; parse them on the LOCAL calendar so the
+  // rendered day matches the day that was requested.
+  const start = parseDateOnly(startDate);
+  const end = parseDateOnly(endDate);
 
   const options: Intl.DateTimeFormatOptions = {
     month: 'short',
@@ -192,17 +195,27 @@ export function getLeaveBalanceStatus(
   return 'high';
 }
 
+/** The earliest / latest date the form may offer, on the LOCAL calendar. */
+export function leaveDateBounds(): { min: string; max: string } {
+  const max = new Date();
+  max.setFullYear(max.getFullYear() + 1);
+  return { min: todayDateOnly(), max: formatDateOnly(max) };
+}
+
 /**
  * Validate leave request dates
  */
 export function validateLeaveDates(
   startDate: string,
-  endDate: string
+  endDate: string,
+  leaveType?: LeaveType
 ): { valid: boolean; error?: string } {
-  const start = new Date(startDate);
-  const end = new Date(endDate);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  // Date-only strings are parsed on the LOCAL calendar; `new Date('YYYY-MM-DD')`
+  // is UTC midnight, which reads as the previous local day west of UTC and made
+  // today's date fail the past-date check.
+  const start = parseDateOnly(startDate);
+  const end = parseDateOnly(endDate);
+  const today = parseDateOnly(todayDateOnly());
 
   // Check if dates are valid
   if (isNaN(start.getTime()) || isNaN(end.getTime())) {
@@ -225,6 +238,17 @@ export function validateLeaveDates(
 
   if (start > oneYearFromNow) {
     return { valid: false, error: 'Leave cannot be requested more than 1 year in advance' };
+  }
+
+  // A half-day is one session, so it cannot span a range.
+  if (leaveType === 'HALF_DAY' && startDate !== endDate) {
+    return { valid: false, error: 'A half-day leave must start and end on the same day' };
+  }
+
+  // A range made entirely of weekends costs nothing and the server rejects it —
+  // say so instead of silently disabling Submit.
+  if (leaveType !== 'HALF_DAY' && calculateWorkingDays(startDate, endDate) === 0) {
+    return { valid: false, error: 'The selected dates contain no working days' };
   }
 
   return { valid: true };

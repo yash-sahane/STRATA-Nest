@@ -34,16 +34,6 @@ export function formatDurationHuman(seconds: number): string {
 }
 
 /**
- * Format minutes into HH:MM format
- */
-export function formatMinutes(minutes: number): string {
-  const hours = Math.floor(minutes / 60);
-  const mins = minutes % 60;
-
-  return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
-}
-
-/**
  * Format minutes into human-readable format
  */
 export function formatMinutesHuman(minutes: number): string {

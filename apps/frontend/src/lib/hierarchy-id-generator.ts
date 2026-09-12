@@ -25,67 +25,6 @@ function extractChars(text: string, count: number): string {
 }
 
 /**
- * Generate project code from project name
- * Example: "Test Project" -> "TE"
- */
-export function generateProjectCode(projectName: string): string {
-  return extractChars(projectName, 2);
-}
-
-/**
- * Generate requirement hierarchical id
- * Format: {ProjectCode}-{ReqCode}-{Number}
- * Example: "PTES-RAU-01"
- */
-export function generateRequirementId(
-  projectCode: string,
-  projectName: string,
-  requirementName: string,
-  sequenceNumber: number
-): string {
-  const projCode = projectCode || extractChars(projectName, 4);
-  const reqCode = extractChars(requirementName, 3);
-  const seqNum = sequenceNumber.toString().padStart(2, '0');
-  return `${projCode}-${reqCode}-${seqNum}`;
-}
-
-/**
- * Generate epic hierarchical id
- * Format: {ProjectCode}-{ReqCode}-{EpicCode}-{Number}
- * Example: "PTES-RAU-EAU-01"
- */
-export function generateEpicId(
-  projectCode: string,
-  projectName: string,
-  requirementName: string,
-  epicName: string,
-  sequenceNumber: number
-): string {
-  const projCode = projectCode || extractChars(projectName, 4);
-  const reqCode = extractChars(requirementName, 3);
-  const epicCode = extractChars(epicName, 3);
-  const seqNum = sequenceNumber.toString().padStart(2, '0');
-  return `${projCode}-${reqCode}-${epicCode}-${seqNum}`;
-}
-
-/**
- * Generate epic hierarchical id (when no requirement)
- * Format: {ProjectCode}-{EpicCode}-{Number}
- * Example: "PTES-EAU-01"
- */
-export function generateEpicIdWithoutRequirement(
-  projectCode: string,
-  projectName: string,
-  epicName: string,
-  sequenceNumber: number
-): string {
-  const projCode = projectCode || extractChars(projectName, 4);
-  const epicCode = extractChars(epicName, 3);
-  const seqNum = sequenceNumber.toString().padStart(2, '0');
-  return `${projCode}-${epicCode}-${seqNum}`;
-}
-
-/**
  * Generate functional requirement hierarchical id
  * Format: {ProjectCode}-{CRCode}-{EpicCode}-{FRCode}-{Number}
  * Example: "PTES-RAU-EAU-FRL-01"
@@ -178,19 +117,4 @@ export function generateTaskIdWithoutFR(
   const taskCode = extractChars(taskName, 3) || sequenceNumber.toString().padStart(2, '0');
   const seqNum = sequenceNumber.toString().padStart(2, '0');
   return `${projCode}-${taskCode}-${seqNum}`;
-}
-
-/**
- * Generate sprint hierarchical id
- * Format: {ProjectCode}-S{SprintNumber}
- * Example: "PTES-S1" or "PTES-S01"
- */
-export function generateSprintId(
-  projectCode: string,
-  projectName: string,
-  sprintName: string
-): string {
-  const projCode = projectCode || extractChars(projectName, 4);
-  const sprintCode = sprintName.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
-  return `${projCode}-S${sprintCode}`;
 }

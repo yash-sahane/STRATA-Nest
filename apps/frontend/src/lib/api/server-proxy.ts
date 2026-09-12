@@ -70,3 +70,23 @@ export async function proxyToApi(
   }
   return { status: upstream.status, data };
 }
+
+/**
+ * Session guard for the route handlers that do their work INSIDE Next instead
+ * of proxying to the API — `/api/ai-generate` (a paid model call) and
+ * `/api/parse-pdf` (a CPU- and disk-bound parse). Those never reach the backend,
+ * so nothing else authenticates them and an anonymous POST could burn the
+ * operator's model quota or pin a worker.
+ *
+ * Resolves the caller against the API's own session endpoint with their cookies
+ * forwarded, so it is the same answer the rest of the app gets. Any non-200 —
+ * including the API being unreachable — is treated as anonymous.
+ */
+export async function hasApiSession(request: NextRequest): Promise<boolean> {
+  try {
+    const { status } = await proxyToApi(request, '/api/v1/auth/me/');
+    return status === 200;
+  } catch {
+    return false;
+  }
+}

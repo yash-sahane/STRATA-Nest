@@ -20,15 +20,18 @@ const VALID_ROLES = Object.keys(ROLE_HIERARCHY);
  * Parse CSV file and extract user data
  */
 export async function parseCSV(file: File): Promise<ParsedUser[]> {
-  const text = await file.text();
+  // Strip the UTF-8 BOM Excel writes: with it, the first header cell reads
+  // U+FEFF + "name" instead of "name", so a perfectly valid export failed with
+  // "Missing required columns: name".
+  const text = (await file.text()).replace(/^\uFEFF/, '');
   const lines = text.split('\n').map(line => line.trim()).filter(line => line);
 
   if (lines.length < 2) {
     throw new Error('CSV file must contain a header row and at least one data row');
   }
 
-  // Parse header
-  const header = lines[0].split(',').map(col => col.trim().toLowerCase());
+  // Parse header with the same quote-aware splitter as the data rows.
+  const header = parseCSVLine(lines[0]).map(col => col.toLowerCase());
   const requiredColumns = ['name', 'email', 'role'];
   
   // Validate required columns exist

@@ -11,7 +11,10 @@ const Separator = React.forwardRef<
   <div
     ref={ref}
     role={decorative ? 'none' : 'separator'}
-    aria-orientation={orientation}
+    // Only a real separator may carry aria-orientation: on role="none" it is a
+    // disallowed attribute, which axe flags as critical on every page that
+    // renders a divider.
+    aria-orientation={decorative ? undefined : orientation}
     className={cn(
       'shrink-0 bg-border',
       orientation === 'horizontal' ? 'h-[1px] w-full' : 'h-full w-[1px]',

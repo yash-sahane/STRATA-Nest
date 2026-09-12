@@ -78,8 +78,10 @@ async function callAI(prompt: string, maxRetries = 3): Promise<string> {
   });
 
   if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error || 'Failed to generate AI response');
+    // The route answers 401 when the session has expired; a non-JSON body (a
+    // proxy's HTML error page) used to throw a SyntaxError over the real reason.
+    const error = await response.json().catch(() => null);
+    throw new Error(error?.error || `Failed to generate AI response (${response.status})`);
   }
 
   const data = await response.json();
@@ -188,10 +190,13 @@ export async function generateProjectHierarchyUnified(
       };
     }
 
-    if (!generated.clientRequirements) generated.clientRequirements = [];
-    if (!generated.functionalRequirements) generated.functionalRequirements = [];
-    if (!generated.epics) generated.epics = [];
-    if (!generated.tasks) generated.tasks = [];
+    // Array.isArray, not a truthiness check: the model sometimes answers with an
+    // object (or a string) for a section, and every consumer downstream — the
+    // preview's .map, bulk-save's for-loops — assumes an array.
+    if (!Array.isArray(generated.clientRequirements)) generated.clientRequirements = [];
+    if (!Array.isArray(generated.functionalRequirements)) generated.functionalRequirements = [];
+    if (!Array.isArray(generated.epics)) generated.epics = [];
+    if (!Array.isArray(generated.tasks)) generated.tasks = [];
     if (!generated.timeline) {
       generated.timeline = {
         projectDuration: generated.analysis.estimatedDuration || '3 months',
