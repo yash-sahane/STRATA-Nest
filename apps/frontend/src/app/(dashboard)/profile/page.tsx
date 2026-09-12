@@ -18,65 +18,25 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { User, Mail, Shield, Calendar } from 'lucide-react';
 import { formatDate, getInitials } from '@/lib/utils';
-import { authClient, resources } from '@/lib/api/client';
-import { toast } from 'sonner';
 
 export default function ProfilePage() {
   const router = useRouter();
-  const { user, refreshUser } = useAuth();
+  const { user } = useAuth();
   const { currentWorkspace } = useCurrentWorkspace();
   const userRole = useUserRole();
 
-  const [isEditing, setIsEditing] = React.useState(false);
-  const [isSaving, setIsSaving] = React.useState(false);
-  const [name, setName] = React.useState(user?.name || '');
-  const [email, setEmail] = React.useState(user?.email || '');
+  // A workspace can define custom WorkspaceRoles, and workspace-members.service
+  // writes those names straight onto a membership, so the role is NOT guaranteed
+  // to be one of the seven built-in keys. Indexing ROLE_CONFIG blind threw
+  // "cannot read properties of undefined (reading 'label')" and took the whole
+  // page down for anyone on a custom role — fall back to the role name itself.
+  const roleLabel = userRole
+    ? ((ROLE_CONFIG as Record<string, { label: string } | undefined>)[userRole]?.label ?? userRole)
+    : null;
 
-  React.useEffect(() => {
-    if (user) {
-      setName(user.name || '');
-      setEmail(user.email || '');
-    }
-  }, [user]);
-
-  const handleSave = async () => {
-    if (!user) return;
-    if (!name.trim()) {
-      toast.error('Name cannot be empty');
-      return;
-    }
-    setIsSaving(true);
-    try {
-      // Update auth profile name
-      await authClient.updateName(name.trim());
-
-      // Update user document in database
-      await resources.update('users', user.id, {
-        name: name.trim(),
-      });
-
-      // Refresh auth context so header/avatar updates
-      await refreshUser();
-
-      toast.success('Profile updated successfully');
-      setIsEditing(false);
-    } catch (error: any) {
-      toast.error('Failed to update profile', {
-        description: error?.message || 'Please try again',
-      });
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleCancel = () => {
-    if (user) {
-      setName(user.name || '');
-      setEmail(user.email || '');
-    }
-    setIsEditing(false);
-  };
-
+  // Read-only view. Editing lives in Settings → Profile, which owns the avatar
+  // upload and the password form too; this page used to write the same name
+  // through a SECOND endpoint, so the two screens could drift apart.
   if (!user) {
     return <PageLoader message="Loading profile..." />;
   }
@@ -85,8 +45,8 @@ export default function ProfilePage() {
     <div className="space-y-6">
       {/* Header */}
       <PageHeader
-        title="Profile Settings"
-        description="Manage your personal information and preferences"
+        title="Profile"
+        description="Your personal information and workspace role"
       />
 
       {/* Profile Card */}
@@ -95,20 +55,9 @@ export default function ProfilePage() {
           <div className="flex items-center justify-between">
             <div>
               <CardTitle>Personal Information</CardTitle>
-              <CardDescription>Update your profile details and preferences</CardDescription>
+              <CardDescription>Edit these details in Settings</CardDescription>
             </div>
-            {!isEditing ? (
-              <Button onClick={() => setIsEditing(true)}>Edit Profile</Button>
-            ) : (
-              <div className="flex gap-2">
-                <Button variant="outline" onClick={handleCancel} disabled={isSaving}>
-                  Cancel
-                </Button>
-                <Button onClick={handleSave} loading={isSaving}>
-                  {isSaving ? 'Saving...' : 'Save Changes'}
-                </Button>
-              </div>
-            )}
+            <Button onClick={() => router.push('/settings?tab=profile')}>Edit Profile</Button>
           </div>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -121,7 +70,7 @@ export default function ProfilePage() {
             <div className="space-y-2">
               <h3 className="font-semibold">{user.name}</h3>
               <p className="text-sm text-muted-foreground">{user.email}</p>
-              {userRole && <Badge variant="outline">{ROLE_CONFIG[userRole].label}</Badge>}
+              {roleLabel && <Badge variant="outline">{roleLabel}</Badge>}
             </div>
           </div>
 
@@ -137,13 +86,7 @@ export default function ProfilePage() {
                   Full Name
                 </div>
               </Label>
-              <Input
-                id="name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                disabled={!isEditing}
-                placeholder="Enter your full name"
-              />
+              <Input id="name" value={user.name || ''} disabled readOnly />
             </div>
 
             {/* Email */}
@@ -154,14 +97,7 @@ export default function ProfilePage() {
                   Email Address
                 </div>
               </Label>
-              <Input
-                id="email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                disabled={true} // Email is read-only for now
-                placeholder="your.email@example.com"
-              />
+              <Input id="email" type="email" value={user.email || ''} disabled readOnly />
               <p className="text-xs text-muted-foreground">
                 Email cannot be changed. Contact support if you need to update it.
               </p>
@@ -176,8 +112,8 @@ export default function ProfilePage() {
                 </div>
               </Label>
               <div className="flex items-center gap-2 p-3 rounded-md border bg-muted">
-                {userRole ? (
-                  <Badge variant="secondary">{ROLE_CONFIG[userRole].label}</Badge>
+                {roleLabel ? (
+                  <Badge variant="secondary">{roleLabel}</Badge>
                 ) : (
                   <span className="text-sm text-muted-foreground">No role assigned</span>
                 )}

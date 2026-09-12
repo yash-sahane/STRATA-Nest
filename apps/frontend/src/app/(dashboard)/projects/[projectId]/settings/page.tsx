@@ -1,11 +1,16 @@
 'use client';
 
 import { PageLoader } from '@/components/ui/page-loader';
+import { ErrorState } from '@/components/ui/error-state';
 
 import * as React from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
-import { useProjects, useUpdateProject, useDeleteProject, useChangeProjectMethodology } from '@/hooks/use-project';
+import { useQueryClient } from '@tanstack/react-query';
+import { useProject, useUpdateProject, useDeleteProject, useChangeProjectMethodology } from '@/hooks/use-project';
+import { useHasPermissionIn } from '@/hooks/use-permissions';
+import { Permission } from '@/lib/permissions';
+import { Shield } from 'lucide-react';
+import { toast } from 'sonner';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -28,25 +33,55 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Calendar } from '@/components/ui/calendar';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { DatePicker } from '@/components/ui/date-picker';
 import { MethodologySelector } from '@/components/projects/methodology-selector';
-import { cn } from '@/lib/utils';
-import { format } from 'date-fns';
-import { ArrowLeft, CalendarIcon, Save, Trash2, Edit2 } from 'lucide-react';
+import { format, startOfDay } from 'date-fns';
+import { ArrowLeft, Save, Trash2, Edit2 } from 'lucide-react';
+import { parseDateOnly } from '@/components/projects/project-dates';
 import type { ProjectStatus, ProjectMethodology } from '@/types';
 
 export default function ProjectSettingsPage() {
   const params = useParams();
   const router = useRouter();
-  const { currentWorkspace } = useCurrentWorkspace();
-  const { data: projects, isLoading } = useProjects(currentWorkspace?.id);
-  const project = projects?.find(p => p.id === params.projectId);
+  const queryClient = useQueryClient();
+  // By id, not by scanning the current workspace's list — see the detail page.
+  const {
+    data: project,
+    isLoading,
+    isError: projectError,
+    refetch: refetchProject,
+  } = useProject(params.projectId as string);
   const updateProject = useUpdateProject();
   const deleteProject = useDeleteProject();
   const changeMethodology = useChangeProjectMethodology();
+  // The navigation entry point on /projects is gated; the ROUTE was not, so a
+  // shared link or typed URL handed anyone the Danger Zone. The server rejects
+  // the write, but the UI must not offer it.
+  //
+  // Resolved against the PROJECT's workspace, not the currently selected one:
+  // this page deliberately loads a project by id, so it routinely renders a
+  // project from a workspace the user has not switched to — and a MEMBER in the
+  // active workspace who is MANAGER in the project's own was being denied (and
+  // the mirror case handed the Danger Zone to someone who cannot write).
+  // `isLoading` matters just as much: the role is null until the member roster
+  // resolves, which is a different request from the project's, so a legitimate
+  // manager saw a full-page "Access Denied" before it flipped to the form.
+  const {
+    allowed: canManageSettings,
+    isLoading: permissionLoading,
+    // A FAILED membership request is not a denial. Without this the page reads
+    // `allowed === false` after a 5xx or an offline blip and pins an
+    // affirmatively wrong, unrecoverable "Access Denied" — `refetchOnWindowFocus`
+    // is off, so it survives until a manual reload.
+    isError: permissionError,
+  } = useHasPermissionIn(project?.workspaceId, Permission.MANAGE_PROJECT_SETTINGS);
+  const { allowed: canDeleteProject } = useHasPermissionIn(
+    project?.workspaceId,
+    Permission.DELETE_PROJECT,
+  );
 
   const [name, setName] = React.useState('');
+  const [clientName, setClientName] = React.useState('');
   const [description, setDescription] = React.useState('');
   const [methodology, setMethodology] = React.useState<ProjectMethodology>('SCRUM');
   const [status, setStatus] = React.useState<ProjectStatus>('PLANNING');
@@ -59,53 +94,108 @@ export default function ProjectSettingsPage() {
   React.useEffect(() => {
     if (project) {
       setName(project.name);
+      setClientName(project.clientName || '');
       setDescription(project.description || '');
       setMethodology(project.methodology);
       setStatus(project.status);
-      setStartDate(project.startDate ? new Date(project.startDate) : undefined);
-      setEndDate(project.endDate ? new Date(project.endDate) : undefined);
+      setStartDate(parseDateOnly(project.startDate));
+      setEndDate(parseDateOnly(project.endDate));
     }
   }, [project]);
 
   const handleSave = async () => {
-    if (!project || !currentWorkspace) return;
+    if (!project) return;
+    if (!name.trim()) {
+      toast.error('Project name cannot be empty');
+      return;
+    }
+    if (startDate && endDate && endDate < startDate) {
+      // Rows written before the API grew its own ordering check can arrive here
+      // already inverted, in which case the user has not touched either field
+      // and needs telling which way out exists — the End Date calendar disables
+      // every day before the start, so the day currently selected cannot be
+      // clicked off; the field's clear control is the way.
+      toast.error(
+        'End date must be on or after the start date. Move the start date back, or clear the end date.'
+      );
+      return;
+    }
 
-    await updateProject.mutateAsync({
-      projectId: project.id,
-      workspaceId: currentWorkspace.id,
-      name,
-      description,
-      status,
-      startDate: startDate?.toISOString(),
-      endDate: endDate?.toISOString(),
-    });
+    try {
+      await updateProject.mutateAsync({
+        projectId: project.id,
+        workspaceId: project.workspaceId,
+        name: name.trim(),
+        description,
+        clientName,
+        status,
+        // `null`, not `undefined`: JSON.stringify drops an undefined property,
+        // so clearing a date used to send no field at all — the save reported
+        // success and the old date stayed on the row, with no other UI able to
+        // remove it. The API treats null as "clear this column".
+        startDate: startDate ? format(startDate, 'yyyy-MM-dd') : null,
+        endDate: endDate ? format(endDate, 'yyyy-MM-dd') : null,
+      });
+    } catch {
+      // error toast handled inside the mutation
+    }
   };
 
   const handleMethodologyChange = async (newMethodology: ProjectMethodology) => {
-    if (!project || !currentWorkspace) return;
+    if (!project) return;
 
-    await changeMethodology.mutateAsync({
-      projectId: project.id,
-      workspaceId: currentWorkspace.id,
-      methodology: newMethodology,
-    });
+    try {
+      await changeMethodology.mutateAsync({
+        projectId: project.id,
+        workspaceId: project.workspaceId,
+        methodology: newMethodology,
+      });
+    } catch {
+      return; // error toast handled inside the mutation
+    }
 
     setMethodology(newMethodology);
   };
 
   const handleDelete = async () => {
-    if (!project || !currentWorkspace) return;
+    if (!project) return;
 
-    await deleteProject.mutateAsync({
-      projectId: project.id,
-      workspaceId: currentWorkspace.id,
-    });
+    try {
+      await deleteProject.mutateAsync({
+        projectId: project.id,
+        workspaceId: project.workspaceId,
+      });
+    } catch {
+      return; // error toast handled inside the mutation; keep the dialog open
+    }
 
+    setShowDeleteDialog(false);
     router.push('/projects');
   };
 
   if (isLoading) {
     return <PageLoader message="Loading project settings..." />;
+  }
+
+  // A failed fetch is not a missing project. Telling the owner of a live
+  // project that it "doesn't exist or you don't have access to it" over one
+  // 500 reads as a permissions change, and offered nothing to retry.
+  if (projectError) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <Button variant="ghost" onClick={() => router.push('/projects')}>
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Back to Projects
+          </Button>
+        </div>
+        <ErrorState
+          title="Couldn't load this project"
+          description="The project is still there — this is a connection problem, not a change to your access."
+          onRetry={() => void refetchProject()}
+        />
+      </div>
+    );
   }
 
   if (!project) {
@@ -122,6 +212,48 @@ export default function ProjectSettingsPage() {
             <CardTitle>Project Not Found</CardTitle>
             <CardDescription>
               The project you&apos;re looking for doesn&apos;t exist or you don&apos;t have access to it.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      </div>
+    );
+  }
+
+  // Wait for the capability answer before rendering a denial. `project` is
+  // resolved by now, so `permissionLoading` is the roster request only.
+  if (permissionLoading) {
+    return <PageLoader message="Loading project settings..." />;
+  }
+
+  // "We could not find out" is a different answer from "no", and the only one
+  // of the two that a retry can fix.
+  if (permissionError) {
+    return (
+      <ErrorState
+        title="Couldn't check your access"
+        description="We couldn't load your membership for this project's workspace, so we can't tell whether you may edit it."
+        onRetry={() => queryClient.invalidateQueries({ queryKey: ['my-memberships'] })}
+      />
+    );
+  }
+
+  if (!canManageSettings) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <Button variant="ghost" onClick={() => router.push(`/projects/${project.id}`)}>
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Back to Project
+          </Button>
+        </div>
+        <Card className="border-destructive/50">
+          <CardHeader>
+            <div className="flex items-center gap-2 text-destructive-text">
+              <Shield className="h-6 w-6" />
+              <CardTitle>Access Denied</CardTitle>
+            </div>
+            <CardDescription>
+              You don&apos;t have permission to manage this project&apos;s settings.
             </CardDescription>
           </CardHeader>
         </Card>
@@ -164,6 +296,16 @@ export default function ProjectSettingsPage() {
             </div>
 
             <div className="space-y-2">
+              <Label htmlFor="clientName">Client Name</Label>
+              <Input
+                id="clientName"
+                value={clientName}
+                onChange={(e) => setClientName(e.target.value)}
+                placeholder="Client or stakeholder name"
+              />
+            </div>
+
+            <div className="space-y-2">
               <Label htmlFor="description">Description</Label>
               <Textarea
                 id="description"
@@ -179,7 +321,7 @@ export default function ProjectSettingsPage() {
                 <Label htmlFor="methodology">Methodology</Label>
                 <div className="flex gap-2">
                   <Select value={methodology} disabled>
-                    <SelectTrigger className="flex-1">
+                    <SelectTrigger id="methodology" className="flex-1">
                       <SelectValue placeholder="Select methodology" />
                     </SelectTrigger>
                     <SelectContent>
@@ -204,7 +346,7 @@ export default function ProjectSettingsPage() {
               <div className="space-y-2">
                 <Label htmlFor="status">Status</Label>
                 <Select value={status} onValueChange={(value) => setStatus(value as ProjectStatus)}>
-                  <SelectTrigger>
+                  <SelectTrigger id="status">
                     <SelectValue placeholder="Select status" />
                   </SelectTrigger>
                   <SelectContent>
@@ -219,56 +361,27 @@ export default function ProjectSettingsPage() {
             </div>
 
             <div className="grid grid-cols-2 gap-4">
+              {/* The shared DatePicker, not a second hand-rolled copy of it: the
+                  inline calendars here were the only ones without `defaultMonth`,
+                  so they opened on today instead of the month already in the
+                  field. Same trigger, same 'PPP' label, one implementation. */}
               <div className="space-y-2">
                 <Label>Start Date</Label>
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <Button
-                      variant="outline"
-                      className={cn(
-                        'w-full justify-start text-left font-normal',
-                        !startDate && 'text-muted-foreground'
-                      )}
-                    >
-                      <CalendarIcon className="mr-2 h-4 w-4" />
-                      {startDate ? format(startDate, 'PPP') : <span>Pick a date</span>}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0">
-                    <Calendar
-                      mode="single"
-                      selected={startDate}
-                      onSelect={setStartDate}
-                      initialFocus
-                    />
-                  </PopoverContent>
-                </Popover>
+                <DatePicker
+                  date={startDate}
+                  onSelect={setStartDate}
+                  buttonClassName="w-full"
+                />
               </div>
 
               <div className="space-y-2">
                 <Label>End Date</Label>
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <Button
-                      variant="outline"
-                      className={cn(
-                        'w-full justify-start text-left font-normal',
-                        !endDate && 'text-muted-foreground'
-                      )}
-                    >
-                      <CalendarIcon className="mr-2 h-4 w-4" />
-                      {endDate ? format(endDate, 'PPP') : <span>Pick a date</span>}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0">
-                    <Calendar
-                      mode="single"
-                      selected={endDate}
-                      onSelect={setEndDate}
-                      initialFocus
-                    />
-                  </PopoverContent>
-                </Popover>
+                <DatePicker
+                  date={endDate}
+                  onSelect={setEndDate}
+                  disabled={(date) => (startDate ? date < startOfDay(startDate) : false)}
+                  buttonClassName="w-full"
+                />
               </div>
             </div>
 
@@ -282,29 +395,31 @@ export default function ProjectSettingsPage() {
         </Card>
 
         {/* Danger Zone */}
-        <Card className="border-destructive">
-          <CardHeader>
-            <CardTitle className="text-destructive">Danger Zone</CardTitle>
-            <CardDescription>Irreversible actions</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center justify-between p-4 border rounded-lg">
-              <div>
-                <h3 className="font-medium">Delete this project</h3>
-                <p className="text-sm text-muted-foreground">
-                  Once deleted, it will be gone forever. Please be certain.
-                </p>
+        {canDeleteProject && (
+          <Card className="border-destructive">
+            <CardHeader>
+              <CardTitle className="text-destructive-text">Danger Zone</CardTitle>
+              <CardDescription>Irreversible actions</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between p-4 border rounded-lg">
+                <div>
+                  <h3 className="font-medium">Delete this project</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Once deleted, it will be gone forever. Please be certain.
+                  </p>
+                </div>
+                <Button
+                  variant="destructive"
+                  onClick={() => setShowDeleteDialog(true)}
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Delete Project
+                </Button>
               </div>
-              <Button
-                variant="destructive"
-                onClick={() => setShowDeleteDialog(true)}
-              >
-                <Trash2 className="mr-2 h-4 w-4" />
-                Delete Project
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       {/* Delete Confirmation Dialog */}
@@ -318,10 +433,16 @@ export default function ProjectSettingsPage() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={deleteProject.isPending}>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={handleDelete}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              variant="destructive"
+              // preventDefault so the dialog stays open while the delete is in
+              // flight (Radix closes it on click otherwise).
+              onClick={(event) => {
+                event.preventDefault();
+                handleDelete();
+              }}
+              disabled={deleteProject.isPending}
             >
               {deleteProject.isPending ? 'Deleting...' : 'Delete Project'}
             </AlertDialogAction>

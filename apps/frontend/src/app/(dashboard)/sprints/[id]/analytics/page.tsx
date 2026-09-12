@@ -2,6 +2,7 @@
 
 import { PageHeader } from '@/components/layout/page-header';
 import { PageLoader } from '@/components/ui/page-loader';
+import { ErrorState } from '@/components/ui/error-state';
 
 import * as React from 'react';
 import { useParams, useRouter } from 'next/navigation';
@@ -27,23 +28,48 @@ import {
   Legend,
   ResponsiveContainer,
 } from 'recharts';
-import { formatDate } from '@/lib/utils';
-import { differenceInDays, eachDayOfInterval, format as formatDateFns, parseISO } from 'date-fns';
+import { legendLabel } from '@/lib/chart-legend';
+import { PRIORITY_COLORS, STATUS_COLORS } from '@/components/analytics/chart-colors';
+import { ChartEmptyState } from '@/components/analytics/chart-empty-state';
+import { ChartTooltip } from '@/components/analytics/chart-tooltip';
+import { completionDate } from '@/components/sprints/burndown-chart';
+import {
+  differenceInDays,
+  eachDayOfInterval,
+  endOfDay,
+  format as formatDateFns,
+  parseISO,
+  startOfDay,
+} from 'date-fns';
 
+// Design tokens rather than raw hex, so this page speaks the same color language
+// as /analytics and adapts to dark mode.
 const COLORS = {
-  primary: '#3b82f6',
-  success: '#22c55e',
-  warning: '#f59e0b',
-  danger: '#ef4444',
-  secondary: '#6b7280',
+  primary: 'hsl(var(--info))',
+  secondary: 'hsl(var(--muted-foreground))',
 };
+
+/**
+ * Pie slice labels. Percent only — recharts draws pie labels 20px outside
+ * `outerRadius` and runs the text further outward, so "In Progress: 33%" is
+ * wider than the half-card and gets clipped by the SVG edge. Chart margins
+ * cannot rescue it (cx stays at the container centre), so the slice NAMES go in
+ * a <Legend formatter={legendLabel} /> and only the share is drawn on the chart surface.
+ */
+const renderPercentLabel = ({ percent }: { percent?: number }) =>
+  `${((percent ?? 0) * 100).toFixed(0)}%`;
 
 export default function SprintAnalyticsPage() {
   const params = useParams();
   const router = useRouter();
   const sprintId = params.id as string;
 
-  const { data: sprint, isLoading: sprintLoading } = useSprint(sprintId);
+  const {
+    data: sprint,
+    isLoading: sprintLoading,
+    isError: sprintError,
+    refetch: refetchSprint,
+  } = useSprint(sprintId);
   const { data: allTasks, isLoading: tasksLoading } = useTasks(sprint?.projectId);
 
   // Filter tasks for this sprint
@@ -81,6 +107,7 @@ export default function SprintAnalyticsPage() {
     const startDate = parseISO(sprint.startDate);
     const endDate = parseISO(sprint.endDate);
     const days = eachDayOfInterval({ start: startDate, end: endDate });
+    const today = startOfDay(new Date());
 
     const totalPoints = metrics.total; // use total tasks for burndown
     const idealBurnRate = totalPoints / days.length;
@@ -89,23 +116,30 @@ export default function SprintAnalyticsPage() {
       const dayStr = formatDateFns(day, 'MMM dd');
       const idealRemaining = Math.max(0, totalPoints - idealBurnRate * (index + 1));
 
-      // For actual: simulate based on completion rate (in real app, track daily)
-      const progress = Math.min((index + 1) / days.length, metrics.completionRate / 100);
-      const actualRemaining = Math.max(0, totalPoints * (1 - progress));
+      // Actual burndown from the tasks themselves. This used to be synthesised
+      // from the completion rate, so the curve tracked the ideal line by
+      // construction and a slipping sprint could never look like one. Bucketed
+      // on the task's real completion timestamp (updatedAt only as a fallback
+      // for rows finished before that column existed).
+      const dayEnd = endOfDay(day);
+      const completedByDay = sprintTasks.filter(
+        (t) => t.status === 'DONE' && new Date(completionDate(t)) <= dayEnd
+      ).length;
 
       return {
         date: dayStr,
         ideal: Math.round(idealRemaining),
-        actual: Math.round(actualRemaining),
+        // Don't draw the actual line into the future.
+        actual: day <= today ? totalPoints - completedByDay : (null as unknown as number),
       };
     });
-  }, [sprint, metrics]);
+  }, [sprint, metrics, sprintTasks]);
 
   // Status Distribution
   const statusData = [
-    { name: 'To Do', value: metrics.todo, color: COLORS.secondary },
-    { name: 'In Progress', value: metrics.inProgress, color: COLORS.warning },
-    { name: 'Completed', value: metrics.completed, color: COLORS.success },
+    { name: 'To Do', value: metrics.todo, color: STATUS_COLORS.TODO },
+    { name: 'In Progress', value: metrics.inProgress, color: STATUS_COLORS.IN_PROGRESS },
+    { name: 'Completed', value: metrics.completed, color: STATUS_COLORS.DONE },
   ].filter((item) => item.value > 0);
 
   // Priority Distribution
@@ -119,14 +153,14 @@ export default function SprintAnalyticsPage() {
     );
 
     return [
-      { name: 'Critical', value: distribution.CRITICAL || 0, color: COLORS.danger },
-      { name: 'High', value: distribution.HIGH || 0, color: COLORS.warning },
-      { name: 'Medium', value: distribution.MEDIUM || 0, color: '#3b82f6' },
-      { name: 'Low', value: distribution.LOW || 0, color: COLORS.success },
+      { name: 'Critical', value: distribution.CRITICAL || 0, color: PRIORITY_COLORS.CRITICAL },
+      { name: 'High', value: distribution.HIGH || 0, color: PRIORITY_COLORS.HIGH },
+      { name: 'Medium', value: distribution.MEDIUM || 0, color: PRIORITY_COLORS.MEDIUM },
+      { name: 'Low', value: distribution.LOW || 0, color: PRIORITY_COLORS.LOW },
     ].filter((item) => item.value > 0);
   }, [sprintTasks]);
 
-  // Story Points by Status
+  // Tasks by Status
   const tasksByStatusData = React.useMemo(() => {
     const byStatus = sprintTasks.reduce(
       (acc, task) => {
@@ -149,15 +183,32 @@ export default function SprintAnalyticsPage() {
     ];
   }, [sprintTasks]);
 
-  // Days remaining
+  // Days remaining. `differenceInDays` excludes the start day while the burndown
+  // uses an inclusive interval, so +1 keeps the two readouts on this page from
+  // contradicting each other (and makes a single-day sprint read "1 day").
   const daysRemaining = sprint ? differenceInDays(parseISO(sprint.endDate), new Date()) : 0;
   const totalDays = sprint
-    ? differenceInDays(parseISO(sprint.endDate), parseISO(sprint.startDate))
+    ? differenceInDays(parseISO(sprint.endDate), parseISO(sprint.startDate)) + 1
     : 0;
-  const daysPassed = totalDays - daysRemaining;
+  const daysPassed = Math.min(totalDays, Math.max(0, totalDays - daysRemaining));
 
   if (sprintLoading || tasksLoading) {
     return <PageLoader message="Loading sprint analytics..." />;
+  }
+
+  // isError BEFORE the not-found branch. A 500 (or an offline blip) leaves
+  // `sprint` undefined exactly like a deleted sprint does, so every sub-page
+  // told the user a sprint that plainly exists was "Sprint not found" — a
+  // dead end with nothing to retry.
+  if (sprintError) {
+    return (
+      <ErrorState
+        className="mt-10"
+        title="Couldn't load this sprint"
+        description="The sprint is still there — this is a connection problem."
+        onRetry={() => void refetchSprint()}
+      />
+    );
   }
 
   if (!sprint) {
@@ -205,13 +256,17 @@ export default function SprintAnalyticsPage() {
               <p className="text-sm text-muted-foreground mb-1">Sprint Duration</p>
               <p className="text-2xl font-bold">{totalDays} days</p>
               <p className="text-xs text-muted-foreground mt-1">
-                {formatDate(sprint.startDate)} - {formatDate(sprint.endDate)}
+                {formatDateFns(parseISO(sprint.startDate), 'MMM d, yyyy')} -{' '}
+                {formatDateFns(parseISO(sprint.endDate), 'MMM d, yyyy')}
               </p>
             </div>
             <div>
               <p className="text-sm text-muted-foreground mb-1">Days Remaining</p>
               <p className="text-2xl font-bold">{Math.max(0, daysRemaining)} days</p>
-              <Progress value={(daysPassed / totalDays) * 100} className="mt-2" />
+              <Progress
+                value={totalDays > 0 ? (daysPassed / totalDays) * 100 : 0}
+                className="mt-2"
+              />
             </div>
             <div>
               <p className="text-sm text-muted-foreground mb-1">Status</p>
@@ -257,18 +312,17 @@ export default function SprintAnalyticsPage() {
           </CardContent>
         </Card>
 
+        {/* "Capacity Used" used to live here, but it restated Completion Rate
+            exactly (completed/total) under a label implying team capacity — and
+            no capacity field exists on Sprint. Show remaining work instead. */}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Capacity Used</CardTitle>
+            <CardTitle className="text-sm font-medium">Not Started</CardTitle>
             <Target className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">
-              {metrics.total > 0 ? Math.round((metrics.completed / metrics.total) * 100) : 0}%
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {metrics.completed} / {metrics.total} tasks
-            </p>
+            <div className="text-2xl font-bold">{metrics.todo}</div>
+            <p className="text-xs text-muted-foreground">Tasks still in To Do / Backlog</p>
           </CardContent>
         </Card>
 
@@ -290,7 +344,7 @@ export default function SprintAnalyticsPage() {
         <Card>
           <CardHeader>
             <CardTitle>Burndown Chart</CardTitle>
-            <CardDescription>Ideal vs actual story points remaining</CardDescription>
+            <CardDescription>Ideal vs actual tasks remaining</CardDescription>
           </CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={300}>
@@ -298,8 +352,8 @@ export default function SprintAnalyticsPage() {
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="date" />
                 <YAxis />
-                <Tooltip />
-                <Legend />
+                <Tooltip content={<ChartTooltip />} />
+                <Legend formatter={legendLabel} />
                 <Line
                   type="monotone"
                   dataKey="ideal"
@@ -313,6 +367,7 @@ export default function SprintAnalyticsPage() {
                   stroke={COLORS.primary}
                   strokeWidth={2}
                   name="Actual"
+                  connectNulls
                 />
               </LineChart>
             </ResponsiveContainer>
@@ -331,8 +386,8 @@ export default function SprintAnalyticsPage() {
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="name" />
                 <YAxis />
-                <Tooltip />
-                <Legend />
+                <Tooltip content={<ChartTooltip />} />
+                <Legend formatter={legendLabel} />
                 <Bar dataKey="value" fill={COLORS.primary} name="Tasks" />
               </BarChart>
             </ResponsiveContainer>
@@ -349,25 +404,29 @@ export default function SprintAnalyticsPage() {
             <CardDescription>Breakdown of tasks by current status</CardDescription>
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <PieChart>
-                <Pie
-                  data={statusData}
-                  cx="50%"
-                  cy="50%"
-                  labelLine={false}
-                  label={({ name, percent }: any) => `${name}: ${(percent * 100).toFixed(0)}%`}
-                  outerRadius={100}
-                  fill="#8884d8"
-                  dataKey="value"
-                >
-                  {statusData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} />
-                  ))}
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
+            {statusData.length === 0 ? (
+              <ChartEmptyState message="No tasks in this sprint yet" height={300} />
+            ) : (
+              <ResponsiveContainer width="100%" height={300}>
+                <PieChart>
+                  <Pie
+                    data={statusData}
+                    cx="50%"
+                    cy="50%"
+                    labelLine={false}
+                    label={renderPercentLabel}
+                    outerRadius={80}
+                    dataKey="value"
+                  >
+                    {statusData.map((entry) => (
+                      <Cell key={entry.name} fill={entry.color} />
+                    ))}
+                  </Pie>
+                  <Tooltip content={<ChartTooltip />} />
+                  <Legend formatter={legendLabel} />
+                </PieChart>
+              </ResponsiveContainer>
+            )}
           </CardContent>
         </Card>
 
@@ -378,25 +437,29 @@ export default function SprintAnalyticsPage() {
             <CardDescription>Tasks grouped by priority level</CardDescription>
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <PieChart>
-                <Pie
-                  data={priorityData}
-                  cx="50%"
-                  cy="50%"
-                  labelLine={false}
-                  label={({ name, percent }: any) => `${name}: ${(percent * 100).toFixed(0)}%`}
-                  outerRadius={100}
-                  fill="#8884d8"
-                  dataKey="value"
-                >
-                  {priorityData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} />
-                  ))}
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
+            {priorityData.length === 0 ? (
+              <ChartEmptyState message="No tasks in this sprint yet" height={300} />
+            ) : (
+              <ResponsiveContainer width="100%" height={300}>
+                <PieChart>
+                  <Pie
+                    data={priorityData}
+                    cx="50%"
+                    cy="50%"
+                    labelLine={false}
+                    label={renderPercentLabel}
+                    outerRadius={80}
+                    dataKey="value"
+                  >
+                    {priorityData.map((entry) => (
+                      <Cell key={entry.name} fill={entry.color} />
+                    ))}
+                  </Pie>
+                  <Tooltip content={<ChartTooltip />} />
+                  <Legend formatter={legendLabel} />
+                </PieChart>
+              </ResponsiveContainer>
+            )}
           </CardContent>
         </Card>
       </div>

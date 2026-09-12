@@ -1,17 +1,18 @@
 'use client';
 
 import { PageLoader } from '@/components/ui/page-loader';
+import { ErrorState } from '@/components/ui/error-state';
 import { getProjectStatusConfig } from '@/lib/semantic/status';
 
 import * as React from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
-import { useProjects } from '@/hooks/use-project';
+import { useProject } from '@/hooks/use-project';
 import { useTasks } from '@/hooks/use-task';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { ProjectFilesPanel } from '@/components/files/project-files-panel';
 import {
   ArrowLeft,
   Calendar,
@@ -24,17 +25,28 @@ import {
   AlertCircle,
   FileText,
 } from 'lucide-react';
-import { formatDate } from '@/lib/utils';
+import { formatProjectDate } from '@/components/projects/project-dates';
 import { ProjectHealthCard } from '@/components/projects/project-health-card';
 import { calculateProjectHealth } from '@/lib/project-health';
 
 export default function ProjectDetailPage() {
   const params = useParams();
   const router = useRouter();
-  const { currentWorkspace } = useCurrentWorkspace();
-  const { data: projects, isLoading } = useProjects(currentWorkspace?.id);
-  const project = projects?.find(p => p.id === params.projectId);
-  const { data: tasks = [] } = useTasks(project?.id);
+  const projectId = params.projectId as string;
+  // Fetch by id: resolving through the CURRENT workspace's list reported a
+  // perfectly accessible project as missing whenever the selected workspace was
+  // a different one (or had not hydrated yet on first paint).
+  const { data: project, isLoading, isError, refetch } = useProject(projectId);
+  // Keyed off the ROUTE PARAM, not `project?.id`. They are the same value, but
+  // waiting for the project response turned the task list into a second round
+  // trip that only started once the first had landed — the waterfall that made
+  // the health card mount ~150ms after the page had already painted. Both
+  // requests now leave together.
+  //
+  // `isPending`, not `isLoading`: it is true for every render before the task
+  // list exists, which is exactly the window the health card's loading state
+  // has to cover.
+  const { data: tasks = [], isPending: tasksPending } = useTasks(projectId);
 
   // Calculate task statistics
   const taskStats = React.useMemo(() => {
@@ -47,14 +59,36 @@ export default function ProjectDetailPage() {
     return { total, completed, inProgress, todo, review };
   }, [tasks]);
 
-  // Calculate project health
+  // Calculate project health. Computed for an empty project too — the card
+  // renders it as "Not scored" rather than as a perfect 100 — so the section
+  // keeps its height instead of collapsing once the tasks arrive.
   const projectHealth = React.useMemo(() => {
-    if (!project || tasks.length === 0) return null;
+    if (!project) return null;
     return calculateProjectHealth(project, tasks);
   }, [project, tasks]);
 
   if (isLoading) {
     return <PageLoader message="Loading project..." />;
+  }
+
+  // A failed request is not a missing project: without this the "not found"
+  // card below claimed the project did not exist whenever the fetch broke.
+  if (isError) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <Button variant="ghost" onClick={() => router.push('/projects')}>
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Back to Projects
+          </Button>
+        </div>
+        <ErrorState
+          title="Couldn't load this project"
+          description="The project could not be fetched. Check your connection and try again."
+          onRetry={() => refetch()}
+        />
+      </div>
+    );
   }
 
   if (!project) {
@@ -84,7 +118,12 @@ export default function ProjectDetailPage() {
       <div className="flex items-center justify-between">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={() => router.push('/projects')}>
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label="Back to projects"
+              onClick={() => router.push('/projects')}
+            >
               <ArrowLeft className="h-4 w-4" />
             </Button>
             <div>
@@ -166,14 +205,25 @@ export default function ProjectDetailPage() {
       <Tabs defaultValue="overview" className="space-y-4">
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="files">Files</TabsTrigger>
           <TabsTrigger value="settings">Settings</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="space-y-4">
-          {/* Project Health Card - Full Width */}
-          {projectHealth && (
-            <ProjectHealthCard health={projectHealth} projectName={project.name} />
-          )}
+          {/* Project Health Card - Full Width.
+              The tasks it summarises are a separate request, so this card was
+              filling in after the page had painted and dropping half a screen of
+              content on top of everything below it (layout shift 0.16 — "poor",
+              and by far the worst route in the app). Two changes close that: the
+              task request now leaves with the project's (see useTasks above),
+              and the card renders its own frame while the numbers are in flight
+              at EXACTLY the height it will have once they arrive — so whatever
+              window is left, nothing below it moves. */}
+          <ProjectHealthCard
+            health={projectHealth}
+            projectName={project.name}
+            loading={tasksPending}
+          />
 
           <div className="grid gap-4 md:grid-cols-2">
             {/* Project Information */}
@@ -198,7 +248,7 @@ export default function ProjectDetailPage() {
                     <div className="text-sm font-medium text-muted-foreground mb-1">Start Date</div>
                     <div className="flex items-center gap-1 text-sm">
                       <Calendar className="h-4 w-4" />
-                      <span>{project.startDate ? formatDate(project.startDate) : 'Not set'}</span>
+                      <span>{formatProjectDate(project.startDate) ?? 'Not set'}</span>
                     </div>
                   </div>
 
@@ -206,7 +256,7 @@ export default function ProjectDetailPage() {
                     <div className="text-sm font-medium text-muted-foreground mb-1">End Date</div>
                     <div className="flex items-center gap-1 text-sm">
                       <Calendar className="h-4 w-4" />
-                      <span>{project.endDate ? formatDate(project.endDate) : 'Not set'}</span>
+                      <span>{formatProjectDate(project.endDate) ?? 'Not set'}</span>
                     </div>
                   </div>
                 </div>
@@ -302,6 +352,10 @@ export default function ProjectDetailPage() {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="files" className="space-y-4">
+          <ProjectFilesPanel workspaceId={project.workspaceId} projectId={project.id} />
         </TabsContent>
 
         <TabsContent value="settings" className="space-y-4">

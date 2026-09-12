@@ -15,7 +15,9 @@ import {
   ROLE_CONFIG,
   STATUS_CONFIG,
   TeamMember,
+  TeamMemberUpdate,
 } from '@/hooks/use-team';
+import { useJoinRequests } from '@/hooks/use-join-request';
 import { useHasPermission } from '@/hooks/use-permissions';
 import { Permission } from '@/lib/permissions';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -75,6 +77,7 @@ import {
 import { toast } from 'sonner';
 import { ResourceAllocationCard } from '@/components/team/resource-allocation-card';
 import { AddMembersSection } from '@/components/team/add-members-section';
+import { JoinRequestsSection } from '@/components/team/join-requests-section';
 import { DeleteMemberDialog } from '@/components/team/delete-member-dialog';
 import { calculateTeamWorkload } from '@/lib/team-workload';
 import { addDays } from 'date-fns';
@@ -98,8 +101,31 @@ export default function TeamPage() {
   const updateMember = useUpdateTeamMember();
   const deleteMember = useDeleteTeamMember();
 
-  // Check if user has permission to invite members
+  // Invite gating (Add Members tab) is separate from member management gating
+  // (Actions column) — each action checks its own permission.
   const canInviteMembers = useHasPermission(Permission.INVITE_MEMBER);
+  const canEditMembers = useHasPermission(Permission.EDIT_MEMBER);
+  const canRemoveMembers = useHasPermission(Permission.REMOVE_MEMBER);
+  const canManageMembers = canEditMembers || canRemoveMembers;
+
+  // Shares the cache entry with the Join Requests tab below, so the summary
+  // card and the queue can never disagree — and gated on the same permission
+  // as that tab, because the ENDPOINT is: GET /join_requests only returns the
+  // rows of workspaces where the caller holds join:manage (plus their own
+  // requests). Ungated, a plain member read an empty list as fact and the card
+  // stated a confident "0 people awaiting review" over a queue it cannot see
+  // and has no tab to open. Passing undefined disables the query outright, so
+  // those visitors also stop paying for a list request they can't use.
+  const { data: joinRequests = [] } = useJoinRequests(
+    canInviteMembers ? currentWorkspace?.id : undefined
+  );
+  // A request whose author has since joined by another route is not a decision
+  // waiting on anybody: the API flags it (`alreadyMember`) and the queue offers
+  // only "Clear request" for it, so counting it here would overstate the work.
+  const awaitingReview = React.useMemo(
+    () => joinRequests.filter((request) => !request.alreadyMember).length,
+    [joinRequests]
+  );
 
   const [searchQuery, setSearchQuery] = React.useState('');
   const [selectedRole, setSelectedRole] = React.useState<string>('ALL');
@@ -128,7 +154,6 @@ export default function TeamPage() {
   const stats = React.useMemo(() => {
     const totalMembers = teamMembers.length;
     const activeMembers = teamMembers.filter((member) => member.status === 'ACTIVE').length;
-    const invitedMembers = teamMembers.filter((member) => member.status === 'INVITED').length;
     const roleBreakdown = teamMembers.reduce(
       (acc, member) => {
         acc[member.role] = (acc[member.role] || 0) + 1;
@@ -139,7 +164,7 @@ export default function TeamPage() {
     const activeRate = totalMembers > 0 ? Math.round((activeMembers / totalMembers) * 100) : 0;
     const roleCount = Object.keys(roleBreakdown).length;
 
-    return { totalMembers, activeMembers, invitedMembers, activeRate, roleBreakdown, roleCount };
+    return { totalMembers, activeMembers, activeRate, roleBreakdown, roleCount };
   }, [teamMembers]);
 
   const summaryCards = React.useMemo(
@@ -156,15 +181,24 @@ export default function TeamPage() {
         detail: `${stats.activeRate}% active rate`,
         icon: UserCheck,
       },
-      {
-        title: 'Pending Invites',
-        value: stats.invitedMembers,
-        detail:
-          stats.invitedMembers === 1
-            ? '1 invite pending'
-            : `${stats.invitedMembers} invites pending`,
-        icon: UserPlus,
-      },
+      // Was "Pending Invites", counting memberships with status INVITED — a
+      // state no server path ever writes, so the number could only ever be
+      // non-zero as the side effect of an admin deactivating somebody. The real
+      // queue of people waiting on a decision is the join requests, which only
+      // a caller who can action them is allowed to read — hence the gate.
+      ...(canInviteMembers
+        ? [
+            {
+              title: 'Pending Requests',
+              value: awaitingReview,
+              detail:
+                awaitingReview === 1
+                  ? '1 person awaiting review'
+                  : `${awaitingReview} people awaiting review`,
+              icon: UserPlus,
+            },
+          ]
+        : []),
       {
         title: 'Role Coverage',
         value: stats.roleCount,
@@ -173,7 +207,7 @@ export default function TeamPage() {
         icon: ShieldCheck,
       },
     ],
-    [stats]
+    [stats, awaitingReview, canInviteMembers]
   );
 
   // Calculate team workload (next 14 days)
@@ -196,13 +230,21 @@ export default function TeamPage() {
     if (!editingMember) return;
 
     const formData = new FormData(e.currentTarget);
-    const updates = {
-      name: formData.get('name') as string,
-      email: formData.get('email') as string,
-      phone: (formData.get('phone') as string) || undefined,
-      role: formData.get('role') as TeamMember['role'],
-      status: formData.get('status') as TeamMember['status'],
-    };
+    // The API persists only role and status on a workspace membership —
+    // name/email/phone belong to the user's own profile. Send only what
+    // actually changed: resubmitting the role on a status-only edit would
+    // overwrite a custom workspace role with the normalized display value.
+    const role = formData.get('role') as string;
+    const status = formData.get('status') as TeamMember['status'];
+    const updates: TeamMemberUpdate = {};
+    if (role !== editingMember.rawRole) updates.role = role;
+    if (status !== editingMember.status) updates.status = status;
+
+    if (Object.keys(updates).length === 0) {
+      setIsEditDialogOpen(false);
+      setEditingMember(null);
+      return;
+    }
 
     try {
       await updateMember.mutateAsync({
@@ -210,11 +252,21 @@ export default function TeamPage() {
         data: updates,
       });
 
-      toast.success('Team member updated successfully');
+      // Say what a non-ACTIVE status actually does: the save used to report
+      // plain success while quietly cutting the member off from the workspace.
+      toast.success('Team member updated successfully', {
+        description:
+          updates.status && updates.status !== 'ACTIVE'
+            ? `${editingMember.name} can no longer open this workspace.`
+            : undefined,
+      });
       setIsEditDialogOpen(false);
       setEditingMember(null);
     } catch (error) {
-      toast.error('Failed to update team member');
+      // The API refuses edits that would orphan the workspace — show its reason.
+      toast.error('Failed to update team member', {
+        description: error instanceof Error ? error.message : undefined,
+      });
       logger.error('Unexpected error', { error: error });
     }
   };
@@ -278,15 +330,25 @@ export default function TeamPage() {
       {/* Team Management Tabs */}
       <Tabs defaultValue="members" className="space-y-6">
         <TabsList
-          className={cn('grid w-full sm:w-fit', canInviteMembers ? 'grid-cols-2' : 'grid-cols-1')}
+          className={cn('grid w-full sm:w-fit', canInviteMembers ? 'grid-cols-3' : 'grid-cols-1')}
         >
           <TabsTrigger value="members">Team Members</TabsTrigger>
           {canInviteMembers && <TabsTrigger value="add-members">Add Members</TabsTrigger>}
+          {/* Same permission as inviting: both decide who gets into the
+              workspace, and the API gates approve/reject on join:manage. */}
+          {canInviteMembers && <TabsTrigger value="requests">Join Requests</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="members" className="space-y-6">
           {/* Stats Cards */}
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div
+            className={cn(
+              'grid gap-3 sm:grid-cols-2',
+              // One card is permission-gated, so the track count follows the
+              // cards rather than leaving a hole in the row.
+              summaryCards.length === 4 ? 'xl:grid-cols-4' : 'xl:grid-cols-3'
+            )}
+          >
             {summaryCards.map((card) => {
               const Icon = card.icon;
 
@@ -354,7 +416,7 @@ export default function TeamPage() {
                   />
                 </div>
                 <Select value={selectedRole} onValueChange={setSelectedRole}>
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger aria-label="Filter members by role" className="w-full">
                     <SelectValue placeholder="Filter by role" />
                   </SelectTrigger>
                   <SelectContent>
@@ -367,7 +429,7 @@ export default function TeamPage() {
                   </SelectContent>
                 </Select>
                 <Select value={selectedStatus} onValueChange={setSelectedStatus}>
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger aria-label="Filter members by status" className="w-full">
                     <SelectValue placeholder="Filter by status" />
                   </SelectTrigger>
                   <SelectContent>
@@ -392,13 +454,13 @@ export default function TeamPage() {
                       <TableHead>Workload</TableHead>
                       <TableHead className="hidden xl:table-cell">Contact</TableHead>
                       <TableHead className="hidden lg:table-cell">Joined</TableHead>
-                      {canInviteMembers && <TableHead className="text-right">Actions</TableHead>}
+                      {canManageMembers && <TableHead className="text-right">Actions</TableHead>}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {filteredMembers.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={canInviteMembers ? 7 : 6} className="text-center py-8">
+                        <TableCell colSpan={canManageMembers ? 7 : 6} className="text-center py-8">
                           <div className="flex flex-col items-center gap-2 text-muted-foreground">
                             <Users className="h-8 w-8 opacity-50" />
                             <span>No team members found</span>
@@ -408,6 +470,13 @@ export default function TeamPage() {
                     ) : (
                       filteredMembers.map((member) => {
                         const isCurrentUser = member.userId === user?.id;
+                        const isOwner = member.userId === currentWorkspace.ownerId;
+                        const canRemoveThisMember = canRemoveMembers && !isOwner && !isCurrentUser;
+                        // Same rule as removal: the API refuses to demote or
+                        // deactivate the owner or the caller, so don't offer it.
+                        const canEditThisMember = canEditMembers && !isOwner && !isCurrentUser;
+                        const roleConfig = ROLE_CONFIG[member.role] ?? ROLE_CONFIG.MEMBER;
+                        const statusConfig = STATUS_CONFIG[member.status] ?? STATUS_CONFIG.ACTIVE;
                         const memberCounts = taskCounts?.get(member.userId);
                         const activeTasks = memberCounts?.activeTasks || 0;
                         const overdueTasks = memberCounts?.overdueTasks || 0;
@@ -451,20 +520,13 @@ export default function TeamPage() {
                               </div>
                             </TableCell>
                             <TableCell>
-                              <Badge
-                                className={cn('whitespace-nowrap', ROLE_CONFIG[member.role].color)}
-                              >
-                                {ROLE_CONFIG[member.role].label}
+                              <Badge className={cn('whitespace-nowrap', roleConfig.color)}>
+                                {roleConfig.label}
                               </Badge>
                             </TableCell>
                             <TableCell>
-                              <Badge
-                                className={cn(
-                                  'whitespace-nowrap',
-                                  STATUS_CONFIG[member.status].color
-                                )}
-                              >
-                                {STATUS_CONFIG[member.status].label}
+                              <Badge className={cn('whitespace-nowrap', statusConfig.color)}>
+                                {statusConfig.label}
                               </Badge>
                             </TableCell>
                             <TableCell>
@@ -505,36 +567,42 @@ export default function TeamPage() {
                             <TableCell className="hidden text-muted-foreground lg:table-cell">
                               {new Date(member.createdAt).toLocaleDateString()}
                             </TableCell>
-                            {canInviteMembers && (
+                            {canManageMembers && (
                               <TableCell className="text-right">
-                                <DropdownMenu>
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <DropdownMenuTrigger asChild>
-                                        <Button variant="ghost" size="icon" className="h-8 w-8">
-                                          <MoreVertical className="h-4 w-4" />
-                                          <span className="sr-only">Open member actions</span>
-                                        </Button>
-                                      </DropdownMenuTrigger>
-                                    </TooltipTrigger>
-                                    <TooltipContent>Member actions</TooltipContent>
-                                  </Tooltip>
-                                  <DropdownMenuContent align="end">
-                                    <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                                    <DropdownMenuSeparator />
-                                    <DropdownMenuItem onClick={() => handleEditMember(member)}>
-                                      <Edit className="h-4 w-4 mr-2" />
-                                      Edit Member
-                                    </DropdownMenuItem>
-                                    <DropdownMenuItem
-                                      onClick={() => handleDeleteMember(member)}
-                                      className="text-destructive focus:text-destructive"
-                                    >
-                                      <Trash2 className="h-4 w-4 mr-2" />
-                                      Remove Member
-                                    </DropdownMenuItem>
-                                  </DropdownMenuContent>
-                                </DropdownMenu>
+                                {(canEditThisMember || canRemoveThisMember) && (
+                                  <DropdownMenu>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <DropdownMenuTrigger asChild>
+                                          <Button variant="ghost" size="icon" className="h-8 w-8">
+                                            <MoreVertical className="h-4 w-4" />
+                                            <span className="sr-only">Open member actions</span>
+                                          </Button>
+                                        </DropdownMenuTrigger>
+                                      </TooltipTrigger>
+                                      <TooltipContent>Member actions</TooltipContent>
+                                    </Tooltip>
+                                    <DropdownMenuContent align="end">
+                                      <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                                      <DropdownMenuSeparator />
+                                      {canEditThisMember && (
+                                        <DropdownMenuItem onClick={() => handleEditMember(member)}>
+                                          <Edit className="h-4 w-4 mr-2" />
+                                          Edit Member
+                                        </DropdownMenuItem>
+                                      )}
+                                      {canRemoveThisMember && (
+                                        <DropdownMenuItem
+                                          onClick={() => handleDeleteMember(member)}
+                                          className="text-destructive-text focus:text-destructive-text"
+                                        >
+                                          <Trash2 className="h-4 w-4 mr-2" />
+                                          Remove Member
+                                        </DropdownMenuItem>
+                                      )}
+                                    </DropdownMenuContent>
+                                  </DropdownMenu>
+                                )}
                               </TableCell>
                             )}
                           </TableRow>
@@ -557,6 +625,12 @@ export default function TeamPage() {
             />
           </TabsContent>
         )}
+
+        {canInviteMembers && (
+          <TabsContent value="requests">
+            <JoinRequestsSection workspaceId={currentWorkspace.id} />
+          </TabsContent>
+        )}
       </Tabs>
 
       {/* Edit Member Dialog */}
@@ -564,36 +638,29 @@ export default function TeamPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Edit Team Member</DialogTitle>
-            <DialogDescription>Update member details and permissions</DialogDescription>
+            <DialogDescription>
+              {editingMember
+                ? `Update the workspace role and status for ${editingMember.name} (${editingMember.email}).`
+                : 'Update the workspace role and status for this member.'}
+            </DialogDescription>
           </DialogHeader>
           {editingMember && (
             <form onSubmit={handleUpdateMember}>
               <div className="space-y-4">
                 <div>
-                  <Label htmlFor="name">Name</Label>
-                  <Input id="name" name="name" defaultValue={editingMember.name} required />
-                </div>
-                <div>
-                  <Label htmlFor="email">Email</Label>
-                  <Input
-                    id="email"
-                    name="email"
-                    type="email"
-                    defaultValue={editingMember.email}
-                    required
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="phone">Phone</Label>
-                  <Input id="phone" name="phone" type="tel" defaultValue={editingMember.phone} />
-                </div>
-                <div>
                   <Label htmlFor="role">Role</Label>
-                  <Select name="role" defaultValue={editingMember.role}>
-                    <SelectTrigger>
+                  {/* Seeded from the RAW role so a custom workspace role stays
+                      selected — picking a built-in is then a deliberate change. */}
+                  <Select name="role" defaultValue={editingMember.rawRole}>
+                    <SelectTrigger id="role">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
+                      {!(editingMember.rawRole in ROLE_CONFIG) && (
+                        <SelectItem value={editingMember.rawRole}>
+                          {editingMember.rawRole}
+                        </SelectItem>
+                      )}
                       {Object.entries(ROLE_CONFIG).map(([role, config]) => (
                         <SelectItem key={role} value={role}>
                           {config.label}
@@ -604,18 +671,32 @@ export default function TeamPage() {
                 </div>
                 <div>
                   <Label htmlFor="status">Status</Label>
+                  {/* "Invited" is not an edit you can make to somebody who has
+                      already joined: the API authorizes on `status: 'ACTIVE'`
+                      alone, so applying it locks the member out of the whole
+                      workspace behind a label that reads "not here yet". It
+                      stays selectable only for a membership that already
+                      carries it, so such a row can still be repaired. */}
                   <Select name="status" defaultValue={editingMember.status}>
-                    <SelectTrigger>
+                    <SelectTrigger id="status">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {Object.entries(STATUS_CONFIG).map(([status, config]) => (
-                        <SelectItem key={status} value={status}>
-                          {config.label}
-                        </SelectItem>
-                      ))}
+                      {Object.entries(STATUS_CONFIG)
+                        .filter(
+                          ([status]) => status !== 'INVITED' || editingMember.status === 'INVITED'
+                        )
+                        .map(([status, config]) => (
+                          <SelectItem key={status} value={status}>
+                            {config.label}
+                          </SelectItem>
+                        ))}
                     </SelectContent>
                   </Select>
+                  <p className="mt-1.5 text-xs text-muted-foreground">
+                    Only Active members can open this workspace. Any other status revokes their
+                    access — their data is kept, but they see nothing until it is set back.
+                  </p>
                 </div>
               </div>
               <DialogFooter className="mt-6">

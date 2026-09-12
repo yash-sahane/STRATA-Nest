@@ -1,14 +1,32 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { hasApiSession } from '@/lib/api/server-proxy';
 import { logger } from '@/lib/logger';
 
-// Model configurations
-const GEMINI_MODEL = process.env.NEXT_PUBLIC_GEMINI_MODEL || 'gemini-2.5-flash';
-const GEMINI_API_KEY = process.env.NEXT_PUBLIC_GEMINI_API_KEY!;
-const HF_API_KEY = process.env.NEXT_PUBLIC_HF_API_KEY!;
-const HF_MODEL = process.env.NEXT_PUBLIC_HF_MODEL || 'meta-llama/Llama-3.1-8B-Instruct';
+/**
+ * Default generation model.
+ *
+ * Was `gemini-2.5-flash`, which Google now refuses for keys created after its
+ * deprecation: the call comes back 404 with "no longer available to new users",
+ * so generation failed for anyone setting up fresh — while continuing to work
+ * for older keys. `gemini-3.6-flash` is the replacement Google names in that
+ * error. Override with GEMINI_MODEL when a different one is wanted.
+ */
+const GEMINI_MODEL =
+  process.env.GEMINI_MODEL || process.env.NEXT_PUBLIC_GEMINI_MODEL || 'gemini-3.6-flash';
+// Operator secrets, read only on the server. The unprefixed names are the ones
+// to set: Next.js inlines any NEXT_PUBLIC_* value into the client bundle at each
+// client-side reference, so naming a provider key that way is one stray import
+// away from shipping it to browsers. The NEXT_PUBLIC_ reads are kept as a
+// fallback so existing deployments keep working.
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? process.env.NEXT_PUBLIC_GEMINI_API_KEY ?? '';
+const HF_API_KEY = process.env.HF_API_KEY ?? process.env.NEXT_PUBLIC_HF_API_KEY ?? '';
+const HF_MODEL =
+  process.env.HF_MODEL || process.env.NEXT_PUBLIC_HF_MODEL || 'meta-llama/Llama-3.1-8B-Instruct';
 const HF_ENDPOINT =
-  process.env.NEXT_PUBLIC_HF_ENDPOINT || 'https://router.huggingface.co/v1/chat/completions';
+  process.env.HF_ENDPOINT ||
+  process.env.NEXT_PUBLIC_HF_ENDPOINT ||
+  'https://router.huggingface.co/v1/chat/completions';
 
 // Initialize Gemini client
 const genAI = GEMINI_API_KEY ? new GoogleGenerativeAI(GEMINI_API_KEY) : null;
@@ -143,25 +161,34 @@ async function callGemini(prompt: string): Promise<string> {
 
 export async function POST(request: NextRequest) {
   try {
+    // This route calls the model with the OPERATOR's key and never reaches the
+    // backend, so without this check any anonymous POST spends their quota.
+    if (!(await hasApiSession(request))) {
+      return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+    }
+
     const { prompt, maxRetries = 2 } = await request.json();
 
-    if (!prompt) {
+    if (typeof prompt !== 'string' || !prompt.trim()) {
       return NextResponse.json({ error: 'Prompt is required' }, { status: 400 });
     }
+    // maxRetries is caller-supplied: a huge value would be a free way to make
+    // the server sit in a retry loop against the model provider.
+    const retries = Math.min(Math.max(Number(maxRetries) || 1, 1), 3);
 
     let lastError: Error | null = null;
 
     // Try Gemini FIRST (more reliable, faster)
     if (GEMINI_API_KEY) {
-      for (let attempt = 0; attempt < maxRetries; attempt++) {
+      for (let attempt = 0; attempt < retries; attempt++) {
         try {
-          logger.debug(`Attempting Gemini (attempt ${attempt + 1}/${maxRetries})`);
+          logger.debug(`Attempting Gemini (attempt ${attempt + 1}/${retries})`);
           const text = await callGemini(prompt);
           return NextResponse.json({ text, provider: 'gemini' });
         } catch (error: unknown) {
           lastError = error instanceof Error ? error : new Error(String(error));
           logger.warn(`Gemini attempt ${attempt + 1} failed`, { error: lastError.message });
-          if (attempt < maxRetries - 1) {
+          if (attempt < retries - 1) {
             await new Promise((resolve) => setTimeout(resolve, 1000));
           }
         }
@@ -184,9 +211,15 @@ export async function POST(request: NextRequest) {
       }
     } else {
       if (!GEMINI_API_KEY) {
+        // Unconfigured is not a server fault — it is a deployment that never
+        // enabled the feature, so say which knob turns it on rather than
+        // handing the user a bare 500.
         return NextResponse.json(
-          { error: 'Neither Gemini nor HuggingFace API keys are configured' },
-          { status: 500 }
+          {
+            error:
+              'AI generation is not configured on this deployment. Set GEMINI_API_KEY (or HF_API_KEY) in the frontend environment to enable it.',
+          },
+          { status: 503 }
         );
       }
     }

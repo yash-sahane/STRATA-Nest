@@ -1,40 +1,44 @@
 'use client';
 
-import { useState } from 'react';
+import Link from 'next/link';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
+import { PageHeader } from '@/components/layout/page-header';
 import { AttendanceWidget } from '@/components/attendance/attendance-widget';
 import { AttendanceCalendar } from '@/components/attendance/attendance-calendar';
 import { AttendanceStats } from '@/components/attendance/attendance-stats';
 import { TeamAttendanceTab } from '@/components/attendance/team-attendance-tab';
-import { LeaveRequestForm } from '@/components/leave/leave-request-form';
-import { useAuth } from '@/components/providers/auth-provider';
-import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useIsManager } from '@/hooks/use-permissions';
+import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
+import { useAttendanceRealtime } from '@/hooks/use-realtime';
 import { Clock, Calendar, BarChart3, Users, FileText } from 'lucide-react';
 
 export default function AttendancePage() {
-  const { user } = useAuth();
-  const { currentWorkspaceId } = useCurrentWorkspace();
-  const [currentMonth] = useState(new Date().getMonth());
-  const [currentYear] = useState(new Date().getFullYear());
-  const [isLeaveModalOpen, setIsLeaveModalOpen] = useState(false);
   const isManager = useIsManager();
+  const { currentWorkspace } = useCurrentWorkspace();
+  // Live updates: the gateway already broadcasts every write on this
+  // collection, this page just never subscribed — so another member's
+  // change only appeared after a manual navigation.
+  // Mounted on the page, not per tab, so every tab below stays live.
+  useAttendanceRealtime(currentWorkspace?.id);
 
   return (
-    <div className="flex-1 space-y-6 p-8 pt-6">
-      <div className="flex items-center justify-between space-y-2">
-        <div>
-          <h2 className="text-3xl font-bold tracking-tight">Attendance Management</h2>
-          <p className="text-muted-foreground">
-            Track your daily attendance, view calendar, and analyze your work patterns
-          </p>
-        </div>
-        <Button onClick={() => setIsLeaveModalOpen(true)} className="gap-2">
-          <FileText className="h-4 w-4" />
-          Apply for Leave
-        </Button>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        title="Attendance Management"
+        description="Track your daily attendance, view calendar, and analyze your work patterns"
+        icon={Clock}
+        actions={
+          // Leave lives on /leave — link to the single canonical entry point
+          // rather than embedding a second copy of the request form here.
+          <Button asChild variant="outline" className="gap-2">
+            <Link href="/leave">
+              <FileText className="h-4 w-4" />
+              Leave Requests
+            </Link>
+          </Button>
+        }
+      />
 
       <Tabs defaultValue="today" className="space-y-4">
         <TabsList>
@@ -59,11 +63,11 @@ export default function AttendancePage() {
         </TabsList>
 
         <TabsContent value="today" className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-2">
+          {/* Today is the check-in/out surface only. The monthly figures live
+              under Analytics — rendering AttendanceStats here too duplicated
+              every card. */}
+          <div className="grid gap-4 lg:grid-cols-2">
             <AttendanceWidget />
-            <div className="space-y-4">
-              <AttendanceStats year={currentYear} month={currentMonth} />
-            </div>
           </div>
         </TabsContent>
 
@@ -72,7 +76,10 @@ export default function AttendancePage() {
         </TabsContent>
 
         <TabsContent value="analytics" className="space-y-4">
-          <AttendanceStats year={currentYear} month={currentMonth} />
+          {/* No year/month props: AttendanceStats already defaults to the
+              current month, and pinning it to the month the page mounted was
+              the only thing the removed state did. */}
+          <AttendanceStats />
         </TabsContent>
 
         {isManager && (
@@ -81,16 +88,6 @@ export default function AttendancePage() {
           </TabsContent>
         )}
       </Tabs>
-
-      {/* Leave Application Modal */}
-      {user && currentWorkspaceId && (
-        <LeaveRequestForm 
-          open={isLeaveModalOpen} 
-          onOpenChange={setIsLeaveModalOpen}
-          userId={user.id}
-          workspaceId={currentWorkspaceId}
-        />
-      )}
     </div>
   );
 }

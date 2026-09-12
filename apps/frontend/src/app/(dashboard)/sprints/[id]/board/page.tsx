@@ -2,6 +2,7 @@
 
 import { PageHeader } from '@/components/layout/page-header';
 import { PageLoader } from '@/components/ui/page-loader';
+import { ErrorState } from '@/components/ui/error-state';
 
 import * as React from 'react';
 import { useParams, useRouter } from 'next/navigation';
@@ -35,7 +36,12 @@ export default function SprintBoardPage() {
   useWorkspaces(user?.id); // Keep workspace context active
   const sprintId = params.id as string;
 
-  const { data: sprint, isLoading: sprintLoading } = useSprint(sprintId);
+  const {
+    data: sprint,
+    isLoading: sprintLoading,
+    isError: sprintError,
+    refetch: refetchSprint,
+  } = useSprint(sprintId);
   const { data: allTasks, isLoading: tasksLoading } = useTasks(sprint?.projectId);
   const { data: sprintFRs } = useFunctionalRequirementsBySprint(sprintId);
 
@@ -71,8 +77,13 @@ export default function SprintBoardPage() {
     const review = sprintTasks.filter(t => t.status === 'REVIEW').length + 
                    frStatuses.filter(s => s === 'REVIEW').length;
                    
-    const todo = sprintTasks.filter(t => t.status === 'TODO').length + 
+    const todo = sprintTasks.filter(t => t.status === 'TODO').length +
                  frStatuses.filter(s => s === 'TODO').length;
+
+    // BACKLOG is a real status (auto-created sprint tasks start there). Without
+    // its own bucket it counted towards `total` but towards none of the cards,
+    // so the four numbers did not sum and completionRate was understated.
+    const backlog = sprintTasks.filter(t => t.status === 'BACKLOG').length;
 
     return {
       total,
@@ -80,12 +91,28 @@ export default function SprintBoardPage() {
       inProgress,
       review,
       todo,
+      backlog,
       completionRate: total > 0 ? Math.round((completed / total) * 100) : 0,
     };
   }, [sprintTasks, visibleFRs]);
 
   if (sprintLoading || tasksLoading) {
     return <PageLoader message="Loading sprint board..." />;
+  }
+
+  // isError BEFORE the not-found branch. A 500 (or an offline blip) leaves
+  // `sprint` undefined exactly like a deleted sprint does, so every sub-page
+  // told the user a sprint that plainly exists was "Sprint not found" — a
+  // dead end with nothing to retry.
+  if (sprintError) {
+    return (
+      <ErrorState
+        className="mt-10"
+        title="Couldn't load this sprint"
+        description="The sprint is still there — this is a connection problem."
+        onRetry={() => void refetchSprint()}
+      />
+    );
   }
 
   if (!sprint) {
@@ -139,7 +166,7 @@ export default function SprintBoardPage() {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid gap-4 md:grid-cols-5">
+      <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Total Tasks</CardTitle>
@@ -151,7 +178,18 @@ export default function SprintBoardPage() {
             </p>
           </CardContent>
         </Card>
-        
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Backlog</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-gray-600 dark:text-gray-400">
+              {stats.backlog}
+            </div>
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">To Do</CardTitle>

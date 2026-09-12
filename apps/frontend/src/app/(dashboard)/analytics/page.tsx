@@ -1,9 +1,12 @@
 'use client';
 
 import { PageHeader } from '@/components/layout/page-header';
+import { Badge } from '@/components/ui/badge';
+import { getTaskStatusConfig } from '@/lib/semantic/status';
+import { legendLabel } from '@/lib/chart-legend';
 
 import * as React from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   BarChart3,
   Users,
@@ -13,6 +16,7 @@ import {
   AlertTriangle,
   Clock,
   Activity,
+  RotateCcw,
 } from 'lucide-react';
 import {
   LineChart,
@@ -40,8 +44,19 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { PageLoader, InlineLoader } from '@/components/ui/page-loader';
+import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
 import { MetricCard, HealthBadge } from '@/components/analytics/kpi-widgets';
+import {
+  STATUS_COLORS,
+  PRIORITY_COLORS,
+  PROJECT_STATUS_COLORS,
+  CHART_SERIES_COLORS,
+} from '@/components/analytics/chart-colors';
+import { ChartTooltip } from '@/components/analytics/chart-tooltip';
+import { ChartEmptyState } from '@/components/analytics/chart-empty-state';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useProjects } from '@/hooks/use-project';
 import { useWorkspaceTasks } from '@/hooks/use-task';
@@ -51,33 +66,130 @@ import {
   useTeamAnalytics,
 } from '@/hooks/use-analytics';
 
-const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8'];
+const ANALYTICS_VIEWS = ['workspace', 'projects', 'team'] as const;
+type AnalyticsView = (typeof ANALYTICS_VIEWS)[number];
 
-export default function AnalyticsPage() {
+/** Pie slice labels. Kept short so they cannot overflow the chart surface. */
+const renderPercentLabel = ({ percent }: { percent?: number }) =>
+  `${((percent ?? 0) * 100).toFixed(0)}%`;
+const renderCountLabel = ({ value }: { value?: number }) => `${value ?? 0}`;
+
+/**
+ * Both people-shaped panels on this page are fed by the workspace roster, and
+ * that query can fail on its own while tasks load fine — which used to show as
+ * a Team Size of 0 and a leaderboard of "Unknown member" rows, with the page
+ * still presenting itself as healthy. One notice, rendered wherever the roster
+ * matters, so the failure is stated instead of rendered as data.
+ */
+function RosterErrorNotice({ onRetry }: { onRetry: () => void }) {
+  return (
+    <Alert variant="destructive">
+      <AlertTriangle className="h-4 w-4" />
+      <AlertTitle>Member list unavailable</AlertTitle>
+      <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
+        <span>
+          The workspace roster didn&apos;t load, so team size is unknown and members appear as ids.
+          Figures derived from tasks are unaffected.
+        </span>
+        {/* Neutral, not destructive-red: retrying a read is not a dangerous
+            action, it just happens to live inside a destructive alert. */}
+        <Button variant="outline" size="sm" className="text-foreground" onClick={onRetry}>
+          <RotateCcw className="h-4 w-4" />
+          Retry
+        </Button>
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+function AnalyticsPageContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const { currentWorkspace, isLoading: workspacesLoading } = useCurrentWorkspace();
 
-  const { data: projects = [], isLoading: projectsLoading } = useProjects(currentWorkspace?.id);
+  const {
+    data: projects = [],
+    isLoading: projectsLoading,
+    isError: projectsError,
+    refetch: refetchProjects,
+  } = useProjects(currentWorkspace?.id);
   const [selectedProjectId, setSelectedProjectId] = React.useState<string>('');
-  const [activeTab, setActiveTab] = React.useState(searchParams.get('view') || 'workspace');
+  // An unrecognised ?view= leaves Radix Tabs with no matching TabsContent — a
+  // header above an empty body — so fall back to the default view.
+  const requestedView = searchParams.get('view');
+  const [activeTab, setActiveTab] = React.useState<AnalyticsView>(
+    ANALYTICS_VIEWS.includes(requestedView as AnalyticsView)
+      ? (requestedView as AnalyticsView)
+      : 'workspace'
+  );
 
-  const { data: projectAnalytics, isLoading: projectAnalyticsLoading } =
-    useProjectAnalytics(selectedProjectId);
-  const { data: workspaceAnalytics, isLoading: workspaceLoading } = useWorkspaceAnalytics(
+  // Mirror the active tab into the URL so a view can be linked and bookmarked.
+  const handleTabChange = React.useCallback(
+    (value: string) => {
+      setActiveTab(value as AnalyticsView);
+      router.replace(`/analytics?view=${value}`, { scroll: false });
+    },
+    [router]
+  );
+
+  const { data: projectAnalytics, isLoading: projectAnalyticsLoading } = useProjectAnalytics(
+    selectedProjectId,
     currentWorkspace?.id
   );
-  const { data: teamAnalytics, isLoading: teamLoading } = useTeamAnalytics(currentWorkspace?.id);
-  const { data: allTasks = [] } = useWorkspaceTasks(currentWorkspace?.id);
+  const {
+    data: workspaceAnalytics,
+    isLoading: workspaceLoading,
+    isRosterError: workspaceRosterError,
+    refetchRoster: refetchWorkspaceRoster,
+  } = useWorkspaceAnalytics(currentWorkspace?.id);
+  const {
+    data: teamAnalytics,
+    isLoading: teamLoading,
+    isRosterError: teamRosterError,
+    refetchRoster: refetchTeamRoster,
+  } = useTeamAnalytics(currentWorkspace?.id);
+  // Every figure on all three tabs is derived from this one query, so a
+  // failure here is a failure of the whole page — not "no activity to report".
+  const {
+    data: allTasks = [],
+    isError: tasksError,
+    refetch: refetchTasks,
+  } = useWorkspaceTasks(currentWorkspace?.id);
 
-  // Set first project as default
+  // Keep the selection valid rather than only initialising it: switching
+  // workspaces replaces the project list, and a stale id from the previous
+  // workspace shows the placeholder over a dashboard of zeros.
   React.useEffect(() => {
-    if (projects.length > 0 && !selectedProjectId) {
+    if (projects.length === 0) {
+      if (selectedProjectId) setSelectedProjectId('');
+    } else if (!projects.some((p) => p.id === selectedProjectId)) {
       setSelectedProjectId(projects[0].id);
     }
   }, [projects, selectedProjectId]);
 
   if (workspacesLoading || projectsLoading) {
     return <PageLoader message="Loading analytics..." />;
+  }
+
+  // The loader above is gated on the projects query, so a failed request left
+  // the page on "Loading analytics..." indefinitely.
+  if (projectsError || tasksError) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader
+          icon={BarChart3}
+          title="Analytics"
+          description="We couldn't load your analytics."
+        />
+        <ErrorState
+          description="Your workspace data is still there — this is a connection problem, not an empty workspace."
+          onRetry={() => {
+            if (projectsError) void refetchProjects();
+            if (tasksError) void refetchTasks();
+          }}
+        />
+      </div>
+    );
   }
 
   if (!currentWorkspace) {
@@ -94,8 +206,65 @@ export default function AnalyticsPage() {
 
   const isLoading = workspaceLoading || projectAnalyticsLoading || teamLoading;
 
+  // Chart data with stable per-status colors attached to each entry
+  const taskStatusData = [
+    { name: 'Backlog', status: 'BACKLOG' },
+    { name: 'To Do', status: 'TODO' },
+    { name: 'In Progress', status: 'IN_PROGRESS' },
+    { name: 'Review', status: 'REVIEW' },
+    { name: 'Done', status: 'DONE' },
+  ]
+    .map(({ name, status }) => ({
+      name,
+      value: allTasks.filter((t) => t.status === status).length,
+      color: STATUS_COLORS[status],
+    }))
+    .filter((item) => item.value > 0);
+
+  const priorityData = [
+    { name: 'Critical', priority: 'CRITICAL' },
+    { name: 'High', priority: 'HIGH' },
+    { name: 'Medium', priority: 'MEDIUM' },
+    { name: 'Low', priority: 'LOW' },
+  ].map(({ name, priority }) => ({
+    name,
+    value: allTasks.filter((t) => t.priority === priority).length,
+    color: PRIORITY_COLORS[priority],
+  }));
+
+  const projectStatusData = [
+    { name: 'Planning', status: 'PLANNING' },
+    { name: 'Active', status: 'ACTIVE' },
+    { name: 'Completed', status: 'COMPLETED' },
+    { name: 'On Hold', status: 'ON_HOLD' },
+  ]
+    .map(({ name, status }) => ({
+      name,
+      value: projects.filter((p) => p.status === status).length,
+      color: PROJECT_STATUS_COLORS[status],
+    }))
+    .filter((item) => item.value > 0);
+
+  const projectStatusPieData = projectAnalytics
+    ? Object.entries(projectAnalytics.statusDistribution)
+        .map(([status, value]) => ({
+          name: status.replace('_', ' '),
+          value,
+          color: STATUS_COLORS[status],
+        }))
+        .filter((item) => item.value > 0)
+    : [];
+
+  const projectPriorityData = projectAnalytics
+    ? Object.entries(projectAnalytics.priorityDistribution).map(([priority, value]) => ({
+        name: priority,
+        value,
+        color: PRIORITY_COLORS[priority],
+      }))
+    : [];
+
   return (
-    <div className="container mx-auto py-6 space-y-6">
+    <div className="space-y-6">
       {/* Header */}
       <PageHeader
         icon={BarChart3}
@@ -103,7 +272,7 @@ export default function AnalyticsPage() {
         description="Comprehensive insights and performance metrics"
       />
 
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
+      <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-4">
         <TabsList className="grid w-full grid-cols-3 lg:w-[600px]">
           <TabsTrigger value="workspace">Workspace Overview</TabsTrigger>
           <TabsTrigger value="projects">Project Analytics</TabsTrigger>
@@ -116,7 +285,10 @@ export default function AnalyticsPage() {
             <div className="flex items-center justify-center py-12">
               <InlineLoader />
             </div>
-          ) : !workspaceAnalytics ? (
+          ) : !workspaceAnalytics ||
+            (workspaceAnalytics.projects.total === 0 && workspaceAnalytics.tasks.total === 0) ? (
+            // The hooks return a populated object of zeros for an empty
+            // workspace, so emptiness has to be tested on the numbers.
             <EmptyState
               icon={BarChart3}
               title="No workspace analytics available"
@@ -124,6 +296,10 @@ export default function AnalyticsPage() {
             />
           ) : (
             <>
+              {workspaceRosterError && (
+                <RosterErrorNotice onRetry={() => void refetchWorkspaceRoster()} />
+              )}
+
               {/* KPI Grid */}
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
                 <MetricCard
@@ -143,7 +319,8 @@ export default function AnalyticsPage() {
                 />
                 <MetricCard
                   title="Team Members"
-                  value={workspaceAnalytics.team.size}
+                  value={workspaceAnalytics.team.size ?? '—'}
+                  subtitle={`${workspaceAnalytics.team.activeAssignees} with assigned tasks`}
                   icon={Users}
                 />
               </div>
@@ -169,7 +346,7 @@ export default function AnalyticsPage() {
                         <p className="text-2xl font-bold">
                           {
                             allTasks.filter(
-                              (t: any) =>
+                              (t) =>
                                 t.dueDate && new Date(t.dueDate) < new Date() && t.status !== 'DONE'
                             ).length
                           }
@@ -210,51 +387,61 @@ export default function AnalyticsPage() {
                   <CardDescription>Overview of all projects in workspace</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                    {projects.map((project: any) => {
-                      const projectTasks = allTasks.filter((t: any) => t.projectId === project.id);
-                      const completed = projectTasks.filter((t: any) => t.status === 'DONE').length;
-                      const total = projectTasks.length;
-                      const overdue = projectTasks.filter(
-                        (t: any) =>
-                          t.dueDate && new Date(t.dueDate) < new Date() && t.status !== 'DONE'
-                      ).length;
-                      const completionRate = total > 0 ? (completed / total) * 100 : 0;
+                  {projects.length === 0 ? (
+                    <EmptyState
+                      icon={FolderKanban}
+                      title="No projects yet"
+                      description="Create a project to start tracking its health."
+                    />
+                  ) : (
+                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                      {projects.map((project) => {
+                        const projectTasks = allTasks.filter((t) => t.projectId === project.id);
+                        const completed = projectTasks.filter(
+                          (t) => t.status === 'DONE'
+                        ).length;
+                        const total = projectTasks.length;
+                        const overdue = projectTasks.filter(
+                          (t) =>
+                            t.dueDate && new Date(t.dueDate) < new Date() && t.status !== 'DONE'
+                        ).length;
+                        const completionRate = total > 0 ? (completed / total) * 100 : 0;
 
-                      return (
-                        <Card key={project.id}>
-                          <CardHeader className="pb-3">
-                            <div className="flex items-center justify-between">
-                              <CardTitle className="text-base">{project.name}</CardTitle>
-                              <HealthBadge value={completionRate} />
-                            </div>
-                          </CardHeader>
-                          <CardContent>
-                            <div className="space-y-2">
-                              <div className="flex justify-between text-sm">
-                                <span className="text-muted-foreground">Progress</span>
-                                <span className="font-medium">{completionRate.toFixed(0)}%</span>
+                        return (
+                          <Card key={project.id}>
+                            <CardHeader className="pb-3">
+                              <div className="flex items-center justify-between">
+                                <CardTitle className="text-base">{project.name}</CardTitle>
+                                <HealthBadge value={completionRate} />
                               </div>
-                              <div className="w-full bg-gray-200 rounded-full h-2 dark:bg-gray-700">
-                                <div
-                                  className="bg-blue-500 h-2 rounded-full transition-all"
-                                  style={{ width: `${completionRate}%` }}
-                                />
+                            </CardHeader>
+                            <CardContent>
+                              <div className="space-y-2">
+                                <div className="flex justify-between text-sm">
+                                  <span className="text-muted-foreground">Progress</span>
+                                  <span className="font-medium">{completionRate.toFixed(0)}%</span>
+                                </div>
+                                <div className="w-full bg-muted rounded-full h-2">
+                                  <div
+                                    className="bg-info h-2 rounded-full transition-all"
+                                    style={{ width: `${completionRate}%` }}
+                                  />
+                                </div>
+                                <div className="flex justify-between text-sm text-muted-foreground">
+                                  <span>
+                                    {completed}/{total} tasks
+                                  </span>
+                                  {overdue > 0 && (
+                                    <span className="text-red-500">{overdue} overdue</span>
+                                  )}
+                                </div>
                               </div>
-                              <div className="flex justify-between text-sm text-muted-foreground">
-                                <span>
-                                  {completed}/{total} tasks
-                                </span>
-                                {overdue > 0 && (
-                                  <span className="text-red-500">{overdue} overdue</span>
-                                )}
-                              </div>
-                            </div>
-                          </CardContent>
-                        </Card>
-                      );
-                    })}
-                  </div>
+                            </CardContent>
+                          </Card>
+                        );
+                      })}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 
@@ -267,48 +454,48 @@ export default function AnalyticsPage() {
                     <CardDescription>Tasks by status</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <ResponsiveContainer width="100%" height={250}>
-                      <PieChart>
-                        <Pie
-                          data={[
-                            {
-                              name: 'Backlog',
-                              value: allTasks.filter((t: any) => t.status === 'BACKLOG').length,
-                            },
-                            {
-                              name: 'To Do',
-                              value: allTasks.filter((t: any) => t.status === 'TODO').length,
-                            },
-                            {
-                              name: 'In Progress',
-                              value: allTasks.filter((t: any) => t.status === 'IN_PROGRESS').length,
-                            },
-                            {
-                              name: 'Review',
-                              value: allTasks.filter((t: any) => t.status === 'REVIEW').length,
-                            },
-                            {
-                              name: 'Done',
-                              value: allTasks.filter((t: any) => t.status === 'DONE').length,
-                            },
-                          ].filter((item) => item.value > 0)}
-                          cx="50%"
-                          cy="50%"
-                          labelLine={false}
-                          label={({ name, percent }: any) =>
-                            `${name} ${(percent * 100).toFixed(0)}%`
-                          }
-                          outerRadius={80}
-                          fill="#8884d8"
-                          dataKey="value"
+                    {taskStatusData.length === 0 ? (
+                      <ChartEmptyState message="No tasks yet" />
+                    ) : (
+                      <ResponsiveContainer width="100%" height={250}>
+                        <PieChart
+                          title="Task distribution by status"
+                          desc={taskStatusData
+                            .map((entry) => `${entry.name}: ${entry.value}`)
+                            .join(', ')}
                         >
-                          {COLORS.map((color, index) => (
-                            <Cell key={`cell-${index}`} fill={color} />
-                          ))}
-                        </Pie>
-                        <Tooltip />
-                      </PieChart>
-                    </ResponsiveContainer>
+                          <Pie
+                            data={taskStatusData}
+                            cx="50%"
+                            cy="50%"
+                            // These pies are read-only: no onClick, no drill-down.
+                            // recharts puts tabIndex=0 on the <g class="recharts-pie">
+                            // wrapper by default, adding a second, unlabelled tab stop
+                            // on top of the chart surface's own (which carries the
+                            // title/desc above and is what keyboard users land on and
+                            // arrow through). -1 drops the dead stop without touching
+                            // the accessibility layer.
+                            rootTabIndex={-1}
+                            labelLine={false}
+                            // Slice names live in the legend: recharts draws pie
+                            // labels 20px outside outerRadius with the text
+                            // running further outward, so a name + percent is
+                            // wider than the half-card and gets clipped by the
+                            // SVG edge (chart margins cannot help — cx stays at
+                            // the container centre regardless of them).
+                            label={renderPercentLabel}
+                            outerRadius={80}
+                            dataKey="value"
+                          >
+                            {taskStatusData.map((entry) => (
+                              <Cell key={entry.name} fill={entry.color} />
+                            ))}
+                          </Pie>
+                          <Tooltip content={<ChartTooltip />} />
+                          <Legend formatter={legendLabel} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    )}
                   </CardContent>
                 </Card>
 
@@ -320,16 +507,22 @@ export default function AnalyticsPage() {
                   </CardHeader>
                   <CardContent>
                     <ResponsiveContainer width="100%" height={250}>
-                      <LineChart data={workspaceAnalytics.monthlyTrends}>
+                      <LineChart
+                        data={workspaceAnalytics.monthlyTrends}
+                        title="Monthly task completion trend"
+                        desc={workspaceAnalytics.monthlyTrends
+                          .map((point) => `${point.month}: ${point.completed}`)
+                          .join(', ')}
+                      >
                         <CartesianGrid strokeDasharray="3 3" />
                         <XAxis dataKey="month" />
                         <YAxis />
-                        <Tooltip />
-                        <Legend />
+                        <Tooltip content={<ChartTooltip />} />
+                        <Legend formatter={legendLabel} />
                         <Line
                           type="monotone"
                           dataKey="completed"
-                          stroke={COLORS[0]}
+                          stroke={CHART_SERIES_COLORS[0]}
                           strokeWidth={2}
                           name="Tasks Completed"
                         />
@@ -348,34 +541,29 @@ export default function AnalyticsPage() {
                     <CardDescription>Tasks by priority level</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <ResponsiveContainer width="100%" height={250}>
-                      <BarChart
-                        data={[
-                          {
-                            name: 'Critical',
-                            value: allTasks.filter((t: any) => t.priority === 'CRITICAL').length,
-                          },
-                          {
-                            name: 'High',
-                            value: allTasks.filter((t: any) => t.priority === 'HIGH').length,
-                          },
-                          {
-                            name: 'Medium',
-                            value: allTasks.filter((t: any) => t.priority === 'MEDIUM').length,
-                          },
-                          {
-                            name: 'Low',
-                            value: allTasks.filter((t: any) => t.priority === 'LOW').length,
-                          },
-                        ]}
-                      >
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="name" />
-                        <YAxis />
-                        <Tooltip />
-                        <Bar dataKey="value" fill={COLORS[2]} />
-                      </BarChart>
-                    </ResponsiveContainer>
+                    {allTasks.length === 0 ? (
+                      <ChartEmptyState message="No tasks yet" />
+                    ) : (
+                      <ResponsiveContainer width="100%" height={250}>
+                        <BarChart
+                          data={priorityData}
+                          title="Task count by priority"
+                          desc={priorityData
+                            .map((entry) => `${entry.name}: ${entry.value}`)
+                            .join(', ')}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="name" />
+                          <YAxis />
+                          <Tooltip content={<ChartTooltip />} />
+                          <Bar dataKey="value" name="Tasks">
+                            {priorityData.map((entry) => (
+                              <Cell key={entry.name} fill={entry.color} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    )}
                   </CardContent>
                 </Card>
 
@@ -386,38 +574,38 @@ export default function AnalyticsPage() {
                     <CardDescription>Distribution of project statuses</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <ResponsiveContainer width="100%" height={250}>
-                      <PieChart>
-                        <Pie
-                          data={[
-                            {
-                              name: 'Active',
-                              value: projects.filter((p: any) => p.status === 'ACTIVE').length,
-                            },
-                            {
-                              name: 'Completed',
-                              value: projects.filter((p: any) => p.status === 'COMPLETED').length,
-                            },
-                            {
-                              name: 'On Hold',
-                              value: projects.filter((p: any) => p.status === 'ON_HOLD').length,
-                            },
-                          ].filter((item) => item.value > 0)}
-                          cx="50%"
-                          cy="50%"
-                          labelLine={false}
-                          label={({ name, value }: any) => `${name}: ${value}`}
-                          outerRadius={80}
-                          fill="#8884d8"
-                          dataKey="value"
+                    {projectStatusData.length === 0 ? (
+                      <ChartEmptyState message="No projects yet" />
+                    ) : (
+                      <ResponsiveContainer width="100%" height={250}>
+                        <PieChart
+                          title="Project distribution by status"
+                          desc={projectStatusData
+                            .map((entry) => `${entry.name}: ${entry.value}`)
+                            .join(', ')}
                         >
-                          {COLORS.map((color, index) => (
-                            <Cell key={`cell-${index}`} fill={color} />
-                          ))}
-                        </Pie>
-                        <Tooltip />
-                      </PieChart>
-                    </ResponsiveContainer>
+                          <Pie
+                            data={projectStatusData}
+                            cx="50%"
+                            cy="50%"
+                            // Read-only pie — see the Task Distribution chart.
+                            rootTabIndex={-1}
+                            labelLine={false}
+                            // Names in the legend, counts on the slices — see the
+                            // Task Distribution chart for why.
+                            label={renderCountLabel}
+                            outerRadius={80}
+                            dataKey="value"
+                          >
+                            {projectStatusData.map((entry) => (
+                              <Cell key={entry.name} fill={entry.color} />
+                            ))}
+                          </Pie>
+                          <Tooltip content={<ChartTooltip />} />
+                          <Legend formatter={legendLabel} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    )}
                   </CardContent>
                 </Card>
               </div>
@@ -429,44 +617,46 @@ export default function AnalyticsPage() {
                   <CardDescription>Latest task updates across workspace</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <div className="space-y-4">
-                    {allTasks
-                      .sort(
-                        (a: any, b: any) =>
-                          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-                      )
-                      .slice(0, 10)
-                      .map((task: any) => {
-                        const project = projects.find((p: any) => p.id === task.projectId);
-                        return (
-                          <div
-                            key={task.id}
-                            className="flex items-start gap-4 pb-4 border-b last:border-0"
-                          >
-                            <div className="flex-1">
-                              <p className="font-medium">{task.title}</p>
-                              <p className="text-sm text-muted-foreground">
-                                {project?.name} · Updated{' '}
-                                {new Date(task.updatedAt).toLocaleDateString()}
-                              </p>
-                            </div>
+                  {allTasks.length === 0 ? (
+                    <EmptyState
+                      icon={Activity}
+                      title="No activity yet"
+                      description="Task updates show up here as work moves along."
+                    />
+                  ) : (
+                    <div className="space-y-4">
+                      {[...allTasks]
+                        .sort(
+                          (a, b) =>
+                            new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+                        )
+                        .slice(0, 10)
+                        .map((task) => {
+                          const project = projects.find((p) => p.id === task.projectId);
+                          return (
                             <div
-                              className={`px-2 py-1 rounded text-xs font-medium ${
-                                task.status === 'DONE'
-                                  ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
-                                  : task.status === 'IN_PROGRESS'
-                                    ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
-                                    : task.status === 'REVIEW'
-                                      ? 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200'
-                                      : 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200'
-                              }`}
+                              key={task.id}
+                              className="flex items-start gap-4 pb-4 border-b last:border-0"
                             >
-                              {task.status.replace('_', ' ')}
+                              <div className="flex-1">
+                                <p className="font-medium">{task.title}</p>
+                                <p className="text-sm text-muted-foreground">
+                                  {project?.name} · Updated{' '}
+                                  {new Date(task.updatedAt).toLocaleDateString()}
+                                </p>
+                              </div>
+                              {/* Resolved through the semantic status module, not a
+                                  local palette map: this one had REVIEW as purple
+                                  while every other surface renders it as the
+                                  warning tone. */}
+                              <Badge variant={getTaskStatusConfig(task.status).badgeVariant}>
+                                {getTaskStatusConfig(task.status).label}
+                              </Badge>
                             </div>
-                          </div>
-                        );
-                      })}
-                  </div>
+                          );
+                        })}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </>
@@ -528,8 +718,9 @@ export default function AnalyticsPage() {
                   icon={AlertTriangle}
                 />
                 <MetricCard
-                  title="Story Points"
-                  value={`${projectAnalytics.completedStoryPoints}/${projectAnalytics.totalStoryPoints}`}
+                  title="Estimated Hours"
+                  value={`${projectAnalytics.completedEstimatedHours}/${projectAnalytics.totalEstimatedHours}h`}
+                  subtitle="Completed / total"
                   icon={Clock}
                 />
               </div>
@@ -541,29 +732,36 @@ export default function AnalyticsPage() {
                     <CardTitle>Status Distribution</CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <ResponsiveContainer width="100%" height={250}>
-                      <PieChart>
-                        <Pie
-                          data={Object.entries(projectAnalytics.statusDistribution)
-                            .map(([name, value]) => ({ name: name.replace('_', ' '), value }))
-                            .filter((item) => item.value > 0)}
-                          cx="50%"
-                          cy="50%"
-                          labelLine={false}
-                          label={({ name, percent }: any) =>
-                            `${name} ${(percent * 100).toFixed(0)}%`
-                          }
-                          outerRadius={80}
-                          fill="#8884d8"
-                          dataKey="value"
+                    {projectStatusPieData.length === 0 ? (
+                      <ChartEmptyState message="No tasks in this project yet" />
+                    ) : (
+                      <ResponsiveContainer width="100%" height={250}>
+                        <PieChart
+                          title="Task distribution by status for the selected project"
+                          desc={projectStatusPieData
+                            .map((entry) => `${entry.name}: ${entry.value}`)
+                            .join(', ')}
                         >
-                          {COLORS.map((color, index) => (
-                            <Cell key={`cell-${index}`} fill={color} />
-                          ))}
-                        </Pie>
-                        <Tooltip />
-                      </PieChart>
-                    </ResponsiveContainer>
+                          <Pie
+                            data={projectStatusPieData}
+                            cx="50%"
+                            cy="50%"
+                            // Read-only pie — see the Task Distribution chart.
+                            rootTabIndex={-1}
+                            labelLine={false}
+                            label={renderPercentLabel}
+                            outerRadius={80}
+                            dataKey="value"
+                          >
+                            {projectStatusPieData.map((entry) => (
+                              <Cell key={entry.name} fill={entry.color} />
+                            ))}
+                          </Pie>
+                          <Tooltip content={<ChartTooltip />} />
+                          <Legend formatter={legendLabel} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    )}
                   </CardContent>
                 </Card>
 
@@ -572,19 +770,29 @@ export default function AnalyticsPage() {
                     <CardTitle>Priority Breakdown</CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <ResponsiveContainer width="100%" height={250}>
-                      <BarChart
-                        data={Object.entries(projectAnalytics.priorityDistribution).map(
-                          ([name, value]) => ({ name, value })
-                        )}
-                      >
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="name" />
-                        <YAxis />
-                        <Tooltip />
-                        <Bar dataKey="value" fill={COLORS[1]} />
-                      </BarChart>
-                    </ResponsiveContainer>
+                    {projectAnalytics.totalTasks === 0 ? (
+                      <ChartEmptyState message="No tasks in this project yet" />
+                    ) : (
+                      <ResponsiveContainer width="100%" height={250}>
+                        <BarChart
+                          data={projectPriorityData}
+                          title="Task count by priority for the selected project"
+                          desc={projectPriorityData
+                            .map((entry) => `${entry.name}: ${entry.value}`)
+                            .join(', ')}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="name" />
+                          <YAxis />
+                          <Tooltip content={<ChartTooltip />} />
+                          <Bar dataKey="value" name="Tasks">
+                            {projectPriorityData.map((entry) => (
+                              <Cell key={entry.name} fill={entry.color} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    )}
                   </CardContent>
                 </Card>
               </div>
@@ -598,7 +806,9 @@ export default function AnalyticsPage() {
             <div className="flex items-center justify-center py-12">
               <InlineLoader />
             </div>
-          ) : !teamAnalytics ? (
+          ) : !teamAnalytics || teamAnalytics.memberPerformance.length === 0 ? (
+            // memberPerformance is empty until tasks are assigned; the analytics
+            // object itself is never null once the queries have resolved.
             <EmptyState
               icon={BarChart3}
               title="No team performance data available"
@@ -606,6 +816,8 @@ export default function AnalyticsPage() {
             />
           ) : (
             <>
+              {teamRosterError && <RosterErrorNotice onRetry={() => void refetchTeamRoster()} />}
+
               {/* Team KPIs */}
               <div className="grid gap-4 md:grid-cols-3">
                 <MetricCard
@@ -618,7 +830,12 @@ export default function AnalyticsPage() {
                   value={`${teamAnalytics.avgCompletionRate.toFixed(1)}%`}
                   icon={Target}
                 />
-                <MetricCard title="Team Size" value={teamAnalytics.teamSize} icon={Users} />
+                <MetricCard
+                  title="Team Size"
+                  value={teamAnalytics.teamSize ?? '—'}
+                  subtitle={`${teamAnalytics.activeAssignees} with assigned tasks`}
+                  icon={Users}
+                />
               </div>
 
               {/* Top Performers */}
@@ -629,25 +846,25 @@ export default function AnalyticsPage() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-4">
-                    {teamAnalytics.memberPerformance
-                      .sort((a: any, b: any) => b.completedTasks - a.completedTasks)
+                    {[...teamAnalytics.memberPerformance]
+                      .sort((a, b) => b.completedTasks - a.completedTasks)
                       .slice(0, 10)
-                      .map((member: any, index: number) => (
+                      .map((member, index) => (
                         <div key={member.memberId} className="flex items-center gap-4">
                           <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center font-bold text-primary">
                             {index + 1}
                           </div>
                           <div className="flex-1">
                             <div className="flex items-center justify-between">
-                              <p className="font-medium">Member {member.memberId.slice(0, 8)}</p>
+                              <p className="truncate font-medium">{member.memberName}</p>
                               <p className="text-sm text-muted-foreground">
                                 {member.completedTasks} / {member.totalTasks} tasks
                               </p>
                             </div>
                             <div className="flex items-center gap-2 mt-1">
-                              <div className="flex-1 bg-gray-200 rounded-full h-2 dark:bg-gray-700">
+                              <div className="flex-1 bg-muted rounded-full h-2">
                                 <div
-                                  className="bg-green-500 h-2 rounded-full transition-all"
+                                  className="bg-success h-2 rounded-full transition-all"
                                   style={{ width: `${member.completionRate}%` }}
                                 />
                               </div>
@@ -669,21 +886,38 @@ export default function AnalyticsPage() {
                   <CardDescription>Task distribution across team members</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <ResponsiveContainer width="100%" height={300}>
-                    <BarChart data={teamAnalytics.workloadDistribution}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis
-                        dataKey="memberId"
-                        tickFormatter={(value: string) => `Member ${value.slice(0, 6)}`}
-                      />
-                      <YAxis />
-                      <Tooltip
-                        labelFormatter={(value: any) => `Member ${String(value).slice(0, 8)}`}
-                      />
-                      <Legend />
-                      <Bar dataKey="taskCount" fill={COLORS[1]} name="Task Count" />
-                    </BarChart>
-                  </ResponsiveContainer>
+                  {teamAnalytics.workloadDistribution.length === 0 ? (
+                    <ChartEmptyState message="No assigned tasks yet" height={300} />
+                  ) : (
+                    <ResponsiveContainer width="100%" height={300}>
+                      <BarChart
+                        data={teamAnalytics.workloadDistribution}
+                        title="Task count per team member"
+                        desc={teamAnalytics.workloadDistribution
+                          .map((entry) => `${entry.memberName}: ${entry.taskCount}`)
+                          .join(', ')}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" />
+                        {/* Names, not ids — a tick is truncated only so a long
+                            one cannot overlap its neighbour; the tooltip shows
+                            it in full. */}
+                        <XAxis
+                          dataKey="memberName"
+                          tickFormatter={(value: string) =>
+                            value.length > 14 ? `${value.slice(0, 13)}\u2026` : value
+                          }
+                        />
+                        <YAxis />
+                        <Tooltip content={<ChartTooltip />} />
+                        <Legend formatter={legendLabel} />
+                        <Bar
+                          dataKey="taskCount"
+                          fill={CHART_SERIES_COLORS[1]}
+                          name="Task Count"
+                        />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  )}
                 </CardContent>
               </Card>
             </>
@@ -691,5 +925,18 @@ export default function AnalyticsPage() {
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+/**
+ * `useSearchParams` needs a Suspense boundary above it, otherwise the whole
+ * route deopts to client-side rendering (and Next fails the build for a
+ * statically prerendered route).
+ */
+export default function AnalyticsPage() {
+  return (
+    <React.Suspense fallback={<PageLoader message="Loading analytics..." />}>
+      <AnalyticsPageContent />
+    </React.Suspense>
   );
 }

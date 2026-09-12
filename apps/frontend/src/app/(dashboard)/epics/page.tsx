@@ -2,10 +2,11 @@
 
 import * as React from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
+import { useCreateActionParam } from '@/hooks/use-create-action-param';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useProjects } from '@/hooks/use-project';
-import { useEpics } from '@/hooks/use-epic';
+import { deriveEpicMetrics, useEpics } from '@/hooks/use-epic';
 import { useTasks } from '@/hooks/use-task';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -19,8 +20,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Plus, Target, CheckCircle2, Clock, TrendingUp, Calendar } from 'lucide-react';
-import { formatDate } from '@/lib/utils';
-import type { Epic } from '@/types';
+import { format, parseISO } from 'date-fns';
 import { CreateEpicDialog } from '@/components/epic/create-epic-dialog';
 import { EpicDetailDialog } from '@/components/epic/epic-detail-dialog';
 import { PageHeader } from '@/components/layout/page-header';
@@ -31,7 +31,7 @@ import { InlineLoader } from '@/components/ui/page-loader';
 import { useIsAdmin, useHasPermission } from '@/hooks/use-permissions';
 import { Permission } from '@/lib/permissions';
 
-export default function EpicsPage() {
+function EpicsPageContent() {
   const { user } = useAuth();
   const { currentWorkspace } = useCurrentWorkspace();
   const { data: projects = [] } = useProjects(currentWorkspace?.id);
@@ -44,13 +44,28 @@ export default function EpicsPage() {
   const isAdmin = useIsAdmin();
   const canCreateEpic = useHasPermission(Permission.CREATE_EPIC);
   const canDeleteEpic = useHasPermission(Permission.DELETE_EPIC);
+  const canEditEpic = useHasPermission(Permission.EDIT_EPIC);
 
   const [selectedProjectId, setSelectedProjectId] = React.useState<string>('');
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
-  const [selectedEpic, setSelectedEpic] = React.useState<Epic | null>(null);
+  // The ID, never the row. Holding the Epic OBJECT froze the open detail dialog
+  // at the snapshot it was opened with: after an edit saved, the invalidated
+  // ['epics', projectId] refetch replaced the list but not that snapshot, so
+  // clearing Start/Target End left the Timeline still showing the deleted dates
+  // and reopening Edit re-seeded them. Resolving it out of `epics` on every
+  // render means the dialog always renders the row the cache holds.
+  const [selectedEpicId, setSelectedEpicId] = React.useState<string | null>(null);
+  // The command palette's "Create New Epic" navigates here with ?action=create.
+  // Gated on a project the same way the "New Epic" button is — an epic needs one.
+  useCreateActionParam(() => setCreateDialogOpen(true), !!selectedProjectId);
 
   const { data: epics = [], isLoading, isError, refetch } = useEpics(selectedProjectId);
-  const { data: tasks = [] } = useTasks(selectedProjectId);
+  const { data: tasks = [], isLoading: tasksLoading } = useTasks(selectedProjectId);
+
+  const selectedEpic = React.useMemo(
+    () => epics.find((e) => e.id === selectedEpicId) ?? null,
+    [epics, selectedEpicId]
+  );
 
   // Restore project selection from URL or localStorage
   React.useEffect(() => {
@@ -79,7 +94,7 @@ export default function EpicsPage() {
     if (epicIdFromUrl && epics.length > 0) {
       const epic = epics.find((e) => e.id === epicIdFromUrl);
       if (epic) {
-        setSelectedEpic(epic);
+        setSelectedEpicId(epic.id);
         // Clear the epicId from URL after opening the dialog
         const params = new URLSearchParams(searchParams.toString());
         params.delete('epicId');
@@ -95,37 +110,40 @@ export default function EpicsPage() {
     localStorage.setItem('selected-project-id', projectId);
   }, []);
 
+  // Every epic's rollup, derived once from this project's tasks.
+  //
+  // The card badge and the stat tiles used to read the STORED `epic.status`
+  // while the detail dialog behind the very same card derived it, so an epic
+  // whose last task had been deleted showed "Done - 0% - Tasks 0 / 0" on the
+  // card and "Todo (Auto-calculated from tasks)" one click later, and the
+  // "Completed" tile counted it. deriveEpicMetrics is the single answer.
+  const metricsByEpic = React.useMemo(() => {
+    const tasksByEpic = new Map<string, typeof tasks>();
+    for (const task of tasks) {
+      if (!task.epicId) continue;
+      const bucket = tasksByEpic.get(task.epicId);
+      if (bucket) bucket.push(task);
+      else tasksByEpic.set(task.epicId, [task]);
+    }
+    return new Map<string, ReturnType<typeof deriveEpicMetrics>>(
+      epics.map((epic) => [epic.id, deriveEpicMetrics(tasksByEpic.get(epic.id) ?? [])] as const)
+    );
+  }, [epics, tasks]);
+
   // Calculate stats
   const stats = React.useMemo(() => {
+    const statuses = epics.map((e) => metricsByEpic.get(e.id)?.status ?? 'TODO');
     return {
       total: epics.length,
-      todo: epics.filter((e) => e.status === 'TODO').length,
-      inProgress: epics.filter((e) => e.status === 'IN_PROGRESS').length,
-      done: epics.filter((e) => e.status === 'DONE').length,
+      todo: statuses.filter((s) => s === 'TODO').length,
+      inProgress: statuses.filter((s) => s === 'IN_PROGRESS').length,
+      done: statuses.filter((s) => s === 'DONE').length,
     };
-  }, [epics]);
+  }, [epics, metricsByEpic]);
 
-  // Calculate epic metrics
-  const getEpicMetrics = (epic: Epic) => {
-    // Calculate task metrics for display
-    const epicTasks = tasks.filter((t) => t.epicId === epic.id);
-    const completedTasks = epicTasks.filter((t) => t.status === 'DONE').length;
-
-    // Use stored progress from database if available (updated when tasks change)
-    // Otherwise calculate from tasks directly
-    let progress = epic.progress ?? 0;
-
-    // If no stored progress, calculate it
-    if (progress === 0 && epicTasks.length > 0) {
-      progress = Math.round((completedTasks / epicTasks.length) * 100);
-    }
-
-    return {
-      totalTasks: epicTasks.length,
-      completedTasks,
-      progress,
-    };
-  };
+  // Epic dates are date-only wire values ("2026-08-11"). `new Date(...)` reads
+  // those as UTC midnight and renders the previous day west of UTC.
+  const formatEpicDate = (value: string) => format(parseISO(value), 'MMM d, yyyy');
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId);
 
@@ -153,7 +171,7 @@ export default function EpicsPage() {
         </CardHeader>
         <CardContent>
           <Select value={selectedProjectId} onValueChange={handleProjectChange}>
-            <SelectTrigger className="w-full md:w-[400px]">
+            <SelectTrigger aria-label="Select a project" className="w-full md:w-[400px]">
               <SelectValue placeholder="Select a project..." />
             </SelectTrigger>
             <SelectContent>
@@ -214,7 +232,10 @@ export default function EpicsPage() {
 
           {/* Epics Grid */}
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {isLoading ? (
+            {/* tasksLoading counts as loading: every number on a card is derived
+                from the task set, so drawing one before the tasks arrive shows
+                an epic as Todo / 0% for a beat and then corrects itself. */}
+            {isLoading || tasksLoading ? (
               <div className="col-span-full">
                 <InlineLoader />
               </div>
@@ -237,14 +258,29 @@ export default function EpicsPage() {
               </div>
             ) : (
               epics.map((epic) => {
-                const metrics = getEpicMetrics(epic);
-                const status = getEpicStatusConfig(epic.status);
+                const metrics = metricsByEpic.get(epic.id) ?? deriveEpicMetrics([]);
+                const status = getEpicStatusConfig(metrics.status);
 
                 return (
                   <Card
                     key={epic.id}
-                    className="cursor-pointer transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
-                    onClick={() => setSelectedEpic(epic)}
+                    // The card is the only way into an epic's detail dialog, so
+                    // without this a keyboard user could never open, edit or
+                    // delete one — Tab went straight from the project picker to
+                    // the sidebar. It cannot be a <button>: it contains the
+                    // status badge and progress bar, and nesting interactives is
+                    // what the drag-handle split elsewhere exists to avoid.
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Open epic: ${epic.name}`}
+                    className="cursor-pointer transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                    onClick={() => setSelectedEpicId(epic.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        setSelectedEpicId(epic.id);
+                      }
+                    }}
                   >
                     <CardHeader>
                       <div className="flex items-start justify-between mb-2">
@@ -291,9 +327,9 @@ export default function EpicsPage() {
                       {(epic.startDate || epic.endDate) && (
                         <div className="flex items-center gap-2 text-xs text-muted-foreground">
                           <Calendar className="h-3 w-3" />
-                          {epic.startDate && <span>{formatDate(epic.startDate)}</span>}
+                          {epic.startDate && <span>{formatEpicDate(epic.startDate)}</span>}
                           {epic.startDate && epic.endDate && <span>→</span>}
-                          {epic.endDate && <span>{formatDate(epic.endDate)}</span>}
+                          {epic.endDate && <span>{formatEpicDate(epic.endDate)}</span>}
                         </div>
                       )}
                     </CardContent>
@@ -320,12 +356,23 @@ export default function EpicsPage() {
         <EpicDetailDialog
           epic={selectedEpic}
           open={!!selectedEpic}
-          onOpenChange={(open: boolean) => !open && setSelectedEpic(null)}
+          onOpenChange={(open: boolean) => !open && setSelectedEpicId(null)}
           projectId={selectedProjectId}
           tasks={tasks.filter((t) => t.epicId === selectedEpic.id)}
           canDelete={canDeleteEpic || isAdmin}
+          canEdit={canEditEpic || isAdmin}
         />
       )}
     </div>
+  );
+}
+
+// useSearchParams() bails out of prerendering, which fails `next build` unless a
+// Suspense boundary sits above the component that reads it.
+export default function EpicsPage() {
+  return (
+    <React.Suspense fallback={<InlineLoader />}>
+      <EpicsPageContent />
+    </React.Suspense>
   );
 }

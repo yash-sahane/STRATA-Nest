@@ -25,7 +25,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { Plus, Search, FileText, CheckCircle2, Clock, Archive, Sparkles } from 'lucide-react';
+import { Plus, Search, FileText, CheckCircle2, Clock, Archive, Sparkles, FolderPlus } from 'lucide-react';
 import { formatDate } from '@/lib/utils';
 import type { RequirementStatus, RequirementPriority } from '@/types';
 import { CreateClientRequirementDialog } from '@/components/requirements/create-client-requirement-dialog';
@@ -35,7 +35,7 @@ import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
 import { getRequirementStatusConfig } from '@/lib/semantic/status';
 import { getPriorityConfig } from '@/lib/semantic/priority';
-import { InlineLoader } from '@/components/ui/page-loader';
+import { InlineLoader, PageLoader } from '@/components/ui/page-loader';
 import { AIGenerateDialog } from '@/components/ai/ai-generate-dialog';
 import type { GeneratedHierarchy } from '@/lib/ai-generator';
 import { useIsAdmin, useHasPermission } from '@/hooks/use-permissions';
@@ -58,13 +58,14 @@ const statusIcons: Record<RequirementStatus, React.ComponentType<{ className?: s
   ARCHIVED: Archive,
 };
 
-export default function RequirementsPage() {
+function RequirementsPageContent() {
   const { user } = useAuth();
   const { currentWorkspace } = useCurrentWorkspace();
   const { data: projects = [] } = useProjects(currentWorkspace?.id);
   const router = useRouter();
   const searchParams = useSearchParams();
   const frIdFromUrl = searchParams.get('frId');
+  const reqIdFromUrl = searchParams.get('reqId');
 
   const isAdmin = useIsAdmin();
   const canCreateRequirement = useHasPermission(Permission.CREATE_REQUIREMENT);
@@ -114,6 +115,17 @@ export default function RequirementsPage() {
     isError,
     refetch,
   } = useClientRequirements(selectedProjectId);
+
+  // Global search emits `?reqId=` for its "requirement" hits, but that corpus is
+  // functional_requirements (use-global-search), not the client requirements this
+  // page lists — so the id can only ever be resolved on /functional-requirements.
+  React.useEffect(() => {
+    if (!reqIdFromUrl) return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('reqId');
+    params.set('frId', reqIdFromUrl);
+    router.replace(`/functional-requirements?${params.toString()}`);
+  }, [reqIdFromUrl, searchParams, router]);
 
   // Open FR detail dialog if frId is in URL (from notification click)
   React.useEffect(() => {
@@ -166,8 +178,20 @@ export default function RequirementsPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
+      {/* Header. The two actions measure 410px and never shrink, so the title
+          column is only what the sidebar and the buttons leave it: 137px at
+          640px wide, 50px at 768px (where the 256px sidebar appears). The <h1>
+          needs 232px — 192px of "Requirements" plus a 28px icon and a 12px gap
+          — and cannot wrap, so below ~976px its box hangs out of the column and
+          over the buttons.
+          Wrap on CONTENT, not on a breakpoint: flex-basis gives the title
+          column a 240px floor, so the actions drop to their own line exactly
+          when 240 + 16 + <actions> stops fitting. A `md:flex-col` override
+          would instead be pinned to today's 410px of buttons — it would miss
+          the 640-767px band entirely and reopen the overlap at >=1024px (only
+          46px of slack there) the next time a label grows. */}
       <PageHeader
+        className="sm:flex-wrap sm:[&>div:first-child]:grow sm:[&>div:first-child]:basis-60"
         icon={FileText}
         title="Requirements"
         description="Manage client and functional requirements"
@@ -184,21 +208,32 @@ export default function RequirementsPage() {
               </Button>
               <Button onClick={() => setCreateDialogOpen(true)} disabled={!selectedProjectId}>
                 <Plus className="mr-2 h-4 w-4" />
-                New Requirement
+                New Client Requirement
               </Button>
             </>
           )
         }
       />
 
+      {/* Nothing below the picker renders without a project, so say why. */}
+      {projects.length === 0 && (
+        <EmptyState
+          icon={FolderPlus}
+          title="No projects yet"
+          description="Create a project before capturing client requirements."
+          action={{ label: 'Go to Projects', onClick: () => router.push('/projects') }}
+        />
+      )}
+
       {/* Project Selector */}
+      {projects.length > 0 && (
       <Card>
         <CardHeader>
           <CardTitle>Select Project</CardTitle>
         </CardHeader>
         <CardContent>
           <Select value={selectedProjectId} onValueChange={handleProjectChange}>
-            <SelectTrigger className="w-full md:w-[400px]">
+            <SelectTrigger aria-label="Select a project" className="w-full md:w-[400px]">
               <SelectValue placeholder="Select a project..." />
             </SelectTrigger>
             <SelectContent>
@@ -211,6 +246,7 @@ export default function RequirementsPage() {
           </Select>
         </CardContent>
       </Card>
+      )}
 
       {selectedProjectId && (
         <>
@@ -299,7 +335,7 @@ export default function RequirementsPage() {
                   value={statusFilter}
                   onValueChange={(value) => setStatusFilter(value as any)}
                 >
-                  <SelectTrigger className="w-full md:w-[200px]">
+                  <SelectTrigger aria-label="Filter requirements by status" className="w-full md:w-[200px]">
                     <SelectValue placeholder="Status" />
                   </SelectTrigger>
                   <SelectContent>
@@ -316,7 +352,7 @@ export default function RequirementsPage() {
                   value={priorityFilter}
                   onValueChange={(value) => setPriorityFilter(value as any)}
                 >
-                  <SelectTrigger className="w-full md:w-[200px]">
+                  <SelectTrigger aria-label="Filter requirements by priority" className="w-full md:w-[200px]">
                     <SelectValue placeholder="Priority" />
                   </SelectTrigger>
                   <SelectContent>
@@ -462,5 +498,15 @@ export default function RequirementsPage() {
         canDelete={canDeleteRequirement || isAdmin}
       />
     </div>
+  );
+}
+
+// useSearchParams() bails out of prerendering, which fails `next build` unless a
+// Suspense boundary sits above the component that reads it.
+export default function RequirementsPage() {
+  return (
+    <React.Suspense fallback={<PageLoader message="Loading requirements..." />}>
+      <RequirementsPageContent />
+    </React.Suspense>
   );
 }

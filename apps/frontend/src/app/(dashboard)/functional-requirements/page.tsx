@@ -9,13 +9,17 @@ import {
 import { getPriorityConfig } from '@/lib/semantic/priority';
 import { getComplexityConfig } from '@/lib/semantic/complexity';
 import { EmptyState } from '@/components/ui/empty-state';
-import { InlineLoader } from '@/components/ui/page-loader';
+import { InlineLoader, PageLoader } from '@/components/ui/page-loader';
 
 import * as React from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useProjects } from '@/hooks/use-project';
-import { useFunctionalRequirements } from '@/hooks/use-functional-requirement';
+import {
+  useFunctionalRequirement,
+  useFunctionalRequirements,
+} from '@/hooks/use-functional-requirement';
 import { useClientRequirements } from '@/hooks/use-client-requirement';
 import { useEpics } from '@/hooks/use-epic';
 import { useTasks } from '@/hooks/use-task';
@@ -38,7 +42,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Plus, FileText, Search, Filter } from 'lucide-react';
+import { Plus, FileText, Search, Filter, FolderPlus } from 'lucide-react';
 import { Progress } from '@/components/ui/progress';
 import { formatDate } from '@/lib/utils';
 import type { FunctionalRequirement } from '@/types';
@@ -47,10 +51,12 @@ import { FunctionalRequirementDetailDialog } from '@/components/requirements/fun
 import { useIsAdmin, useHasPermission } from '@/hooks/use-permissions';
 import { Permission } from '@/lib/permissions';
 
-export default function FunctionalRequirementsPage() {
+function FunctionalRequirementsPageContent() {
   const { user } = useAuth();
   const { currentWorkspace } = useCurrentWorkspace();
   const { data: projects = [] } = useProjects(currentWorkspace?.id);
+  const router = useRouter();
+  const searchParams = useSearchParams();
 
   // Permission checks
   const isAdmin = useIsAdmin();
@@ -60,17 +66,38 @@ export default function FunctionalRequirementsPage() {
 
   const [selectedProjectId, setSelectedProjectId] = React.useState<string>('');
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
-  const [selectedRequirement, setSelectedRequirement] =
-    React.useState<FunctionalRequirement | null>(null);
+  // Hold the id, not a snapshot: an object captured here never sees the refetch
+  // that follows a save, so the dialog kept rendering stale values.
+  const [selectedRequirementId, setSelectedRequirementId] = React.useState<string | null>(null);
   const [searchQuery, setSearchQuery] = React.useState('');
   const [statusFilter, setStatusFilter] = React.useState<string>('all');
 
-  // Restore project selection from localStorage or set first project as default
+  // A `?projectId=` from a deep link seeds the picker ONCE PER VALUE.
+  //
+  // Keyed on the value, not on "has ever run". The effect re-runs whenever
+  // `selectedProjectId` changes (it is a dep), and re-asserting the URL's
+  // project on every run snapped the picker straight back to the address bar —
+  // the page was stuck on one project. But a bare "spent" flag over-corrected:
+  // the notification bell lives in the global header and deep-links to THIS
+  // route, and Next treats a query-only push to the same segment as a soft
+  // navigation, so the component stays mounted and the ref stays spent. A second
+  // FR notification for a DIFFERENT project then did literally nothing — no
+  // switch, no dialog, and `?frId=` never stripped. Storing the applied VALUE
+  // lets the user re-pick freely while still honouring a new deep link.
+  const lastAppliedUrlProject = React.useRef<string | null>(null);
+
+  // Project selection: URL param (notification deep links) > localStorage > first project
   React.useEffect(() => {
     const STORAGE_KEY = 'selected-project-id';
+    const urlParam = searchParams.get('projectId');
+    const urlProjectId = urlParam && urlParam !== lastAppliedUrlProject.current ? urlParam : null;
     const savedProjectId = localStorage.getItem(STORAGE_KEY);
 
-    if (savedProjectId && projects.some((p) => p.id === savedProjectId)) {
+    if (urlProjectId && projects.some((p) => p.id === urlProjectId)) {
+      lastAppliedUrlProject.current = urlProjectId;
+      setSelectedProjectId(urlProjectId);
+      localStorage.setItem(STORAGE_KEY, urlProjectId);
+    } else if (savedProjectId && projects.some((p) => p.id === savedProjectId)) {
       // Restore saved project if it still exists
       setSelectedProjectId(savedProjectId);
     } else if (projects.length > 0 && !selectedProjectId) {
@@ -79,7 +106,7 @@ export default function FunctionalRequirementsPage() {
       setSelectedProjectId(firstProjectId);
       localStorage.setItem(STORAGE_KEY, firstProjectId);
     }
-  }, [projects, selectedProjectId]);
+  }, [projects, selectedProjectId, searchParams]);
 
   // Save project selection to localStorage when changed
   const handleProjectChange = React.useCallback((projectId: string) => {
@@ -97,12 +124,70 @@ export default function FunctionalRequirementsPage() {
   const { data: epics = [] } = useEpics(selectedProjectId);
   const { data: tasks = [] } = useTasks(selectedProjectId);
 
-  // NOTE: The FunctionalRequirement type no longer includes a parentRequirementId field.
-  // Render requirements as a flat list (ordered by hierarchyId) to avoid relying on a parent reference.
-  const hierarchicalRequirements = React.useMemo(() => {
-    return [...requirements].sort((a, b) =>
-      (a.hierarchyId || '').localeCompare(b.hierarchyId || '')
+  // Open the FR detail dialog when a notification deep-links to one (?frId=…)
+  const frIdFromUrl = searchParams.get('frId');
+
+  // Global search / the /requirements?reqId= redirect send an frId with NO
+  // projectId, so the target FR often lives in a project other than the one
+  // restored from localStorage — and then nothing below ever matches it. Resolve
+  // the FR on its own and switch the picker to its project first.
+  const { data: deepLinkedFR } = useFunctionalRequirement(frIdFromUrl ?? undefined);
+  React.useEffect(() => {
+    // Skip when the URL pins a project: both effects would fight over the picker.
+    if (!deepLinkedFR || searchParams.get('projectId')) return;
+    if (!deepLinkedFR.projectId || deepLinkedFR.projectId === selectedProjectId) return;
+    if (!projects.some((p) => p.id === deepLinkedFR.projectId)) return;
+    handleProjectChange(deepLinkedFR.projectId);
+  }, [deepLinkedFR, projects, selectedProjectId, searchParams, handleProjectChange]);
+
+  React.useEffect(() => {
+    if (!frIdFromUrl || requirements.length === 0) return;
+    if (!requirements.some((r) => r.id === frIdFromUrl)) return;
+    setSelectedRequirementId(frIdFromUrl);
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('frId');
+    router.replace(
+      params.toString() ? `/functional-requirements?${params.toString()}` : '/functional-requirements'
     );
+  }, [frIdFromUrl, requirements, searchParams, router]);
+
+  // The API returns parentRequirementId on every FR (requirements/mappers.ts), so
+  // sub-requirements can be ordered under their parent — which is what the card
+  // below claims to show.
+  const hierarchicalRequirements = React.useMemo(() => {
+    const parentOf = (req: FunctionalRequirement) => req.parentRequirementId || '';
+    const known = new Set(requirements.map((r) => r.id));
+    const byParent = new Map<string, FunctionalRequirement[]>();
+
+    for (const req of requirements) {
+      // A parent that is not in this list (other project, deleted) must not hide
+      // the row, so treat it as top level.
+      const parentId = parentOf(req);
+      const key = parentId && known.has(parentId) ? parentId : '';
+      const bucket = byParent.get(key);
+      if (bucket) bucket.push(req);
+      else byParent.set(key, [req]);
+    }
+    for (const bucket of byParent.values()) {
+      bucket.sort((a, b) => (a.hierarchyId || '').localeCompare(b.hierarchyId || ''));
+    }
+
+    const rows: { req: FunctionalRequirement; depth: number }[] = [];
+    const seen = new Set<string>(); // guards against a cyclic parent chain
+    const walk = (parentId: string, depth: number) => {
+      for (const req of byParent.get(parentId) ?? []) {
+        if (seen.has(req.id)) continue;
+        seen.add(req.id);
+        rows.push({ req, depth });
+        walk(req.id, depth + 1);
+      }
+    };
+    walk('', 0);
+    // Anything still unvisited sat in a cycle — render it rather than drop it.
+    for (const req of requirements) {
+      if (!seen.has(req.id)) rows.push({ req, depth: 0 });
+    }
+    return rows;
   }, [requirements]);
 
   // Filter requirements
@@ -112,7 +197,7 @@ export default function FunctionalRequirementsPage() {
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(
-        (req) =>
+        ({ req }) =>
           req.title.toLowerCase().includes(query) ||
           req.hierarchyId.toLowerCase().includes(query) ||
           req.description?.toLowerCase().includes(query)
@@ -120,7 +205,7 @@ export default function FunctionalRequirementsPage() {
     }
 
     if (statusFilter !== 'all') {
-      filtered = filtered.filter((req) => req.status === statusFilter);
+      filtered = filtered.filter(({ req }) => req.status === statusFilter);
     }
 
     return filtered;
@@ -140,8 +225,10 @@ export default function FunctionalRequirementsPage() {
   }, [requirements]);
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId);
+  // Read the live row out of the query data so the dialog re-renders after a save.
+  const selectedRequirement = requirements.find((r) => r.id === selectedRequirementId) ?? null;
 
-  const renderRequirement = (req: FunctionalRequirement) => {
+  const renderRequirement = (req: FunctionalRequirement, depth = 0) => {
     const complexity = getComplexityConfig(req.complexity);
     const clientReq = clientRequirements.find((cr) => cr.id === req.clientRequirementId);
 
@@ -157,12 +244,15 @@ export default function FunctionalRequirementsPage() {
       <TableRow
         key={req.id}
         className="cursor-pointer"
-        onClick={() => setSelectedRequirement(req)}
+        onClick={() => setSelectedRequirementId(req.id)}
       >
         <TableCell>
-          <Badge variant="outline" className="font-mono">
-            {req.hierarchyId}
-          </Badge>
+          {/* Indent sub-requirements so the parent/child nesting is visible. */}
+          <div style={{ paddingLeft: depth * 16 }}>
+            <Badge variant="outline" className="font-mono">
+              {req.hierarchyId}
+            </Badge>
+          </div>
         </TableCell>
         <TableCell>
           <div className="font-medium">{req.title}</div>
@@ -208,20 +298,31 @@ export default function FunctionalRequirementsPage() {
           (canCreateFR || isAdmin) && (
             <Button onClick={() => setCreateDialogOpen(true)} disabled={!selectedProjectId}>
               <Plus className="mr-2 h-4 w-4" />
-              New Requirement
+              New Functional Requirement
             </Button>
           )
         }
       />
 
+      {/* Nothing below the picker renders without a project, so say why. */}
+      {projects.length === 0 && (
+        <EmptyState
+          icon={FolderPlus}
+          title="No projects yet"
+          description="Create a project before breaking work down into functional requirements."
+          action={{ label: 'Go to Projects', onClick: () => router.push('/projects') }}
+        />
+      )}
+
       {/* Project Selector */}
+      {projects.length > 0 && (
       <Card>
         <CardHeader>
           <CardTitle>Select Project</CardTitle>
         </CardHeader>
         <CardContent>
           <Select value={selectedProjectId} onValueChange={handleProjectChange}>
-            <SelectTrigger className="w-full md:w-[400px]">
+            <SelectTrigger aria-label="Select a project" className="w-full md:w-[400px]">
               <SelectValue placeholder="Select a project..." />
             </SelectTrigger>
             <SelectContent>
@@ -234,6 +335,7 @@ export default function FunctionalRequirementsPage() {
           </Select>
         </CardContent>
       </Card>
+      )}
 
       {selectedProjectId && (
         <>
@@ -318,7 +420,7 @@ export default function FunctionalRequirementsPage() {
                   />
                 </div>
                 <Select value={statusFilter} onValueChange={setStatusFilter}>
-                  <SelectTrigger>
+                  <SelectTrigger aria-label="Filter requirements by status">
                     <SelectValue placeholder="Filter by status" />
                   </SelectTrigger>
                   <SelectContent>
@@ -383,7 +485,9 @@ export default function FunctionalRequirementsPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {filteredRequirements.map((req) => renderRequirement(req))}
+                      {filteredRequirements.map(({ req, depth }) =>
+                        renderRequirement(req, depth)
+                      )}
                     </TableBody>
                   </Table>
                 </div>
@@ -411,7 +515,7 @@ export default function FunctionalRequirementsPage() {
         <FunctionalRequirementDetailDialog
           requirement={selectedRequirement}
           open={!!selectedRequirement}
-          onOpenChange={(open: boolean) => !open && setSelectedRequirement(null)}
+          onOpenChange={(open: boolean) => !open && setSelectedRequirementId(null)}
           projectId={selectedProjectId}
           workspaceId={currentWorkspace?.id || ''}
           clientRequirements={clientRequirements}
@@ -420,5 +524,15 @@ export default function FunctionalRequirementsPage() {
         />
       )}
     </div>
+  );
+}
+
+// useSearchParams() bails out of prerendering, which fails `next build` unless a
+// Suspense boundary sits above the component that reads it.
+export default function FunctionalRequirementsPage() {
+  return (
+    <React.Suspense fallback={<PageLoader message="Loading requirements..." />}>
+      <FunctionalRequirementsPageContent />
+    </React.Suspense>
   );
 }

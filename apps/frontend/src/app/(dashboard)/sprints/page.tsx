@@ -18,14 +18,18 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Plus, Calendar, Target, PlayCircle, CheckCircle2, Users, Pencil, Trash2 } from 'lucide-react';
-import { formatDate } from '@/lib/utils';
+import { format, parseISO } from 'date-fns';
 import { CreateSprintDialog } from '@/components/sprints/create-sprint-dialog';
 import { PageHeader } from '@/components/layout/page-header';
 import { useConfirm } from '@/components/providers/confirm-provider';
+import { useHasPermission } from '@/hooks/use-permissions';
+import { Permission } from '@/lib/permissions';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PageLoader, InlineLoader } from '@/components/ui/page-loader';
 import { useRouter } from 'next/navigation';
+import { useCreateActionParam } from '@/hooks/use-create-action-param';
 
 export default function SprintsPage() {
   const router = useRouter();
@@ -34,7 +38,13 @@ export default function SprintsPage() {
 
   const [selectedProjectId, setSelectedProjectId] = React.useState<string>('');
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
+  // The command palette's "Create New Sprint" navigates here with ?action=create.
+  useCreateActionParam(() => setCreateDialogOpen(true), !!selectedProjectId);
   const [editingSprint, setEditingSprint] = React.useState<any>(null);
+
+  const canCreateSprint = useHasPermission(Permission.CREATE_SPRINT);
+  const canEditSprint = useHasPermission(Permission.EDIT_SPRINT);
+  const canDeleteSprint = useHasPermission(Permission.DELETE_SPRINT);
 
   const { data: projects, isLoading: projectsLoading } = useProjects(currentWorkspace?.id);
   const {
@@ -73,6 +83,11 @@ export default function SprintsPage() {
     setSelectedProjectId(projectId);
     localStorage.setItem('selected-project-id', projectId);
   }, []);
+
+  // Sprint dates are date-only wire values ("2026-08-11"). `new Date(...)` would
+  // read them as UTC midnight and render the previous day west of UTC; parseISO
+  // keeps them on the local calendar day.
+  const formatSprintDate = (value: string) => format(parseISO(value), 'MMM d, yyyy');
 
   const getSprintStats = (sprintId: string) => {
     const sprintTasks = tasks?.filter((t) => t.sprintId === sprintId) || [];
@@ -132,36 +147,86 @@ export default function SprintsPage() {
   const handleDeleteSprint = async (sprintId: string) => {
     const confirmed = await confirm({
       title: 'Delete sprint?',
-      description: 'This permanently deletes the sprint. This action cannot be undone.',
+      description:
+        'This permanently deletes the sprint. Its tasks are not deleted; they are moved out of the sprint. This action cannot be undone.',
       confirmText: 'Delete',
       destructive: true,
     });
     if (!confirmed) return;
 
-    await deleteSprint.mutateAsync({
-      sprintId,
-      projectId: selectedProjectId,
-    });
+    // These three run from a bare onClick, so a rejected mutateAsync would be an
+    // unhandled rejection (the hooks already toast the failure).
+    try {
+      await deleteSprint.mutateAsync({
+        sprintId,
+        projectId: selectedProjectId,
+      });
+    } catch {
+      /* handled by the mutation's onError toast */
+    }
   };
 
   const handleStartSprint = async (sprintId: string) => {
-    await startSprint.mutateAsync({ sprintId, projectId: selectedProjectId });
+    try {
+      await startSprint.mutateAsync({ sprintId, projectId: selectedProjectId });
+    } catch {
+      /* handled by the mutation's onError toast */
+    }
   };
 
   const handleCompleteSprint = async (sprintId: string) => {
-    await completeSprint.mutateAsync({ sprintId, projectId: selectedProjectId });
+    const stats = getSprintStats(sprintId);
+    // Without these the SPRINT_COMPLETED notification block is never entered,
+    // so nobody is told the sprint closed.
+    const teamMemberIds = Array.from(
+      new Set(
+        (tasks ?? [])
+          .filter((t) => t.sprintId === sprintId)
+          .flatMap((t) => t.assignedTo ?? [])
+          .filter(Boolean)
+      )
+    );
+
+    try {
+      await completeSprint.mutateAsync({
+        sprintId,
+        projectId: selectedProjectId,
+        teamMemberIds,
+        completedTasks: stats.completedTasks,
+        totalTasks: stats.totalTasks,
+      });
+    } catch {
+      /* handled by the mutation's onError toast */
+    }
   };
+
+  // Stable reference: an inline literal here re-fires the dialog's reset effect
+  // on every render of this page, wiping edits in progress.
+  const editingSprintInitialData = React.useMemo(
+    () =>
+      editingSprint
+        ? {
+            name: editingSprint.name,
+            goal: editingSprint.goal,
+            startDate: parseISO(editingSprint.startDate),
+            endDate: parseISO(editingSprint.endDate),
+          }
+        : undefined,
+    [editingSprint]
+  );
 
   const getStatusColor = (status: string) => {
     switch (status) {
+      // 600/700 rather than 500: these carry white text, and the 500 shades sit
+      // at 3.1-3.8:1 against it -- under the 4.5:1 floor for badge-sized text.
       case 'PLANNING':
-        return 'bg-gray-500';
+        return 'bg-gray-600';
       case 'ACTIVE':
-        return 'bg-green-500';
+        return 'bg-green-700';
       case 'COMPLETED':
-        return 'bg-blue-500';
+        return 'bg-blue-600';
       default:
-        return 'bg-gray-500';
+        return 'bg-gray-600';
     }
   };
 
@@ -218,7 +283,7 @@ export default function SprintsPage() {
         actions={
           <>
             <Select value={selectedProjectId} onValueChange={handleProjectChange}>
-              <SelectTrigger className="w-[200px]">
+              <SelectTrigger aria-label="Select a project" className="w-[200px]">
                 <SelectValue placeholder="Select project" />
               </SelectTrigger>
               <SelectContent>
@@ -229,10 +294,12 @@ export default function SprintsPage() {
                 ))}
               </SelectContent>
             </Select>
-            <Button onClick={() => setCreateDialogOpen(true)}>
-              <Plus className="mr-2 h-4 w-4" />
-              New Sprint
-            </Button>
+            {canCreateSprint && (
+              <Button onClick={() => setCreateDialogOpen(true)}>
+                <Plus className="mr-2 h-4 w-4" />
+                New Sprint
+              </Button>
+            )}
           </>
         }
       />
@@ -260,7 +327,7 @@ export default function SprintsPage() {
                       <CardTitle className="text-lg">{sprint.name}</CardTitle>
                       <CardDescription className="flex items-center gap-2">
                         <Calendar className="h-3 w-3" />
-                        {formatDate(sprint.startDate)} - {formatDate(sprint.endDate)}
+                        {formatSprintDate(sprint.startDate)} - {formatSprintDate(sprint.endDate)}
                       </CardDescription>
                     </div>
                     <Badge className={`${getStatusColor(sprint.status)} text-white`}>
@@ -302,43 +369,21 @@ export default function SprintsPage() {
 
                   {/* Actions */}
                   <div className="flex gap-2 pt-2 flex-wrap">
-                    {sprint.status === 'PLANNING' && (
-                      <>
-                        <Button
-                          size="sm"
-                          variant="default"
-                          className="flex-1"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleStartSprint(sprint.id);
-                          }}
-                        >
-                          <PlayCircle className="h-4 w-4 mr-1" />
-                          Start Sprint
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setEditingSprint(sprint);
-                          }}
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDeleteSprint(sprint.id);
-                          }}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </>
+                    {canEditSprint && sprint.status === 'PLANNING' && (
+                      <Button
+                        size="sm"
+                        variant="default"
+                        className="flex-1"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleStartSprint(sprint.id);
+                        }}
+                      >
+                        <PlayCircle className="h-4 w-4 mr-1" />
+                        Start Sprint
+                      </Button>
                     )}
-                    {sprint.status === 'ACTIVE' && (
+                    {canEditSprint && sprint.status === 'ACTIVE' && (
                       <Button
                         size="sm"
                         variant="default"
@@ -351,6 +396,41 @@ export default function SprintsPage() {
                         <CheckCircle2 className="h-4 w-4 mr-1" />
                         Complete Sprint
                       </Button>
+                    )}
+                    {/* Edit/Delete are NOT status-gated on the server, so don't
+                        gate them here — an ACTIVE or COMPLETED sprint created by
+                        mistake was otherwise uneditable and undeletable. */}
+                    {canEditSprint && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        aria-label="Edit sprint"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditingSprint(sprint);
+                        }}
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                    )}
+                    {canDeleteSprint && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            aria-label="Delete sprint"
+                            className="text-destructive-text hover:text-destructive-text"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteSprint(sprint.id);
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Delete sprint</TooltipContent>
+                      </Tooltip>
                     )}
                     <Button
                       size="sm"
@@ -382,8 +462,16 @@ export default function SprintsPage() {
         <EmptyState
           icon={Calendar}
           title="No sprints yet"
-          description="Get started by creating your first sprint."
-          action={{ label: 'Create Sprint', onClick: () => setCreateDialogOpen(true) }}
+          description={
+            canCreateSprint
+              ? 'Get started by creating your first sprint.'
+              : 'No sprints have been planned for this project yet.'
+          }
+          action={
+            canCreateSprint
+              ? { label: 'Create Sprint', onClick: () => setCreateDialogOpen(true) }
+              : undefined
+          }
         />
       )}
 
@@ -396,16 +484,12 @@ export default function SprintsPage() {
 
       {editingSprint && (
         <CreateSprintDialog
+          key={editingSprint.id}
           open={!!editingSprint}
           onOpenChange={(open) => !open && setEditingSprint(null)}
           onSubmit={handleUpdateSprint}
           isLoading={updateSprint.isPending}
-          initialData={{
-            name: editingSprint.name,
-            goal: editingSprint.goal,
-            startDate: new Date(editingSprint.startDate),
-            endDate: new Date(editingSprint.endDate),
-          }}
+          initialData={editingSprintInitialData}
         />
       )}
     </div>

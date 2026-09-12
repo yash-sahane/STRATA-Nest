@@ -3,6 +3,7 @@
 import { PageHeader } from '@/components/layout/page-header';
 
 import * as React from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useTheme } from 'next-themes';
@@ -28,23 +29,58 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import NotificationPreferences from '@/components/settings/notification-preferences';
-import { useIsManager } from '@/hooks/use-permissions';
+import { useIsAdmin, useIsManager } from '@/hooks/use-permissions';
 import { Shield } from 'lucide-react';
 import { authClient } from '@/lib/api/client';
 import { useUpdateWorkspace } from '@/hooks/use-workspace';
+import { InviteCodePanel, InviteRoleSelect } from '@/components/workspace/invite-member-dialog';
+import type { UserRole } from '@/types';
 
+const SETTINGS_TABS = ['profile', 'workspace', 'notifications', 'security', 'appearance'] as const;
+type SettingsTab = (typeof SETTINGS_TABS)[number];
+
+/** `useSearchParams` opts the subtree into client rendering, so it needs its own
+ *  Suspense boundary rather than suspending the whole route. */
 export default function SettingsPage() {
+  return (
+    <React.Suspense fallback={<PageLoader message="Loading settings..." />}>
+      <SettingsPageContent />
+    </React.Suspense>
+  );
+}
+
+function SettingsPageContent() {
   const { user, refreshUser } = useAuth();
   const { currentWorkspace, isLoading: workspacesLoading } = useCurrentWorkspace();
   const { theme, setTheme, systemTheme } = useTheme();
   const updateWorkspace = useUpdateWorkspace();
+
+  // Deep links such as /settings?tab=workspace (the Workspaces page uses one)
+  // must land on the tab they name; anything else falls back to Profile.
+  const searchParams = useSearchParams();
+  const requestedTab = searchParams.get('tab');
+  const [tab, setTab] = React.useState<SettingsTab>(() =>
+    SETTINGS_TABS.includes(requestedTab as SettingsTab) ? (requestedTab as SettingsTab) : 'profile',
+  );
+  React.useEffect(() => {
+    // The page stays mounted when the deep link is followed from another route.
+    if (SETTINGS_TABS.includes(requestedTab as SettingsTab)) setTab(requestedTab as SettingsTab);
+  }, [requestedTab]);
 
   const [mounted, setMounted] = React.useState(false);
   const [isUpdating, setIsUpdating] = React.useState(false);
   const [compactMode, setCompactMode] = React.useState(false);
   const [showAnimations, setShowAnimations] = React.useState(true);
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
-  const isManager = useIsManager(); // RBAC check
+  /**
+   * Two different gates, matching the API exactly: the workspace settings form
+   * needs `workspace:update`, which both MANAGER and ASSISTANT_MANAGER hold, so
+   * it opens for either. Deleting the workspace needs `workspace:delete`, which
+   * only MANAGER holds. Gating the whole tab on isManager locked assistant
+   * managers out of settings the server would have let them change.
+   */
+  const canManageWorkspace = useIsAdmin();
+  const isManager = useIsManager();
 
   // Profile form state
   const [profileName, setProfileName] = React.useState('');
@@ -58,15 +94,24 @@ export default function SettingsPage() {
   const [showPw, setShowPw] = React.useState({ current: false, next: false, confirm: false });
   const [pwUpdating, setPwUpdating] = React.useState(false);
 
-  // Workspace form refs and preferences state
-  const wsNameRef = React.useRef<HTMLInputElement>(null);
-  const wsDescRef = React.useRef<HTMLTextAreaElement>(null);
+  // Workspace form state. Controlled, not `defaultValue` refs: the switcher can
+  // change `currentWorkspace` underneath this page, and React ignores
+  // defaultValue on re-render — the form would then save workspace A's name
+  // onto workspace B.
+  const [wsName, setWsName] = React.useState('');
+  const [wsDescription, setWsDescription] = React.useState('');
   const [allowMemberInvites, setAllowMemberInvites] = React.useState(true);
   const [isPublicWorkspace, setIsPublicWorkspace] = React.useState(false);
   const [requireTaskApproval, setRequireTaskApproval] = React.useState(false);
+  // The role an invite code hands out. MEMBER is the read-only floor, which is
+  // the safe default for a code that may be pasted into a group chat.
+  const [inviteCodeRole, setInviteCodeRole] = React.useState<UserRole>('MEMBER');
   React.useEffect(() => {
-    if (currentWorkspace?.settings) {
-      const s = currentWorkspace.settings;
+    if (!currentWorkspace) return;
+    setWsName(currentWorkspace.name);
+    setWsDescription(currentWorkspace.description ?? '');
+    const s = currentWorkspace.settings;
+    if (s) {
       if (typeof s.allowMemberInvites === 'boolean') setAllowMemberInvites(s.allowMemberInvites);
       if (typeof s.isPublic === 'boolean') setIsPublicWorkspace(s.isPublic);
       if (typeof s.requireTaskApproval === 'boolean') setRequireTaskApproval(s.requireTaskApproval);
@@ -140,12 +185,16 @@ export default function SettingsPage() {
   const handleWorkspaceUpdate = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!currentWorkspace) return;
+    if (!wsName.trim()) {
+      toast.error('Workspace name cannot be empty');
+      return;
+    }
     setIsUpdating(true);
     try {
       await updateWorkspace.mutateAsync({
         workspaceId: currentWorkspace.id,
-        name: wsNameRef.current?.value.trim() || currentWorkspace.name,
-        description: wsDescRef.current?.value ?? currentWorkspace.description ?? '',
+        name: wsName.trim(),
+        description: wsDescription,
         settings: {
           ...(currentWorkspace.settings || {}),
           allowMemberInvites,
@@ -153,7 +202,7 @@ export default function SettingsPage() {
           requireTaskApproval,
         },
       });
-      toast.success('Workspace settings saved');
+      // success toast is fired by the mutation
     } catch {
       // error toast handled inside mutation
     } finally {
@@ -213,7 +262,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="container mx-auto py-6 space-y-6">
+    <div className="space-y-6">
       {/* Header */}
       <PageHeader
         icon={SettingsIcon}
@@ -221,7 +270,7 @@ export default function SettingsPage() {
         description="Manage your account and workspace preferences"
       />
 
-      <Tabs defaultValue="profile" className="space-y-6">
+      <Tabs value={tab} onValueChange={(value) => setTab(value as SettingsTab)} className="space-y-6">
         <TabsList>
           <TabsTrigger value="profile">Profile</TabsTrigger>
           <TabsTrigger value="workspace">Workspace</TabsTrigger>
@@ -307,10 +356,10 @@ export default function SettingsPage() {
 
         {/* Workspace Tab - Manager Only */}
         <TabsContent value="workspace" className="space-y-4">
-          {!isManager ? (
+          {!canManageWorkspace ? (
             <Card className="border-destructive/50">
               <CardHeader>
-                <div className="flex items-center gap-2 text-destructive">
+                <div className="flex items-center gap-2 text-destructive-text">
                   <Shield className="h-6 w-6" />
                   <CardTitle>Access Denied</CardTitle>
                 </div>
@@ -342,8 +391,8 @@ export default function SettingsPage() {
                         <Label htmlFor="workspace-name">Workspace Name</Label>
                         <Input
                           id="workspace-name"
-                          ref={wsNameRef}
-                          defaultValue={currentWorkspace.name}
+                          value={wsName}
+                          onChange={(e) => setWsName(e.target.value)}
                         />
                       </div>
 
@@ -351,24 +400,10 @@ export default function SettingsPage() {
                         <Label htmlFor="workspace-desc">Description</Label>
                         <Textarea
                           id="workspace-desc"
-                          ref={wsDescRef}
-                          defaultValue={currentWorkspace.description}
+                          value={wsDescription}
+                          onChange={(e) => setWsDescription(e.target.value)}
                           rows={3}
                         />
-                      </div>
-
-                      <div className="grid gap-2">
-                        <Label htmlFor="invite-code">Invite Code</Label>
-                        <div className="flex gap-2">
-                          <Input
-                            id="invite-code"
-                            defaultValue={currentWorkspace.inviteCode}
-                            readOnly
-                          />
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          Share this code to invite team members
-                        </p>
                       </div>
                     </div>
 
@@ -426,6 +461,41 @@ export default function SettingsPage() {
                 </CardContent>
               </Card>
 
+              {/* This tab used to print `Workspace.inviteCode` under "Share this
+                  code to invite team members". Nothing has ever redeemed that
+                  column: POST /workspaces/accept-invitation looks the value up
+                  in the InviteCode table, which the column is not mirrored
+                  into, so every manager who followed that instruction sent out
+                  a string the Join box answers with "Invalid invite code".
+                  The field now shows a code minted through /invite_codes — the
+                  same producer the Invite Member dialog uses, so the two
+                  surfaces cannot disagree. */}
+              <Card>
+                <CardHeader>
+                  <CardTitle>Invite Code</CardTitle>
+                  <CardDescription>
+                    Share a code with anyone who should join this workspace. They enter it after
+                    signing in.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="invite-code-role">Role granted by the code</Label>
+                    <InviteRoleSelect
+                      id="invite-code-role"
+                      value={inviteCodeRole}
+                      onChange={setInviteCodeRole}
+                    />
+                  </div>
+                  <InviteCodePanel
+                    workspaceId={currentWorkspace.id}
+                    role={inviteCodeRole}
+                    idPrefix="workspace-invite-code"
+                  />
+                </CardContent>
+              </Card>
+
+              {isManager && (
               <Card className="border-red-200 dark:border-red-900">
                 <CardHeader>
                   <CardTitle className="text-red-600 dark:text-red-400">Danger Zone</CardTitle>
@@ -446,6 +516,7 @@ export default function SettingsPage() {
                   </div>
                 </CardContent>
               </Card>
+              )}
             </>
           )}
         </TabsContent>

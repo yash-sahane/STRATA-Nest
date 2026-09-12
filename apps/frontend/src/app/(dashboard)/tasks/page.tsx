@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { useCreateActionParam } from '@/hooks/use-create-action-param';
 import { Button } from '@/components/ui/button';
 import {
   Select,
@@ -16,13 +17,14 @@ import { TaskDetailsDialog } from '@/components/tasks/task-details-dialog';
 import { EditTaskDialog } from '@/components/tasks/edit-task-dialog';
 import { PageHeader } from '@/components/layout/page-header';
 import { ErrorState } from '@/components/ui/error-state';
-import { InlineLoader } from '@/components/ui/page-loader';
+import { InlineLoader, PageLoader } from '@/components/ui/page-loader';
 import {
   useTasks,
   useCreateTask,
   useUpdateTask,
   useUpdateTaskStatus,
   useDeleteTask,
+  useReorderTasks,
 } from '@/hooks/use-task';
 import { useProjects } from '@/hooks/use-project';
 import { useAuth } from '@/components/providers/auth-provider';
@@ -30,7 +32,7 @@ import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useEpics } from '@/hooks/use-epic';
 import { useFunctionalRequirements } from '@/hooks/use-functional-requirement';
 import { useSprints } from '@/hooks/use-sprint';
-import { Plus, Search, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import { Plus, Search, ArrowUpDown, ArrowUp, ArrowDown, X } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import {
   DropdownMenu,
@@ -53,10 +55,18 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import type { Task, TaskStatus } from '@/types';
-import { useIsAdmin, useHasPermission, useUserRole } from '@/hooks/use-permissions';
+import { useIsAdmin, useHasPermission, useHasPermissionResolved } from '@/hooks/use-permissions';
 import { Permission } from '@/lib/permissions';
 
-export default function TasksPage() {
+// The two halves of the Manual-order notice, shared by the banner and the live
+// region that announces it, so they can never drift apart.
+const MANUAL_ORDER_NOTICE = 'Sorted by Manual order so your arrangement stays put.';
+// Manual order is board-wide, not per column: the other four columns swap from
+// the old sort to their own saved order at the same moment, which is alarming
+// if nothing says it is coming.
+const MANUAL_ORDER_NOTICE_DETAIL = 'Every column now shows its saved order.';
+
+function TasksPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user } = useAuth();
@@ -66,13 +76,19 @@ export default function TasksPage() {
 
   // Permission checks - only managers/assistant managers can edit/delete tasks
   const isAdmin = useIsAdmin();
-  const userRole = useUserRole();
+  // Tri-state on purpose: `undefined` while the membership request is in
+  // flight, so the DONE gate never refuses on an unresolved answer. The server
+  // (TasksService.patchStatus) is the enforcement point either way.
+  const doneGate = useHasPermissionResolved(Permission.EDIT_ANY_TASK);
+  const canMarkDone = doneGate.isLoading ? undefined : doneGate.allowed;
   const canEditAnyTask = useHasPermission(Permission.EDIT_ANY_TASK);
   const canDeleteTask = useHasPermission(Permission.DELETE_TASK);
   const canCreateTask = useHasPermission(Permission.CREATE_TASK);
 
   const [selectedProjectId, setSelectedProjectId] = React.useState<string>(projectIdFromUrl || '');
   const [isCreateDialogOpen, setIsCreateDialogOpen] = React.useState(false);
+  // The command palette's "Create New Task" navigates here with ?action=create.
+  useCreateActionParam(() => setIsCreateDialogOpen(true));
   const [isDetailsDialogOpen, setIsDetailsDialogOpen] = React.useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = React.useState(false);
   const [selectedTask, setSelectedTask] = React.useState<Task | null>(null);
@@ -82,6 +98,17 @@ export default function TasksPage() {
   const [sortCriteria, setSortCriteria] = React.useState<
     Array<{ field: string; direction: 'asc' | 'desc' }>
   >([{ field: 'priority', direction: 'desc' }]);
+  // The "we switched you to Manual order" notice, and the sort to put back.
+  // This used to be a toast with an action, and the action could not be
+  // clicked: dropping a card raises a realtime "Task Status Changed"
+  // notification for the same user a beat later, Sonner stacks the newcomer in
+  // FRONT, and everything behind the front toast is pointer-events: none — so
+  // the undo rendered, was reported as shown, and swallowed every click. An
+  // undo the user cannot reach is not an undo, and it has no business expiring
+  // after four seconds either, so it is a banner on the page now.
+  const [sortSwitchNotice, setSortSwitchNotice] = React.useState<{
+    previous: Array<{ field: string; direction: 'asc' | 'desc' }>;
+  } | null>(null);
 
   const { data: projects } = useProjects(currentWorkspace?.id);
   const {
@@ -99,21 +126,54 @@ export default function TasksPage() {
   const updateTask = useUpdateTask();
   const updateTaskStatus = useUpdateTaskStatus();
   const deleteTask = useDeleteTask();
+  const reorderTasks = useReorderTasks();
 
-  // Open task dialog if taskId is in URL (from notification click)
+  // `?taskId` ADDRESSES the open task; it is not a one-shot command like
+  // `?action=create` (see useCreateActionParam, which is right to consume its
+  // parameter — "open the create dialog" has no record behind it to point at).
+  // This used to strip `taskId` the instant the dialog opened, which threw the
+  // address away before the user could use it: F5 landed on the bare board, and
+  // the link a notification handed them could be neither shared nor bookmarked.
+  // So the parameter now lives exactly as long as the dialog does — written
+  // whenever a task dialog opens, removed when it closes.
+  //
+  // Shallow, for the same reason as handleProjectChange below: this is a URL
+  // correction on a client page that reads `useSearchParams`, not a navigation.
+  // `replaceState`, not `pushState`, because opening a dialog is not a place in
+  // history — and the state argument must be null or the App Router treats the
+  // entry as its own and skips syncing `useSearchParams` to it.
+  const setTaskParam = React.useCallback((taskId: string | null) => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.get('taskId') === (taskId ?? null)) return;
+    if (taskId) url.searchParams.set('taskId', taskId);
+    else url.searchParams.delete('taskId');
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+  }, []);
+
+  // Honour an inbound `?taskId` once per arrival. `tasks` is empty on the first
+  // pass of a hard load, so this keeps trying until the task turns up; the ref
+  // is what stops it re-opening a dialog the user has since closed, because the
+  // close writes the URL and this effect re-runs on the way out.
+  const autoOpenedTaskId = React.useRef<string | null>(null);
   React.useEffect(() => {
-    if (taskIdFromUrl && tasks.length > 0) {
-      const task = tasks.find((t) => t.id === taskIdFromUrl);
-      if (task) {
-        setSelectedTask(task);
-        setIsDetailsDialogOpen(true);
-        // Clear the taskId from URL after opening the dialog
-        const params = new URLSearchParams(searchParams.toString());
-        params.delete('taskId');
-        router.replace(`/tasks?${params.toString()}`);
-      }
+    if (!taskIdFromUrl) {
+      autoOpenedTaskId.current = null;
+      return;
     }
-  }, [taskIdFromUrl, tasks, searchParams, router]);
+    if (autoOpenedTaskId.current === taskIdFromUrl) return;
+    const task = tasks.find((t) => t.id === taskIdFromUrl);
+    if (!task) return;
+    autoOpenedTaskId.current = taskIdFromUrl;
+    setSelectedTask(task);
+    setIsDetailsDialogOpen(true);
+  }, [taskIdFromUrl, tasks]);
+
+  // `?projectId` is an entry point (bookmark, refresh, deep link, back button),
+  // not a live binding. Re-applying it on every render fought the selector: the
+  // state update from handleProjectChange re-ran this effect while the URL still
+  // carried the OLD id, so the choice — and the trigger label — snapped straight
+  // back and the page stayed stuck on the project it was loaded with.
+  const appliedUrlProjectId = React.useRef<string | null>(null);
 
   // Restore project selection from localStorage or set from URL/first project
   React.useEffect(() => {
@@ -121,9 +181,12 @@ export default function TasksPage() {
 
     // Priority: URL param > localStorage > first project
     if (projectIdFromUrl) {
+      if (appliedUrlProjectId.current === projectIdFromUrl) return;
+      appliedUrlProjectId.current = projectIdFromUrl;
       setSelectedProjectId(projectIdFromUrl);
       localStorage.setItem(STORAGE_KEY, projectIdFromUrl);
     } else {
+      appliedUrlProjectId.current = null;
       const savedProjectId = localStorage.getItem(STORAGE_KEY);
 
       if (savedProjectId && projects?.some((p) => p.id === savedProjectId)) {
@@ -280,6 +343,10 @@ export default function TasksPage() {
           return (a.labels?.length || 0) - (b.labels?.length || 0);
         case 'estimatedHours':
           return (a.estimatedHours || 0) - (b.estimatedHours || 0);
+        case 'position':
+          // The hand-made board order. It has to be sortable here as well as in
+          // TaskBoard, because handleTaskMove renumbers against this order.
+          return a.position - b.position;
         default:
           return 0;
       }
@@ -334,8 +401,25 @@ export default function TasksPage() {
     return sortTasks(result);
   }, [myTasks, searchQuery, sortTasks]);
 
+  // A drag can only ever be stored in `position`, so this is the one sort under
+  // which the board can show a hand-made arrangement back to the user.
+  const isManualOrder = sortCriteria.length === 1 && sortCriteria[0].field === 'position';
+
   // Toggle sort - add field to criteria or toggle its direction
   const handleSort = (field: string, addToExisting: boolean = false) => {
+    // Any deliberate choice from the sort menu supersedes the automatic switch,
+    // so the offer to undo it goes away — including a deliberate pick of Manual
+    // order, which the user then owns rather than having had it done to them.
+    setSortSwitchNotice(null);
+
+    // Manual order IS the stored board order: it is exclusive (no secondary
+    // field can refine it) and it never reverses, because a column shown upside
+    // down would make every subsequent drop read backwards.
+    if (field === 'position') {
+      setSortCriteria([{ field: 'position', direction: 'asc' }]);
+      return;
+    }
+
     const defaultDirection: 'asc' | 'desc' =
       field === 'title' || field === 'hierarchyId' ? 'asc' : 'desc';
 
@@ -361,6 +445,7 @@ export default function TasksPage() {
 
   // Remove a sort criterion
   const removeSortCriterion = (field: string) => {
+    setSortSwitchNotice(null);
     setSortCriteria((prev) => {
       const filtered = prev.filter((c) => c.field !== field);
       // Keep at least one criterion
@@ -375,6 +460,7 @@ export default function TasksPage() {
 
   // Field labels for display
   const fieldLabels: Record<string, string> = {
+    position: 'Manual',
     priority: 'Priority',
     urgency: 'Urgency',
     dueDate: 'Due Date',
@@ -387,21 +473,37 @@ export default function TasksPage() {
     estimatedHours: 'Hours',
   };
 
-  // Get sort label for display
-  const getSortLabel = () => {
-    if (sortCriteria.length === 0) return 'Sort';
-    if (sortCriteria.length === 1) {
-      return fieldLabels[sortCriteria[0].field] || 'Sort';
-    }
-    return `${sortCriteria.length} fields`;
+  // Name a sort. Takes the criteria explicitly rather than reading state, so
+  // the Manual-order notice can offer to put back a sort that is no longer the
+  // current one.
+  const labelForCriteria = (criteria: Array<{ field: string; direction: 'asc' | 'desc' }>) => {
+    if (criteria.length === 0) return 'Sort';
+    if (criteria.length === 1) return fieldLabels[criteria[0].field] || 'Sort';
+    return `${criteria.length} fields`;
   };
+
+  // Get sort label for display
+  const getSortLabel = () => labelForCriteria(sortCriteria);
 
   const handleProjectChange = (projectId: string) => {
     setSelectedProjectId(projectId);
     localStorage.setItem('selected-project-id', projectId);
+
     const params = new URLSearchParams(searchParams.toString());
     params.set('projectId', projectId);
-    router.push(`/tasks?${params.toString()}`);
+    // `?taskId` names a task in the project being left behind, so it cannot
+    // survive the swap — the board would carry an address that resolves to
+    // nothing on the next load.
+    params.delete('taskId');
+    // Shallow, like useCreateActionParam: swapping the project re-renders this
+    // client page off `useSearchParams`, it is not a navigation. It also has to
+    // be shallow to work at all — on a page HARD-LOADED with a query string,
+    // router.push() of a query-only change never reached the address bar, so
+    // the selector was dead on exactly the URLs a bookmark or a deep link gives
+    // you. The state argument must be null: the App Router only syncs itself to
+    // a pushState it did not originate, and passing history.state back hands it
+    // its own marker, which makes it skip the update and leave the board behind.
+    window.history.pushState(null, '', `/tasks?${params.toString()}`);
   };
 
   const handleCreateTask = async (values: any) => {
@@ -420,6 +522,7 @@ export default function TasksPage() {
       assignedBy: user.id, // ✅ Who is assigning the task
       assignedByName: user.name, // ✅ Assigner's name
       dueDate: values.dueDate?.toISOString(),
+      estimatedHours: values.estimatedHours,
       epicId: values.epicId && values.epicId !== 'none' ? values.epicId : undefined,
       functionalRequirementId:
         values.functionalRequirementId && values.functionalRequirementId !== 'none'
@@ -432,32 +535,166 @@ export default function TasksPage() {
     setIsCreateDialogOpen(false);
   };
 
-  const handleTaskMove = async (taskId: string, newStatus: TaskStatus, newPosition: number) => {
+  const handleTaskMove = async (
+    taskId: string,
+    newStatus: TaskStatus,
+    beforeTaskId: string | null
+  ) => {
     if (!selectedProjectId) return;
 
-    await updateTaskStatus.mutateAsync({
-      taskId,
-      projectId: selectedProjectId,
-      status: newStatus,
-      position: newPosition,
-      currentUserRole: userRole || undefined, // ✅ Pass role for permission check
-    });
+    const movedTask = tasks.find((t) => t.id === taskId);
+    if (!movedTask) return;
+
+    // The board renders a FILTERED subset, so the drop only names a card to land
+    // in front of. Anchor it in the full column — sorted the way the board just
+    // rendered it, NOT by position — and renumber from there: renumbering only
+    // the visible rows would overwrite the positions of hidden siblings, and
+    // anchoring in position order (what this used to do) put the card wherever
+    // the rendered order and the stored order happened to disagree.
+    const destinationColumn = sortTasks(
+      tasks.filter((t) => t.status === newStatus && t.id !== taskId)
+    );
+    const anchorIndex = beforeTaskId
+      ? destinationColumn.findIndex((t) => t.id === beforeTaskId)
+      : -1;
+    const insertAt = anchorIndex >= 0 ? anchorIndex : destinationColumn.length;
+    const isReorderWithinColumn = movedTask.status === newStatus;
+
+    // Where the CURRENT sort would put this card in that column on its own. If
+    // that is already the slot it was dropped in, the sort HONOURS the drop:
+    // nothing has to be stored and nothing has to be re-sorted. (Array#sort is
+    // stable and the card is appended before sorting, so it settles after its
+    // equals — which is where dragging past them would leave it.)
+    const sortedIndex = sortTasks([...destinationColumn, movedTask]).findIndex(
+      (t) => t.id === taskId
+    );
+    const dropMatchesSort = insertAt === sortedIndex;
+
+    // Same column, and the sort already renders the card in the dropped slot:
+    // the drag only looked like a move because the board renders a filtered
+    // subset of the column, so there is nothing to write and nothing to
+    // explain. NOT under Manual order though — there `position` is what is on
+    // screen, `insertAt` is a dense index while the stored positions can be
+    // sparse or (on legacy rows) all zero, and a drag is the user curating the
+    // order by hand. Every manual drop writes.
+    if (isReorderWithinColumn && !isManualOrder && dropMatchesSort) return;
+
+    // A drop only means something the board can show back if the arrangement is
+    // both STORED and VISIBLE. `position` is the only place a drag can be
+    // stored, and it is invisible under every sort but Manual — so an
+    // arrangement the current sort would not reproduce has to switch the board
+    // over, or the card springs back and the gesture looks discarded.
+    //
+    // This used to fire for WITHIN-column drops only. A cross-column drop at a
+    // chosen slot was appended to the end and returned early, before both the
+    // renumber AND the toast — i.e. the finding's own symptom, a chosen drop
+    // position ignored with no explanation, still happened verbatim whenever
+    // the drag crossed columns. Both paths take the same route now.
+    const storeArrangement = isManualOrder || !dropMatchesSort;
+    const needsManualOrder = !isManualOrder && storeArrangement;
+    const endPosition = destinationColumn.reduce((max, t) => Math.max(max, t.position), -1) + 1;
+
+    const previousSort = sortCriteria;
+    const restoreSort = () => {
+      if (needsManualOrder) {
+        setSortCriteria(previousSort);
+        setSortSwitchNotice(null);
+      }
+    };
+
+    if (needsManualOrder) {
+      // Flip BEFORE the writes, not after them. `mutateAsync` settles only once
+      // onSuccess has finished — parent-progress recompute, parent
+      // invalidations and a project fetch — and every invalidation in between
+      // re-renders the board under the OLD sort, so the card visibly sprang
+      // back to where it started and only jumped into place seconds later.
+      setSortCriteria([{ field: 'position', direction: 'asc' }]);
+      setSortSwitchNotice({ previous: previousSort });
+    }
+
+    let statusWritten = false;
+
+    try {
+      const updatedTask = await updateTaskStatus.mutateAsync({
+        taskId,
+        projectId: selectedProjectId,
+        status: newStatus,
+        // When the sort already honours the drop, nobody's stored order needs
+        // rewriting: the card is simply a new arrival in this column, so park
+        // it at the end rather than flattening a hand-made order that another
+        // user set from Manual order and that nobody is currently looking at.
+        position: storeArrangement ? insertAt : endPosition,
+        canMarkDone,
+      });
+
+      // The status change can be refused (e.g. DONE gating); skip renumbering
+      // then, and hand the user back the sort they were on.
+      if (updatedTask.status !== newStatus) {
+        restoreSort();
+        return;
+      }
+      statusWritten = true;
+      if (!storeArrangement) return;
+
+      destinationColumn.splice(insertAt, 0, movedTask);
+
+      const positionUpdates = destinationColumn
+        .map((t, index) => ({ taskId: t.id, position: index }))
+        .filter(
+          // The moved task's position was already persisted by the status update above.
+          (update, index) =>
+            destinationColumn[index].id !== taskId &&
+            destinationColumn[index].position !== update.position
+        );
+
+      if (positionUpdates.length > 0) {
+        await reorderTasks.mutateAsync({ tasks: positionUpdates, projectId: selectedProjectId });
+      }
+    } catch (error) {
+      // The mutation hooks toast their own failures. All this owes the user is
+      // not leaving the board on a sort they never asked for when the move that
+      // justified it never landed. Once the card HAS moved the manual order is
+      // real, so a failed sibling renumber keeps it. Rethrow either way —
+      // TaskBoard's drag handler is what swallows it.
+      if (!statusWritten) restoreSort();
+      throw error;
+    }
   };
 
   const handleTaskClick = (task: Task) => {
     setSelectedTask(task);
     setIsDetailsDialogOpen(true);
+    // A task opened by hand is just as addressable as one opened from a
+    // notification link, so it earns the same URL.
+    setTaskParam(task.id);
   };
 
+  // The details and edit dialogs are two views of the SAME record, so the
+  // handover between them leaves `?taskId` alone — a refresh mid-edit reopens
+  // the task (in details), which is the honest thing for the URL to promise.
   const handleTaskEdit = (task: Task) => {
     setSelectedTask(task);
     setIsDetailsDialogOpen(false);
     setIsEditDialogOpen(true);
+    setTaskParam(task.id);
+  };
+
+  const closeDetailsDialog = (open: boolean) => {
+    setIsDetailsDialogOpen(open);
+    if (!open) setTaskParam(null);
+  };
+
+  const closeEditDialog = (open: boolean) => {
+    setIsEditDialogOpen(open);
+    if (!open) setTaskParam(null);
   };
 
   const handleTaskDelete = (taskId: string) => {
     setDeleteTaskId(taskId);
     setIsDetailsDialogOpen(false);
+    // The confirmation is not a view of the task, and the record is about to
+    // stop existing — a link to it would 404 the dialog open on the next load.
+    setTaskParam(null);
   };
 
   const handleEditTask = async (values: any) => {
@@ -466,13 +703,22 @@ export default function TasksPage() {
     await updateTask.mutateAsync({
       taskId: selectedTask.id,
       projectId: selectedProjectId,
+      canMarkDone,
       updates: {
         title: values.title,
         description: values.description,
         status: values.status,
         priority: values.priority,
-        dueDate: values.dueDate?.toISOString(),
-        epicId: values.epicId && values.epicId !== 'none' ? values.epicId : undefined,
+        // Explicit clear values: undefined keys are dropped from the PATCH body, so a
+        // cleared due date must travel as null and "No epic" as '' (the schema default).
+        dueDate: values.dueDate ? values.dueDate.toISOString() : (null as unknown as string),
+        // Same rule as dueDate above: `?? 0` stored a real 0h estimate for a
+        // field the user had cleared, and every surface then printed "0h".
+        // UpdateTaskDto marks estimatedHours @IsOptional() (which skips null as
+        // well as undefined) and TasksService.patch copies any non-undefined
+        // value straight through, so null is the clear.
+        estimatedHours: values.estimatedHours ?? (null as unknown as number),
+        epicId: values.epicId && values.epicId !== 'none' ? values.epicId : '',
         labels: values.labels || [],
         assigneeIds: values.assigneeIds || [],
         assignedTo: values.assigneeIds || [],
@@ -481,6 +727,7 @@ export default function TasksPage() {
 
     setIsEditDialogOpen(false);
     setSelectedTask(null);
+    setTaskParam(null);
   };
 
   const confirmDelete = async () => {
@@ -525,7 +772,7 @@ export default function TasksPage() {
       <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
         <div className="w-full sm:w-64">
           <Select value={selectedProjectId || ''} onValueChange={handleProjectChange}>
-            <SelectTrigger>
+            <SelectTrigger aria-label="Select a project">
               <SelectValue placeholder="Select a project" />
             </SelectTrigger>
             <SelectContent>
@@ -573,7 +820,18 @@ export default function TasksPage() {
                 <span className="hidden sm:inline">{getSortLabel()}</span>
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
+            {/* The primitive is `overflow-hidden` with no cap (see
+                components/ui/dropdown-menu.tsx), and this menu is ~14 rows tall
+                once the active-criteria chips are in it. On a short viewport
+                the bottom entries fell off the screen and could not be reached
+                by mouse, wheel or keyboard, with Radix's scroll lock holding
+                the page still behind it. Radix already measures the room it
+                has — cap the height with it and scroll. The real home for this
+                is DropdownMenuContent itself, which this file does not own. */}
+            <DropdownMenuContent
+              align="end"
+              className="w-56 max-h-(--radix-dropdown-menu-content-available-height) overflow-y-auto"
+            >
               <DropdownMenuLabel>
                 Sort by{' '}
                 <span className="text-xs font-normal text-muted-foreground">
@@ -604,7 +862,7 @@ export default function TasksPage() {
                               e.stopPropagation();
                               removeSortCriterion(criterion.field);
                             }}
-                            className="text-muted-foreground hover:text-destructive"
+                            className="text-muted-foreground hover:text-destructive-text"
                           >
                             ×
                           </button>
@@ -616,6 +874,20 @@ export default function TasksPage() {
                 </>
               )}
 
+              <DropdownMenuGroup>
+                {/* The board can only persist a drag as `position`, so this is
+                    the only entry under which a card stays where it is dropped.
+                    Without it there was no way to see a hand-made order at all. */}
+                <DropdownMenuItem onClick={() => handleSort('position')} className="gap-2">
+                  {getSortCriterion('position') ? (
+                    <ArrowUp className="h-4 w-4 text-primary" />
+                  ) : (
+                    <span className="w-4" />
+                  )}
+                  Manual order (drag & drop)
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
+              <DropdownMenuSeparator />
               <DropdownMenuGroup>
                 <DropdownMenuItem
                   onClick={(e) => handleSort('priority', e.shiftKey)}
@@ -779,6 +1051,53 @@ export default function TasksPage() {
         </div>
       </div>
 
+      {/* The switch is announced from a live region that is ALWAYS mounted, the
+          way Sonner's own announcer is. A `role="status"` that arrives together
+          with its text is announced unreliably, and this is replacing a toast
+          that did announce — so the region stays and only its text changes.
+          `sr-only` is absolutely positioned, so it costs the layout nothing. */}
+      <div aria-live="polite" className="sr-only">
+        {sortSwitchNotice && isManualOrder
+          ? `${MANUAL_ORDER_NOTICE} ${MANUAL_ORDER_NOTICE_DETAIL}`
+          : ''}
+      </div>
+
+      {/* The undo for the automatic switch to Manual order — a banner, not a
+          toast. It is an ordinary, permanently clickable part of the layout
+          that no overlay can cover, it sits directly above the board it is
+          talking about, and it does not expire. Rendered only while Manual
+          order is still in force: once the user has sorted by something else
+          there is nothing left to undo. */}
+      {sortSwitchNotice && isManualOrder && (
+        <div className="flex flex-col gap-3 rounded-lg border bg-muted/50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-0.5">
+            <p className="text-sm font-medium">{MANUAL_ORDER_NOTICE}</p>
+            <p className="text-xs text-muted-foreground">{MANUAL_ORDER_NOTICE_DETAIL}</p>
+          </div>
+          <div className="flex shrink-0 items-center gap-1 self-start sm:self-auto">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setSortCriteria(sortSwitchNotice.previous);
+                setSortSwitchNotice(null);
+              }}
+            >
+              Back to {labelForCriteria(sortSwitchNotice.previous)}
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              aria-label="Dismiss and keep Manual order"
+              onClick={() => setSortSwitchNotice(null)}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Task Board */}
       {selectedProjectId ? (
         isLoadingTasks ? (
@@ -826,16 +1145,17 @@ export default function TasksPage() {
       <TaskDetailsDialog
         task={selectedTask}
         open={isDetailsDialogOpen}
-        onOpenChange={setIsDetailsDialogOpen}
+        onOpenChange={closeDetailsDialog}
         onEdit={canEditAnyTask || isAdmin ? handleTaskEdit : undefined}
         onDelete={canDeleteTask || isAdmin ? handleTaskDelete : undefined}
+        canEditDependencies={canEditAnyTask || isAdmin}
       />
 
       {/* Edit Task Dialog */}
       <EditTaskDialog
         task={selectedTask}
         open={isEditDialogOpen}
-        onOpenChange={setIsEditDialogOpen}
+        onOpenChange={closeEditDialog}
         onSubmit={handleEditTask}
         isLoading={updateTask.isPending}
         existingLabels={existingLabels}
@@ -849,15 +1169,28 @@ export default function TasksPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Task</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete this task? This action cannot be undone.
+              This permanently deletes the task and its comments. Subtasks are kept and unlinked
+              from this task, and logged time entries are kept. This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDelete}>Delete</AlertDialogAction>
+            <AlertDialogAction variant="destructive" onClick={confirmDelete}>
+              Delete
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  );
+}
+
+// useSearchParams() bails out of prerendering, which fails `next build` unless a
+// Suspense boundary sits above the component that reads it.
+export default function TasksPage() {
+  return (
+    <React.Suspense fallback={<PageLoader message="Loading tasks..." />}>
+      <TasksPageContent />
+    </React.Suspense>
   );
 }

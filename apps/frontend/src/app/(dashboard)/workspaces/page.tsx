@@ -6,7 +6,8 @@ import { PageLoader } from '@/components/ui/page-loader';
 
 import * as React from 'react';
 import { useAuth } from '@/components/providers/auth-provider';
-import { useWorkspaces, useDeleteWorkspace } from '@/hooks/use-workspace';
+import { useWorkspaces } from '@/hooks/use-workspace';
+import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -17,36 +18,46 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
 import { WorkspaceSwitcher } from '@/components/workspace/workspace-switcher';
 import { InviteMemberDialog } from '@/components/workspace/invite-member-dialog';
-import { MoreVertical, Settings, Trash2, Users, FolderKanban, Calendar } from 'lucide-react';
+import { DeleteWorkspaceDialog } from '@/components/workspace/delete-workspace-dialog';
+import { MoreVertical, Settings, Trash2, Users, Calendar } from 'lucide-react';
 import { format } from 'date-fns';
 import { useRouter } from 'next/navigation';
+import { useHasPermissionIn } from '@/hooks/use-permissions';
+import { Permission } from '@/lib/permissions';
+import type { Workspace } from '@/types';
+
+/**
+ * Invite affordance for ONE card. Resolved per workspace, because the card grid
+ * spans workspaces the caller holds different roles in.
+ *
+ * Ownership is not the rule the server applies:
+ * `WorkspaceAccessService.assertPermission` has no owner special-case — it
+ * grants on platform-admin or on the ACTIVE membership's role holding
+ * `member:invite`. Gating on `ownerId` therefore hid the button from a MANAGER
+ * of a workspace they do not own (whom the API authorizes) and offered it to an
+ * owner sitting on a MEMBER role (whom the API 403s).
+ */
+function WorkspaceInviteAction({ workspace }: { workspace: Workspace }) {
+  const { allowed } = useHasPermissionIn(workspace.id, Permission.INVITE_MEMBER);
+  if (!allowed) return null;
+  return <InviteMemberDialog workspaceId={workspace.id} />;
+}
 
 export default function WorkspacesPage() {
   const { user } = useAuth();
   const router = useRouter();
   const { data: workspaces, isLoading, isError, refetch } = useWorkspaces(user?.id);
-  const deleteWorkspace = useDeleteWorkspace();
+  const { currentWorkspaceId, setCurrentWorkspaceId } = useCurrentWorkspace();
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
-  const [workspaceToDelete, setWorkspaceToDelete] = React.useState<string | null>(null);
+  const [workspaceToDelete, setWorkspaceToDelete] = React.useState<Workspace | null>(null);
 
-  const handleDelete = async () => {
-    if (!workspaceToDelete) return;
-    
-    await deleteWorkspace.mutateAsync(workspaceToDelete);
-    setDeleteDialogOpen(false);
-    setWorkspaceToDelete(null);
+  const openWorkspace = (workspace: Workspace, destination: string) => {
+    if (workspace.id !== currentWorkspaceId) {
+      setCurrentWorkspaceId(workspace.id);
+    }
+    router.push(destination);
   };
 
   if (isLoading) {
@@ -98,7 +109,7 @@ export default function WorkspacesPage() {
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
                       <DropdownMenuItem
-                        onClick={() => router.push(`/workspaces/${workspace.id}/settings`)}
+                        onClick={() => openWorkspace(workspace, '/settings?tab=workspace')}
                         className="cursor-pointer"
                       >
                         <Settings className="mr-2 h-4 w-4" />
@@ -109,10 +120,10 @@ export default function WorkspacesPage() {
                           <DropdownMenuSeparator />
                           <DropdownMenuItem
                             onClick={() => {
-                              setWorkspaceToDelete(workspace.id);
+                              setWorkspaceToDelete(workspace);
                               setDeleteDialogOpen(true);
                             }}
-                            className="cursor-pointer text-destructive focus:text-destructive"
+                            className="cursor-pointer text-destructive-text focus:text-destructive-text"
                           >
                             <Trash2 className="mr-2 h-4 w-4" />
                             Delete
@@ -127,11 +138,10 @@ export default function WorkspacesPage() {
                 <div className="flex items-center gap-4 text-sm text-muted-foreground">
                   <div className="flex items-center gap-1">
                     <Users className="h-4 w-4" />
-                    <span>Team workspace</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <FolderKanban className="h-4 w-4" />
-                    <span>0 projects</span>
+                    <span>
+                      {workspace.memberIds.length}{' '}
+                      {workspace.memberIds.length === 1 ? 'member' : 'members'}
+                    </span>
                   </div>
                 </div>
 
@@ -143,13 +153,13 @@ export default function WorkspacesPage() {
                 </div>
 
                 <div className="flex items-center gap-2 pt-2">
-                  <InviteMemberDialog workspaceId={workspace.id} />
+                  <WorkspaceInviteAction workspace={workspace} />
                   <Button
                     variant="outline"
-                    onClick={() => router.push(`/workspaces/${workspace.id}`)}
+                    onClick={() => openWorkspace(workspace, '/dashboard')}
                     className="flex-1"
                   >
-                    View Details
+                    Open Workspace
                   </Button>
                 </div>
               </CardContent>
@@ -170,26 +180,16 @@ export default function WorkspacesPage() {
         </Card>
       )}
 
-      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will permanently delete this workspace and all associated projects, tasks, and
-              data. This action cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={handleDelete}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              {deleteWorkspace.isPending ? 'Deleting...' : 'Delete Workspace'}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {/* One always-mounted instance is fine: the dialog now clears its own
+          type-to-confirm state on close and on every change of target. */}
+      <DeleteWorkspaceDialog
+        open={deleteDialogOpen}
+        onOpenChange={(open) => {
+          setDeleteDialogOpen(open);
+          if (!open) setWorkspaceToDelete(null);
+        }}
+        workspace={workspaceToDelete ?? undefined}
+      />
     </div>
   );
 }

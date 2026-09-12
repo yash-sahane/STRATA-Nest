@@ -127,16 +127,23 @@ function ChangePasswordContent() {
       await authClient.updatePassword(formData.newPassword, formData.currentPassword);
       await refreshUser();
 
-      await fetch('/api/send-notification-email', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: user.name,
-          email: user.email,
-          notificationTitle: 'Password changed',
-          notificationMessage: 'Your password was changed successfully.',
-        }),
-      });
+      // Best-effort courtesy e-mail: the password has ALREADY been changed, so
+      // a network failure here must never reach the catch below and tell the
+      // user the change failed.
+      try {
+        await fetch('/api/send-notification-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: user.name,
+            email: user.email,
+            notificationTitle: 'Password changed',
+            notificationMessage: 'Your password was changed successfully.',
+          }),
+        });
+      } catch (error) {
+        logger.error('Password change notification e-mail failed', { error });
+      }
 
       toast.success('Password changed successfully', {
         description: 'You can now access your account',
@@ -192,7 +199,7 @@ function ChangePasswordContent() {
         <CardContent>
           {(isForced || hasTempPassword) && (
             <Alert className="mb-6 border-orange-500/50 bg-orange-50 dark:bg-orange-950/20">
-              <Lock className="h-4 w-4 text-orange-600" />
+              <Lock className="h-4 w-4 text-warning-text" />
               <AlertDescription className="text-orange-900 dark:text-orange-100">
                 <strong>Security Required:</strong> You&apos;re using a temporary password. Please create
                 a new secure password to protect your account.
@@ -295,10 +302,10 @@ function ChangePasswordContent() {
                 </button>
               </div>
               {formData.confirmPassword && formData.newPassword !== formData.confirmPassword && (
-                <p className="text-xs text-destructive">Passwords do not match</p>
+                <p className="text-xs text-destructive-text">Passwords do not match</p>
               )}
               {formData.confirmPassword && formData.newPassword === formData.confirmPassword && (
-                <p className="text-xs text-green-600 flex items-center gap-1">
+                <p className="text-xs text-success-text flex items-center gap-1">
                   <CheckCircle2 className="h-3 w-3" />
                   Passwords match
                 </p>

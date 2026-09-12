@@ -6,6 +6,7 @@ import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useProjects } from '@/hooks/use-project';
 import { useWorkspaceTasks } from '@/hooks/use-task';
+import { useTeamMembers } from '@/hooks/use-team';
 import { AttendanceWidget } from '@/components/attendance/attendance-widget';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -13,6 +14,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { PageLoader } from '@/components/ui/page-loader';
+import { ErrorState } from '@/components/ui/error-state';
 import { PageHeader } from '@/components/layout/page-header';
 import {
   CheckCircle2,
@@ -24,17 +26,115 @@ import {
   Target,
   ArrowRight,
 } from 'lucide-react';
-import { formatDate } from '@/lib/utils';
+import { formatDate, parseWireDate } from '@/lib/utils';
 import type { Task } from '@/types';
+
+const DAY_MS = 1000 * 60 * 60 * 24;
+
+/** Local midnight of the day `date` falls on. */
+function startOfLocalDay(date: Date): Date {
+  const start = new Date(date);
+  start.setHours(0, 0, 0, 0);
+  return start;
+}
+
+/**
+ * Local midnight, recomputed when the clock rolls into a new day.
+ *
+ * Every deadline label is relative to "today", but nothing on this page ever
+ * re-derived what today is: the value was captured when the task list last
+ * changed, so a dashboard left open overnight — the normal state of a
+ * dashboard — kept yesterday's "Due today" until something happened to
+ * refetch. Scheduling to the next local midnight rather than ticking every 24h
+ * also keeps it correct across a DST boundary, where a day is 23 or 25 hours.
+ */
+function useTodayStart(): Date {
+  const [todayStart, setTodayStart] = React.useState(() => startOfLocalDay(new Date()));
+
+  React.useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+
+    const scheduleRollover = () => {
+      const nextMidnight = startOfLocalDay(new Date());
+      nextMidnight.setDate(nextMidnight.getDate() + 1);
+      // A second of slack: firing a hair early would land back on the same day
+      // and reschedule with a ~0ms delay.
+      timer = setTimeout(
+        () => {
+          setTodayStart(startOfLocalDay(new Date()));
+          scheduleRollover();
+        },
+        nextMidnight.getTime() - Date.now() + 1000
+      );
+    };
+
+    scheduleRollover();
+    return () => clearTimeout(timer);
+  }, []);
+
+  return todayStart;
+}
+
+/**
+ * Whole calendar days from `todayStart` to a due date, negative once it has
+ * passed. The previous `Math.ceil((due - Date.now()) / day)` measured from the
+ * current clock time, so every overdue task landed on 0 and rendered as
+ * "Today", and a task due tomorrow rendered as "1 days". parseWireDate, not
+ * `new Date`, so a date-only value is read as the calendar day the row below
+ * prints and not as UTC midnight (a day earlier for every viewer west of UTC).
+ */
+function daysUntilDue(dueDate: string, todayStart: Date): number {
+  const due = startOfLocalDay(parseWireDate(dueDate));
+  return Math.round((due.getTime() - todayStart.getTime()) / DAY_MS);
+}
+
+/** Label and tone for a deadline that may already have passed. */
+function deadlineBadge(daysUntil: number): {
+  label: string;
+  variant: 'default' | 'secondary' | 'destructive';
+} {
+  if (daysUntil < 0) {
+    const overdueBy = Math.abs(daysUntil);
+    return {
+      label: overdueBy === 1 ? '1 day overdue' : `${overdueBy} days overdue`,
+      variant: 'destructive',
+    };
+  }
+  if (daysUntil === 0) return { label: 'Due today', variant: 'destructive' };
+  if (daysUntil === 1) return { label: 'Tomorrow', variant: 'destructive' };
+  if (daysUntil <= 2) return { label: `${daysUntil} days`, variant: 'destructive' };
+  if (daysUntil <= 7) return { label: `${daysUntil} days`, variant: 'default' };
+  return { label: `${daysUntil} days`, variant: 'secondary' };
+}
 
 export default function DashboardPage() {
   const { user } = useAuth();
   const router = useRouter();
   const { currentWorkspace, isLoading: workspacesLoading } = useCurrentWorkspace();
-  const { data: projects = [], isLoading: projectsLoading } = useProjects(currentWorkspace?.id);
+  const todayStart = useTodayStart();
+  const {
+    data: projects = [],
+    isLoading: projectsLoading,
+    isError: projectsError,
+    refetch: refetchProjects,
+  } = useProjects(currentWorkspace?.id);
 
   // Get all tasks in the workspace (single query, no hook violations)
-  const { data: allTasks = [], isLoading: tasksLoading } = useWorkspaceTasks(currentWorkspace?.id);
+  const {
+    data: allTasks = [],
+    isLoading: tasksLoading,
+    isError: tasksError,
+    refetch: refetchTasks,
+  } = useWorkspaceTasks(currentWorkspace?.id);
+
+  // The workspace roster, not the union of project.memberIds: memberIds is a
+  // per-project list nothing keeps in sync with membership (the create form
+  // seeds it with the owner alone, an import leaves it empty), so this KPI read
+  // 1 — or 0 — for a four-person workspace and contradicted the identically
+  // named card on /analytics, which counts this same roster.
+  const { data: teamMembers = [], isLoading: membersLoading } = useTeamMembers(
+    currentWorkspace?.id
+  );
 
   // Calculate real stats
   const stats = React.useMemo(() => {
@@ -44,18 +144,14 @@ export default function DashboardPage() {
     const completedTasks = allTasks.filter((t) => t.status === 'DONE').length;
     const myTasks = allTasks.filter((t) => t.assigneeIds?.includes(user?.id || '')).length;
 
-    // Count unique team members across all projects
-    const allMembers = new Set<string>();
-    projects.forEach((p) => p.memberIds?.forEach((id) => allMembers.add(id)));
-
     return {
       activeProjects,
       completedTasks,
       totalTasks: allTasks.length,
       myTasks,
-      teamMembers: allMembers.size,
+      teamMembers: teamMembers.length,
     };
-  }, [projects, allTasks, user]);
+  }, [projects, allTasks, teamMembers, user]);
 
   // Get my tasks
   const myTasks = React.useMemo(() => {
@@ -64,30 +160,38 @@ export default function DashboardPage() {
       .filter((t) => t.status !== 'DONE')
       .sort((a, b) => {
         if (a.dueDate && b.dueDate) {
-          return new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime();
+          // parseWireDate, matching the `formatDate` each row prints.
+          return parseWireDate(a.dueDate).getTime() - parseWireDate(b.dueDate).getTime();
         }
         return 0;
       })
       .slice(0, 5);
   }, [allTasks, user]);
 
-  // Get upcoming deadlines
-  const upcomingDeadlines = React.useMemo(() => {
+  // The five nearest deadlines, soonest first. Overdue ones stay in the list —
+  // they are the ones that need acting on — but are labelled as overdue below,
+  // which is why this is no longer called "upcoming".
+  //
+  // Deliberately day-independent: the row's days-until figure is derived at
+  // render from `todayStart` instead of being baked in here, so a rollover past
+  // midnight relabels the list without waiting on a task refetch.
+  const deadlines = React.useMemo(() => {
     const tasksWithDueDates = allTasks
       .filter((t) => t.dueDate && t.status !== 'DONE')
-      .sort((a, b) => new Date(a.dueDate!).getTime() - new Date(b.dueDate!).getTime())
+      // parseWireDate on both sides, like the badge and the printed date:
+      // `new Date` reads a date-only value as UTC midnight, so sorting by it
+      // could order two same-week rows differently from the day counts they
+      // are sorted to match.
+      .sort((a, b) => parseWireDate(a.dueDate!).getTime() - parseWireDate(b.dueDate!).getTime())
       .slice(0, 5);
 
     return tasksWithDueDates.map((task) => {
       const project = projects.find((p) => p.id === task.projectId);
-      const daysUntil = Math.ceil(
-        (new Date(task.dueDate!).getTime() - Date.now()) / (1000 * 60 * 60 * 24)
-      );
 
       return {
+        id: task.id,
         title: task.title,
         projectName: project?.name || 'Unknown',
-        daysUntil,
         dueDate: task.dueDate!,
       };
     });
@@ -104,11 +208,34 @@ export default function DashboardPage() {
       REVIEW: { label: 'Review', variant: 'default' },
       DONE: { label: 'Done', variant: 'default' },
     };
-    return config[status];
+    // The API is the source of truth for statuses; a value this build doesn't
+    // know about must render as itself, not crash the whole dashboard on
+    // `undefined.variant`.
+    return config[status] ?? { label: String(status), variant: 'outline' as const };
   };
 
-  if (workspacesLoading || projectsLoading || tasksLoading) {
+  if (workspacesLoading || projectsLoading || tasksLoading || membersLoading) {
     return <PageLoader message="Loading your dashboard..." />;
+  }
+
+  // Without this the loader above never resolves on a failed request and the
+  // dashboard sits on "Loading your dashboard..." forever.
+  if (projectsError || tasksError) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader
+          icon={FolderKanban}
+          title="Dashboard"
+          description="We couldn't load your dashboard."
+        />
+        <ErrorState
+          onRetry={() => {
+            if (projectsError) refetchProjects();
+            if (tasksError) refetchTasks();
+          }}
+        />
+      </div>
+    );
   }
 
   // Show empty state if no workspace
@@ -173,7 +300,7 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{stats.teamMembers}</div>
-            <p className="text-xs text-muted-foreground">Across all projects</p>
+            <p className="text-xs text-muted-foreground">In this workspace</p>
           </CardContent>
         </Card>
       </div>
@@ -194,35 +321,34 @@ export default function DashboardPage() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Calendar className="h-5 w-5" />
-                  Upcoming Deadlines
+                  Deadlines
                 </CardTitle>
+                <CardDescription>Overdue and upcoming, soonest first</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
-                {upcomingDeadlines.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No upcoming deadlines</p>
+                {deadlines.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No deadlines</p>
                 ) : (
-                  upcomingDeadlines.map((deadline, i) => (
-                    <div
-                      key={i}
-                      className="flex items-center justify-between rounded-lg border p-3 transition-colors hover:bg-accent"
-                    >
-                      <div>
-                        <p className="font-medium">{deadline.title}</p>
-                        <p className="text-sm text-muted-foreground">{deadline.projectName}</p>
-                      </div>
-                      <Badge
-                        variant={
-                          deadline.daysUntil <= 2
-                            ? 'destructive'
-                            : deadline.daysUntil <= 7
-                              ? 'default'
-                              : 'secondary'
-                        }
+                  deadlines.map((deadline) => {
+                    const badge = deadlineBadge(daysUntilDue(deadline.dueDate, todayStart));
+
+                    return (
+                      <div
+                        key={deadline.id}
+                        className="flex items-center justify-between gap-3 rounded-lg border p-3 transition-colors hover:bg-accent"
                       >
-                        {deadline.daysUntil <= 0 ? 'Today' : `${deadline.daysUntil} days`}
-                      </Badge>
-                    </div>
-                  ))
+                        <div className="min-w-0">
+                          <p className="truncate font-medium">{deadline.title}</p>
+                          <p className="text-sm text-muted-foreground">
+                            {deadline.projectName} &middot; {formatDate(deadline.dueDate)}
+                          </p>
+                        </div>
+                        <Badge className="shrink-0" variant={badge.variant}>
+                          {badge.label}
+                        </Badge>
+                      </div>
+                    );
+                  })
                 )}
               </CardContent>
             </Card>
@@ -294,7 +420,7 @@ export default function DashboardPage() {
                     <div
                       key={task.id}
                       className="flex items-center justify-between rounded-lg border p-4 transition-colors hover:bg-accent cursor-pointer"
-                      onClick={() => router.push(`/tasks?project=${task.projectId}`)}
+                      onClick={() => router.push(`/tasks?projectId=${task.projectId}`)}
                     >
                       <div className="flex items-center gap-3">
                         <Checkbox />

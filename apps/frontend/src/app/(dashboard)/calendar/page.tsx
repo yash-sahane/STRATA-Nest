@@ -1,6 +1,8 @@
 'use client';
 
 import { PageHeader } from '@/components/layout/page-header';
+import { cn } from '@/lib/utils';
+import { toneStyle } from '@/lib/semantic/tone';
 
 import * as React from 'react';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
@@ -11,6 +13,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { PageLoader } from '@/components/ui/page-loader';
+import { ErrorState } from '@/components/ui/error-state';
 import {
   Select,
   SelectContent,
@@ -42,9 +45,12 @@ import {
 export default function CalendarPage() {
   const { currentWorkspace, isLoading: workspacesLoading } = useCurrentWorkspace();
 
-  const { data: projects = [] } = useProjects(currentWorkspace?.id);
-  const { data: allTasks = [] } = useWorkspaceTasks(currentWorkspace?.id);
-  const { data: sprints = [] } = useWorkspaceSprints(currentWorkspace?.id);
+  const { data: projects = [], isError: projectsError, refetch: refetchProjects } =
+    useProjects(currentWorkspace?.id);
+  const { data: allTasks = [], isError: tasksError, refetch: refetchTasks } =
+    useWorkspaceTasks(currentWorkspace?.id);
+  const { data: sprints = [], isError: sprintsError, refetch: refetchSprints } =
+    useWorkspaceSprints(currentWorkspace?.id);
 
   const [selectedMonth, setSelectedMonth] = React.useState(new Date());
   const [selectedProject, setSelectedProject] = React.useState<string>('ALL');
@@ -124,6 +130,27 @@ export default function CalendarPage() {
     return <PageLoader message="Loading calendar..." />;
   }
 
+  // These three queries feed every cell on the calendar. Without this branch a
+  // failed request rendered an empty month that looked like a free schedule.
+  if (projectsError || tasksError || sprintsError) {
+    return (
+      <div className="space-y-6">
+        <PageHeader
+          icon={CalendarIcon}
+          title="Calendar & Schedule"
+          description="We couldn't load your schedule."
+        />
+        <ErrorState
+          onRetry={() => {
+            if (projectsError) refetchProjects();
+            if (tasksError) refetchTasks();
+            if (sprintsError) refetchSprints();
+          }}
+        />
+      </div>
+    );
+  }
+
   if (!currentWorkspace) {
     return (
       <div className="flex items-center justify-center h-[calc(100vh-4rem)]">
@@ -137,7 +164,9 @@ export default function CalendarPage() {
   }
 
   return (
-    <div className="container mx-auto py-6 space-y-6">
+    // No `container`/`py-6` here: the dashboard layout already wraps every route
+    // in <PageContainer>, which owns the width and gutter (page-container.tsx).
+    <div className="space-y-6">
       {/* Header */}
       <PageHeader
         icon={CalendarIcon}
@@ -194,7 +223,7 @@ export default function CalendarPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-red-600">{stats.overdueTasks}</div>
+            <div className="text-2xl font-bold text-destructive-text">{stats.overdueTasks}</div>
             <p className="text-xs text-muted-foreground mt-1">Need attention</p>
           </CardContent>
         </Card>
@@ -211,9 +240,10 @@ export default function CalendarPage() {
                   <Button
                     variant="outline"
                     size="sm"
+                    aria-label="Previous month"
                     onClick={() => setSelectedMonth(subMonths(selectedMonth, 1))}
                   >
-                    <ChevronLeft className="h-4 w-4" />
+                    <ChevronLeft className="h-4 w-4" aria-hidden="true" />
                   </Button>
                   <Button variant="outline" size="sm" onClick={() => setSelectedMonth(new Date())}>
                     Today
@@ -221,9 +251,10 @@ export default function CalendarPage() {
                   <Button
                     variant="outline"
                     size="sm"
+                    aria-label="Next month"
                     onClick={() => setSelectedMonth(addMonths(selectedMonth, 1))}
                   >
-                    <ChevronRight className="h-4 w-4" />
+                    <ChevronRight className="h-4 w-4" aria-hidden="true" />
                   </Button>
                 </div>
               </div>
@@ -357,7 +388,15 @@ export default function CalendarPage() {
                         return (
                           <div
                             key={task.id}
-                            className={`p-3 rounded-lg border ${isOverdue ? 'bg-red-50 dark:bg-red-950' : 'bg-green-50 dark:bg-green-950'}`}
+                            /* Tone comes from the semantic module, not a raw
+                               palette pair: `bg-red-50 dark:bg-red-950` does not
+                               track the token theme the rest of the app uses. */
+                            className={cn(
+                              'p-3 rounded-lg border-l-4 border bg-muted/40',
+                              isOverdue
+                                ? toneStyle.destructive.borderLeft
+                                : toneStyle.success.borderLeft
+                            )}
                           >
                             <div className="font-medium">{task.title}</div>
                             <div className="text-sm text-muted-foreground mt-1">

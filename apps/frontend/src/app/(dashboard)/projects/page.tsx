@@ -9,6 +9,7 @@ import {
   useCloneProject,
 } from '@/hooks/use-project';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
+import { useProjectsRealtime } from '@/hooks/use-realtime';
 import { useWorkspaceTasks } from '@/hooks/use-task';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -43,6 +44,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { PageLoader } from '@/components/ui/page-loader';
+import { useCreateActionParam } from '@/hooks/use-create-action-param';
 import { CreateProjectDialog } from '@/components/projects/create-project-dialog';
 import { EditProjectDialog } from '@/components/projects/edit-project-dialog';
 import { CloneProjectDialog } from '@/components/projects/clone-project-dialog';
@@ -63,7 +65,8 @@ import {
   Search,
   FolderPlus,
 } from 'lucide-react';
-import { formatDate } from '@/lib/utils';
+import { formatProjectDate } from '@/components/projects/project-dates';
+import { format } from 'date-fns';
 import { useRouter } from 'next/navigation';
 import type { ProjectStatus, Project } from '@/types';
 import { useHasPermission, useIsAdmin } from '@/hooks/use-permissions';
@@ -73,6 +76,10 @@ export default function ProjectsPage() {
   const { user } = useAuth();
   const router = useRouter();
   const { currentWorkspace, isLoading: workspacesLoading } = useCurrentWorkspace();
+  // Live updates: the gateway already broadcasts every write on this
+  // collection, this page just never subscribed — so another member's
+  // change only appeared after a manual navigation.
+  useProjectsRealtime(currentWorkspace?.id);
   const {
     data: projects,
     isLoading: projectsLoading,
@@ -91,16 +98,16 @@ export default function ProjectsPage() {
   const canCreateProject = useHasPermission(Permission.CREATE_PROJECT);
   const isAdmin = useIsAdmin();
 
+  const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
+  // The command palette's "Create New Project" navigates here with ?action=create.
+  useCreateActionParam(() => setCreateDialogOpen(true));
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
   const [editDialogOpen, setEditDialogOpen] = React.useState(false);
   const [cloneDialogOpen, setCloneDialogOpen] = React.useState(false);
   const [selectedProject, setSelectedProject] = React.useState<Project | null>(null);
   const [searchQuery, setSearchQuery] = React.useState('');
   const [statusFilter, setStatusFilter] = React.useState<ProjectStatus | 'ALL'>('ALL');
-  const [projectToDelete, setProjectToDelete] = React.useState<{
-    projectId: string;
-    workspaceId: string;
-  } | null>(null);
+  const [projectToDelete, setProjectToDelete] = React.useState<Project | null>(null);
 
   // Filter out archived projects completely
   const filteredProjects = React.useMemo(() => {
@@ -128,15 +135,24 @@ export default function ProjectsPage() {
   const handleEdit = async (values: any) => {
     if (!selectedProject || !currentWorkspace) return;
 
-    await updateProject.mutateAsync({
-      projectId: selectedProject.id,
-      workspaceId: currentWorkspace.id,
-      name: values.name,
-      description: values.description,
-      status: values.status,
-      startDate: values.startDate?.toISOString(),
-      endDate: values.endDate?.toISOString(),
-    });
+    try {
+      await updateProject.mutateAsync({
+        projectId: selectedProject.id,
+        workspaceId: currentWorkspace.id,
+        name: values.name,
+        description: values.description,
+        clientName: values.clientName,
+        status: values.status,
+        // Date-only fields — see create-project-dialog: an ISO instant lands on
+        // the previous day for any UTC+ timezone. `null` (not `undefined`) for a
+        // cleared field: JSON.stringify drops undefined, so the PATCH carried no
+        // field and the date the user had just removed came straight back.
+        startDate: values.startDate ? format(values.startDate, 'yyyy-MM-dd') : null,
+        endDate: values.endDate ? format(values.endDate, 'yyyy-MM-dd') : null,
+      });
+    } catch {
+      return; // error toast handled inside the mutation
+    }
 
     setEditDialogOpen(false);
     setSelectedProject(null);
@@ -145,7 +161,15 @@ export default function ProjectsPage() {
   const handleDelete = async () => {
     if (!projectToDelete) return;
 
-    await deleteProject.mutateAsync(projectToDelete);
+    try {
+      await deleteProject.mutateAsync({
+        projectId: projectToDelete.id,
+        workspaceId: projectToDelete.workspaceId,
+      });
+    } catch {
+      return; // error toast handled inside the mutation; keep the dialog open
+    }
+
     setDeleteDialogOpen(false);
     setProjectToDelete(null);
   };
@@ -153,15 +177,19 @@ export default function ProjectsPage() {
   const handleClone = async (cloneData: CloneProjectData) => {
     if (!selectedProject || !user) return;
 
-    await cloneProject.mutateAsync({
-      sourceProjectId: selectedProject.id,
-      newName: cloneData.name,
-      includeSettings: cloneData.includeSettings,
-      includeTasks: cloneData.includeTasks,
-      includeMembers: cloneData.includeMembers,
-      includeSprints: cloneData.includeSprints,
-      userId: user.id,
-    });
+    try {
+      await cloneProject.mutateAsync({
+        sourceProjectId: selectedProject.id,
+        newName: cloneData.name,
+        includeSettings: cloneData.includeSettings,
+        includeTasks: cloneData.includeTasks,
+        includeMembers: cloneData.includeMembers,
+        includeSprints: cloneData.includeSprints,
+        userId: user.id,
+      });
+    } catch {
+      return; // error toast handled inside the mutation
+    }
 
     setCloneDialogOpen(false);
     setSelectedProject(null);
@@ -173,7 +201,7 @@ export default function ProjectsPage() {
 
   if (projectsError) {
     return (
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
+      <div className="flex flex-col gap-6">
         <PageHeader
           icon={FolderKanban}
           title="Projects"
@@ -186,7 +214,7 @@ export default function ProjectsPage() {
 
   if (!currentWorkspace) {
     return (
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
+      <div className="flex flex-col gap-6">
         <PageHeader
           icon={FolderKanban}
           title="Projects"
@@ -203,12 +231,20 @@ export default function ProjectsPage() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
+    <div className="flex flex-col gap-6">
       <PageHeader
         icon={FolderKanban}
         title="Projects"
         description={`Manage project delivery in ${currentWorkspace.name}`}
-        actions={canCreateProject && <CreateProjectDialog workspaceId={currentWorkspace.id} />}
+        actions={
+          canCreateProject && (
+            <CreateProjectDialog
+              workspaceId={currentWorkspace.id}
+              open={createDialogOpen}
+              onOpenChange={setCreateDialogOpen}
+            />
+          )
+        }
       />
 
       {filteredProjects.length > 0 && (
@@ -226,16 +262,19 @@ export default function ProjectsPage() {
             value={statusFilter}
             onValueChange={(value) => setStatusFilter(value as ProjectStatus | 'ALL')}
           >
-            <SelectTrigger>
+            <SelectTrigger aria-label="Filter projects by status">
               <SelectValue placeholder="Status" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="ALL">All Status</SelectItem>
-              {PROJECT_STATUSES.filter((status) => status !== 'ARCHIVED').map((status) => (
-                  <SelectItem key={status} value={status}>
-                    {getProjectStatusConfig(status).label}
-                  </SelectItem>
-                ))}
+              {/* ARCHIVED is a real, settable status (edit dialog + settings),
+                  so it has to be filterable — hiding it made those projects
+                  unreachable while still listing them. */}
+              {PROJECT_STATUSES.map((status) => (
+                <SelectItem key={status} value={status}>
+                  {getProjectStatusConfig(status).label}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
           {hasActiveProjectFilters && (
@@ -327,13 +366,10 @@ export default function ProjectsPage() {
                         {canDeleteProject && (
                           <DropdownMenuItem
                             onClick={() => {
-                              setProjectToDelete({
-                                projectId: project.id,
-                                workspaceId: project.workspaceId,
-                              });
+                              setProjectToDelete(project);
                               setDeleteDialogOpen(true);
                             }}
-                            className="cursor-pointer text-destructive focus:text-destructive"
+                            className="cursor-pointer text-destructive-text focus:text-destructive-text"
                           >
                             <Trash2 className="mr-2 h-4 w-4" />
                             Delete
@@ -365,7 +401,7 @@ export default function ProjectsPage() {
                     </div>
                     <div className="flex items-center gap-1">
                       <Calendar className="h-4 w-4" />
-                      <span>{project.startDate ? formatDate(project.startDate) : 'Not set'}</span>
+                      <span>{formatProjectDate(project.startDate) ?? 'Not set'}</span>
                     </div>
                   </div>
 
@@ -403,20 +439,32 @@ export default function ProjectsPage() {
         />
       )}
 
-      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+      <AlertDialog
+        open={deleteDialogOpen}
+        onOpenChange={(open) => {
+          setDeleteDialogOpen(open);
+          if (!open) setProjectToDelete(null);
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+            <AlertDialogTitle>Delete this project?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete this project and all associated tasks, sprints, and
-              requirements. This action cannot be undone.
+              This will permanently delete <strong>{projectToDelete?.name}</strong> and all
+              associated tasks, sprints, and requirements. This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={deleteProject.isPending}>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={handleDelete}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              variant="destructive"
+              // preventDefault: Radix closes the dialog on click otherwise, so
+              // the pending label never renders and a failed delete looks done.
+              onClick={(event) => {
+                event.preventDefault();
+                handleDelete();
+              }}
+              disabled={deleteProject.isPending}
             >
               {deleteProject.isPending ? 'Deleting...' : 'Delete Project'}
             </AlertDialogAction>

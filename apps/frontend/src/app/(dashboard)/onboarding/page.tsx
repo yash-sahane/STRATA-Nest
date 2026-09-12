@@ -26,17 +26,10 @@ export default function OnboardingPage() {
     description: '',
   });
 
-  // Redirect non-admins
-  React.useEffect(() => {
-    if (user && !isAdmin) {
-      toast({
-        title: 'Access Denied',
-        description: 'Only administrators can create workspaces',
-        variant: 'destructive',
-      });
-      router.push('/dashboard');
-    }
-  }, [isAdmin, router, toast, user]);
+  // No redirect effect for non-admins: WorkspaceGuard only sends admins here, so
+  // the only way a non-admin lands on this route is by typing it, and bouncing
+  // them silently hid the Access Denied card below — which explains WHY they
+  // cannot proceed and offers the way back.
 
   const handleCreateWorkspace = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -61,25 +54,20 @@ export default function OnboardingPage() {
 
     try {
       await createWorkspace.mutateAsync({
-        name: createForm.name,
-        description: createForm.description,
+        // Trimmed, matching the guard above. Submitting the raw value stored
+        // "  Acme  " for a name the check had already normalised, and the API's
+        // @IsNotEmpty accepts leading/trailing space.
+        name: createForm.name.trim(),
+        description: createForm.description.trim(),
         ownerId: user?.id || '',
       });
 
-      toast({
-        title: 'Success',
-        description: 'Workspace created successfully!',
-      });
-
-      // Wait for cache to update then navigate
+      // Success/error toasts belong to the mutation — toasting again here
+      // stacked two of each. A full document navigation (not router.push) so
+      // every provider re-reads the freshly selected workspace on mount.
       window.location.href = '/dashboard';
-    } catch (error: any) {
-      toast({
-        title: 'Error',
-        description:
-          (error instanceof Error ? error.message : String(error)) || 'Failed to create workspace',
-        variant: 'destructive',
-      });
+    } catch {
+      // error toast handled inside the mutation
     }
   };
 
@@ -95,7 +83,7 @@ export default function OnboardingPage() {
           <CardContent className="pt-6">
             <div className="text-center space-y-4">
               <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-destructive/10">
-                <AlertTriangle className="h-8 w-8 text-destructive" />
+                <AlertTriangle className="h-8 w-8 text-destructive-text" />
               </div>
               <h2 className="text-2xl font-bold">Access Denied</h2>
               <p className="text-muted-foreground">
