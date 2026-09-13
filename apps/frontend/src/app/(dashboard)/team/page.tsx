@@ -131,6 +131,56 @@ export default function TeamPage() {
   );
 
   const [searchQuery, setSearchQuery] = React.useState('');
+  /**
+   * Filter options: what is CONFIGURED, plus whatever is actually on the roster.
+   *
+   * Built from ROLE_CONFIG/STATUS_CONFIG alone, a member holding a custom workspace
+   * role showed up in the table — the row renderer falls back to ROLE_CONFIG.MEMBER
+   * for an unknown key — while their role had no entry in the picker. So the only
+   * value a user could see was the one they could not filter by.
+   *
+   * An unconfigured value keeps its raw name: inventing a friendly label for a role
+   * this page knows nothing about would be its own kind of guess.
+   */
+  /**
+   * Is this the name of a role this page already has a label and colour for?
+   *
+   * Memberships store built-ins as the uppercase key (MANAGER) while ROLE_CONFIG is
+   * keyed the same way and carries the friendly label, so both spellings count. A
+   * name that is neither is a custom workspace role and is shown as stored.
+   */
+  const isKnownRoleName = React.useCallback((raw?: string): boolean => {
+    if (!raw) return false;
+    const keys: string[] = Object.keys(ROLE_CONFIG);
+    const labels: string[] = Object.values(ROLE_CONFIG).map((c) => c.label);
+    return keys.includes(raw) || labels.includes(raw);
+  }, []);
+
+  const roleOptions = React.useMemo(() => {
+    // Every role present on the roster, plus the built-ins. Keyed on rawRole — the
+    // value actually stored — because the normalised `role` collapses every custom
+    // workspace role to MEMBER, so a "Release Captain" could neither be seen for what
+    // they are nor filtered for. Built-ins are listed under their friendly label and
+    // matched by it, so the list does not carry both "Manager" and "MANAGER".
+    const present = (teamMembers.map((m) => m.rawRole).filter(Boolean) as string[]).filter(
+      (r) => !isKnownRoleName(r),
+    );
+    const configured = (Object.keys(ROLE_CONFIG) as Array<keyof typeof ROLE_CONFIG>).map((key) => ({
+      value: key,
+      label: ROLE_CONFIG[key].label,
+    }));
+    return [...configured, ...[...new Set(present)].map((r) => ({ value: r, label: r }))];
+  }, [teamMembers]);
+
+  const statusOptions = React.useMemo(() => {
+    const configured = Object.keys(STATUS_CONFIG);
+    const present = teamMembers.map((m) => m.status).filter(Boolean) as string[];
+    return [...new Set([...configured, ...present])].map((status) => ({
+      value: status,
+      label: STATUS_CONFIG[status as keyof typeof STATUS_CONFIG]?.label ?? status,
+    }));
+  }, [teamMembers]);
+
   const [selectedRole, setSelectedRole] = React.useState<string>('ALL');
   const [selectedStatus, setSelectedStatus] = React.useState<string>('ALL');
   const [editingMember, setEditingMember] = React.useState<TeamMember | null>(null);
@@ -146,7 +196,11 @@ export default function TeamPage() {
       const matchesSearch =
         name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         email.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesRole = selectedRole === 'ALL' || member.role === selectedRole;
+      // A built-in option carries the ROLE_CONFIG key, so it matches the normalised
+      // role; a custom one carries the stored name, so it matches rawRole. Comparing
+      // only the normalised role made every custom role look like MEMBER.
+      const matchesRole =
+        selectedRole === 'ALL' || member.role === selectedRole || member.rawRole === selectedRole;
       const matchesStatus = selectedStatus === 'ALL' || member.status === selectedStatus;
 
       return matchesSearch && matchesRole && matchesStatus;
@@ -424,9 +478,9 @@ export default function TeamPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="ALL">All Roles</SelectItem>
-                    {Object.entries(ROLE_CONFIG).map(([role, config]) => (
-                      <SelectItem key={role} value={role}>
-                        {config.label}
+                    {roleOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -437,9 +491,9 @@ export default function TeamPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="ALL">All Status</SelectItem>
-                    {Object.entries(STATUS_CONFIG).map(([status, config]) => (
-                      <SelectItem key={status} value={status}>
-                        {config.label}
+                    {statusOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -478,7 +532,19 @@ export default function TeamPage() {
                         // Same rule as removal: the API refuses to demote or
                         // deactivate the owner or the caller, so don't offer it.
                         const canEditThisMember = canEditMembers && !isOwner && !isCurrentUser;
+                        // The colour comes from the normalised role; the LABEL is
+                        // what is actually stored. Using the config's label showed a
+                        // custom workspace role as "Member", because normalizeRole
+                        // falls back to MEMBER for anything outside its seven
+                        // built-ins — so the roster reported the wrong role outright.
                         const roleConfig = ROLE_CONFIG[member.role] ?? ROLE_CONFIG.MEMBER;
+                        // A built-in role keeps its friendly label; only a role this
+                        // page does not know about is shown verbatim. Showing rawRole
+                        // unconditionally turned "Manager" into "MANAGER", which is
+                        // the stored key rather than a name for a human.
+                        const roleLabel = isKnownRoleName(member.rawRole)
+                          ? roleConfig.label
+                          : member.rawRole || roleConfig.label;
                         const statusConfig = STATUS_CONFIG[member.status] ?? STATUS_CONFIG.ACTIVE;
                         const memberCounts = taskCounts?.get(member.userId);
                         const activeTasks = memberCounts?.activeTasks || 0;
@@ -524,7 +590,7 @@ export default function TeamPage() {
                             </TableCell>
                             <TableCell>
                               <Badge className={cn('whitespace-nowrap', roleConfig.color)}>
-                                {roleConfig.label}
+                                {roleLabel}
                               </Badge>
                             </TableCell>
                             <TableCell>

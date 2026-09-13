@@ -28,6 +28,7 @@ import {
   ArrowRight,
 } from 'lucide-react';
 import { formatDate, parseWireDate } from '@/lib/utils';
+import { plural } from '@/lib/plural';
 import type { Task } from '@/types';
 
 const DAY_MS = 1000 * 60 * 60 * 24;
@@ -103,9 +104,9 @@ function deadlineBadge(daysUntil: number): {
   }
   if (daysUntil === 0) return { label: 'Due today', variant: 'destructive' };
   if (daysUntil === 1) return { label: 'Tomorrow', variant: 'destructive' };
-  if (daysUntil <= 2) return { label: `${daysUntil} days`, variant: 'destructive' };
-  if (daysUntil <= 7) return { label: `${daysUntil} days`, variant: 'default' };
-  return { label: `${daysUntil} days`, variant: 'secondary' };
+  if (daysUntil <= 2) return { label: plural(daysUntil, 'day'), variant: 'destructive' };
+  if (daysUntil <= 7) return { label: plural(daysUntil, 'day'), variant: 'default' };
+  return { label: plural(daysUntil, 'day'), variant: 'secondary' };
 }
 
 export default function DashboardPage() {

@@ -2,6 +2,7 @@
 
 import { PageHeader } from '@/components/layout/page-header';
 import { cn } from '@/lib/utils';
+import { plural } from '@/lib/plural';
 import { toneStyle } from '@/lib/semantic/tone';
 
 import * as React from 'react';
@@ -327,7 +328,7 @@ export default function CalendarPage() {
               </CardTitle>
               <CardDescription>
                 {selectedDayEvents
-                  ? `${selectedDayEvents.tasks.length} tasks, ${selectedDayEvents.sprints.length} sprints`
+                  ? `${plural(selectedDayEvents.tasks.length, 'task')}, ${plural(selectedDayEvents.sprints.length, 'sprint')}`
                   : 'View events for a selected day'}
               </CardDescription>
             </CardHeader>

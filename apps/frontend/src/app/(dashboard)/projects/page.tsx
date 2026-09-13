@@ -25,6 +25,7 @@ import {
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { PROJECT_STATUSES, getProjectStatusConfig } from '@/lib/semantic/status';
+import { plural } from '@/lib/plural';
 import { PageHeader } from '@/components/layout/page-header';
 import {
   DropdownMenu,
@@ -397,7 +398,7 @@ export default function ProjectsPage() {
                   <div className="grid gap-2 text-sm text-muted-foreground">
                     <div className="flex items-center gap-1">
                       <Users className="h-4 w-4" />
-                      <span>{project.memberIds.length} members</span>
+                      <span>{plural(project.memberIds.length, 'member')}</span>
                     </div>
                     <div className="flex items-center gap-1">
                       <Calendar className="h-4 w-4" />

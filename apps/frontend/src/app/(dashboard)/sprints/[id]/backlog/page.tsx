@@ -21,6 +21,7 @@ import { toast } from '@/hooks/use-toast';
 import { FRAssignmentCard } from '@/components/sprints/fr-assignment-card';
 import { useHasPermission } from '@/hooks/use-permissions';
 import { Permission } from '@/lib/permissions';
+import { plural } from '@/lib/plural';
 import { logger } from '@/lib/logger';
 
 export default function SprintBacklogPage() {
@@ -183,7 +184,7 @@ export default function SprintBacklogPage() {
               {completedSprintTasks} / {totalSprintTasks} tasks ({completionPercentage}%)
             </Badge>
           </CardTitle>
-          <CardDescription>{sprintTasks.length} tasks in sprint</CardDescription>
+          <CardDescription>{plural(sprintTasks.length, 'task')} in sprint</CardDescription>
         </CardHeader>
       </Card>
 

@@ -29,6 +29,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { legendLabel } from '@/lib/chart-legend';
+import { plural } from '@/lib/plural';
 import { PRIORITY_COLORS, STATUS_COLORS } from '@/components/analytics/chart-colors';
 import { ChartEmptyState } from '@/components/analytics/chart-empty-state';
 import { ChartTooltip } from '@/components/analytics/chart-tooltip';
@@ -289,7 +290,7 @@ export default function SprintAnalyticsPage() {
           <div className="grid gap-6 md:grid-cols-3">
             <div>
               <p className="text-sm text-muted-foreground mb-1">Sprint Duration</p>
-              <p className="text-2xl font-bold">{totalDays} days</p>
+              <p className="text-2xl font-bold">{plural(totalDays, 'day')}</p>
               <p className="text-xs text-muted-foreground mt-1">
                 {formatDateFns(parseISO(sprint.startDate), 'MMM d, yyyy')} -{' '}
                 {formatDateFns(parseISO(sprint.endDate), 'MMM d, yyyy')}
@@ -297,7 +298,7 @@ export default function SprintAnalyticsPage() {
             </div>
             <div>
               <p className="text-sm text-muted-foreground mb-1">Days Remaining</p>
-              <p className="text-2xl font-bold">{Math.max(0, daysRemaining)} days</p>
+              <p className="text-2xl font-bold">{plural(Math.max(0, daysRemaining), 'day')}</p>
               <Progress
                 value={totalDays > 0 ? (daysPassed / totalDays) * 100 : 0}
                 className="mt-2"

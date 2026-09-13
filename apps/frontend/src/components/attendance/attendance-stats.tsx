@@ -4,6 +4,7 @@ import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useAttendanceAnalytics } from '@/hooks/use-attendance';
 import { countWorkingDaysInMonth, getWorkingSaturdaysInMonth } from '@/lib/attendance-utils';
+import { plural } from '@/lib/plural';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
@@ -33,7 +34,9 @@ export function AttendanceStats({ year, month }: AttendanceStatsProps) {
 
   const workingDays = countWorkingDaysInMonth(currentYear, currentMonth);
   const workingSaturdays = getWorkingSaturdaysInMonth(currentYear, currentMonth);
-  const days = (count: number) => `${count} ${count === 1 ? 'day' : 'days'}`;
+  // The shared helper, so there is one implementation of this rather than one
+  // per file — which is how a dozen other sites ended up with none.
+  const days = (count: number) => plural(count, 'day');
 
   // Every figure below is a ratio of two workspace-scoped quantities, so the
   // analytics query refuses to run without one. Say that, rather than render a
