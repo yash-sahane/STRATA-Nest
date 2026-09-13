@@ -4,7 +4,13 @@ import { getPriorityConfig } from '@/lib/semantic/priority';
 import { getTaskStatusConfig } from '@/lib/semantic/status';
 
 import * as React from 'react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
@@ -352,20 +358,31 @@ export function TaskDetailsDialog({
           )}
 
           <Separator />
-          <div className="flex gap-4 w-full">
-            {onEdit && (
-              <Button variant="outline" onClick={() => onEdit(task)} className="w-full">
-                <Edit className="h-4 w-4 mr-1" />
-                Edit
-              </Button>
-            )}
-            {onDelete && (
-              <Button variant="destructive" onClick={() => onDelete(task.id)} className="w-full">
-                <Trash2 className="h-4 w-4 mr-1" />
-                Delete
-              </Button>
-            )}
-          </div>
+          {/* A real DialogFooter. This was `flex gap-4 w-full` with two `w-full`
+              buttons, so Edit and Delete each filled half the dialog edge to edge --
+              nothing else in the app has an action row like that -- and Delete, a
+              destructive action, occupied the rightmost slot, which is where every
+              other dialog puts its confirm button. Delete now sits on the left and
+              Edit takes the primary position. The deletion path is unchanged and
+              still goes through the parent's confirmation. */}
+          <DialogFooter className="sm:justify-between sm:space-x-0">
+            <div className="flex gap-2">
+              {onDelete && (
+                <Button variant="destructive" onClick={() => onDelete(task.id)}>
+                  <Trash2 className="h-4 w-4 mr-1" />
+                  Delete
+                </Button>
+              )}
+            </div>
+            <div className="flex gap-2">
+              {onEdit && (
+                <Button variant="outline" onClick={() => onEdit(task)}>
+                  <Edit className="h-4 w-4 mr-1" />
+                  Edit
+                </Button>
+              )}
+            </div>
+          </DialogFooter>
         </div>
       </DialogContent>
     </Dialog>

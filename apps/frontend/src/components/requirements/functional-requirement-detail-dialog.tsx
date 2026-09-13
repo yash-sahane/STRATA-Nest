@@ -9,6 +9,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
@@ -551,8 +552,14 @@ export function FunctionalRequirementDetailDialog({
             </div>
           </div>
 
-          {/* Footer with Save and Actions */}
-          <div className="flex flex-col sm:flex-row gap-2 sm:gap-0">
+          {/* The real DialogFooter, not a hand-rolled row. It carries the mobile
+              stacking order (flex-col-reverse, primary action on top) that every
+              other dialog in the app has; this used to be plain flex-col, so the
+              Save button sat at the BOTTOM of the stack here and at the top
+              everywhere else. `sm:justify-between` keeps the split -- destructive
+              actions left, confirm right -- which is what the AlertDialogFooter
+              below does too. */}
+          <DialogFooter className="sm:justify-between sm:space-x-0">
             <div className="flex gap-2 w-full sm:w-auto">
               {canEdit && (
                 <Button
@@ -595,7 +602,7 @@ export function FunctionalRequirementDetailDialog({
                 </Button>
               )}
             </div>
-          </div>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
