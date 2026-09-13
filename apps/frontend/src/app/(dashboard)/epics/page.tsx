@@ -276,7 +276,7 @@ function EpicsPageContent() {
                     role="button"
                     tabIndex={0}
                     aria-label={`Open epic: ${epic.name}`}
-                    className="cursor-pointer transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                    className="cursor-pointer hover-lift outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
                     onClick={() => setSelectedEpicId(epic.id)}
                     onKeyDown={(event) => {
                       if (event.key === 'Enter' || event.key === ' ') {

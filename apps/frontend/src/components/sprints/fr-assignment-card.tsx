@@ -183,7 +183,7 @@ export function FRAssignmentCard({
   const complexity = getComplexityConfig(fr.complexity);
 
   return (
-    <Card className="transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
+    <Card className="hover-lift">
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between">
           <div className="space-y-1">

@@ -262,7 +262,7 @@ export default function DashboardPage() {
 
       {/* Stats Grid */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <Card className="transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
+        <Card className="hover-lift">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Active Projects</CardTitle>
             <FolderKanban className="h-4 w-4 text-muted-foreground" />
@@ -273,7 +273,7 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
 
-        <Card className="transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
+        <Card className="hover-lift">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Tasks Completed</CardTitle>
             <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
@@ -284,7 +284,7 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
 
-        <Card className="transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
+        <Card className="hover-lift">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">My Tasks</CardTitle>
             <GitBranch className="h-4 w-4 text-muted-foreground" />
@@ -295,7 +295,7 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
 
-        <Card className="transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
+        <Card className="hover-lift">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Team Members</CardTitle>
             <Users className="h-4 w-4 text-muted-foreground" />

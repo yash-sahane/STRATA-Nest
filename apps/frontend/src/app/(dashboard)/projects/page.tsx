@@ -303,7 +303,7 @@ export default function ProjectsPage() {
             return (
               <Card
                 key={project.id}
-                className="group flex h-full flex-col overflow-hidden transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
+                className="group flex h-full flex-col overflow-hidden hover-lift"
               >
                 <CardHeader>
                   <div className="flex items-start justify-between">

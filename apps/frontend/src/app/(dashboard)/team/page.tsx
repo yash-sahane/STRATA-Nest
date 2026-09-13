@@ -412,7 +412,7 @@ export default function TeamPage() {
               return (
                 <Card
                   key={card.title}
-                  className="overflow-hidden transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
+                  className="overflow-hidden hover-lift"
                 >
                   <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                     <CardTitle className="text-sm font-medium text-muted-foreground">

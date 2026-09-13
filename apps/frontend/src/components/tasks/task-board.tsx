@@ -291,7 +291,7 @@ export function TaskBoard({
                             ref={provided.innerRef}
                             {...provided.draggableProps}
                             className={cn(
-                              'relative cursor-pointer transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md border-l-4',
+                              'relative cursor-pointer hover-lift border-l-4',
                               getPriorityConfig(task.priority).borderLeft,
                               snapshot.isDragging && 'shadow-xl ring-2 ring-primary'
                             )}

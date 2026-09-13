@@ -92,7 +92,7 @@ export function LeaveApprovalCard({
 
   return (
     <>
-      <Card className="transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
+      <Card className="hover-lift">
         <CardHeader>
           <div className="flex items-start justify-between">
             <div className="space-y-1">
