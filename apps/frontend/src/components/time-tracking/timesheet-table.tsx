@@ -118,7 +118,23 @@ export function TimesheetTable({
                     ) : null}
                     {entry.taskTitle || entry.projectName || '—'}
                   </TableCell>
-                  <TableCell className="max-w-[20rem] truncate">{entry.description || '—'}</TableCell>
+                  <TableCell className="max-w-[20rem]">
+                    <div className="truncate">{entry.description || '—'}</div>
+                    {/* The Log Time dialog asks for "Tags (comma-separated)", the API
+                        stores them and the mapper returns them — and nothing rendered
+                        them, so filling the field in was busywork. Under the
+                        description rather than in a column of their own, since most
+                        entries have none. */}
+                    {entry.tags && entry.tags.length > 0 && (
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {entry.tags.map((tag) => (
+                          <Badge key={tag} variant="outline" className="text-xs font-normal">
+                            {tag}
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                  </TableCell>
                   <TableCell className="text-right tabular-nums whitespace-nowrap">
                     {formatMinutesHuman(entry.duration)}
                   </TableCell>
