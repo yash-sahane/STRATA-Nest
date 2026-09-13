@@ -16,6 +16,7 @@ import * as React from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
+import { useConsumeParam } from '@/hooks/use-tab-param';
 import { useFunctionalRequirementsRealtime } from '@/hooks/use-realtime';
 import { useProjects } from '@/hooks/use-project';
 import {
@@ -149,12 +150,18 @@ function FunctionalRequirementsPageContent() {
     if (!frIdFromUrl || requirements.length === 0) return;
     if (!requirements.some((r) => r.id === frIdFromUrl)) return;
     setSelectedRequirementId(frIdFromUrl);
-    const params = new URLSearchParams(searchParams.toString());
-    params.delete('frId');
-    router.replace(
-      params.toString() ? `/functional-requirements?${params.toString()}` : '/functional-requirements'
-    );
-  }, [frIdFromUrl, requirements, searchParams, router]);
+  }, [frIdFromUrl, requirements]);
+
+  /**
+   * Spend the parameter once the dialog is actually open.
+   *
+   * This used to be folded into the effect above, which meant it only happened when
+   * the target FR was already in the loaded list — so a link to an FR in another
+   * project (the case the project-switching effect above exists for) left ?frId= in
+   * the address bar forever. It also used router.replace, which on this prerendered
+   * route silently does nothing; useConsumeParam writes history directly.
+   */
+  useConsumeParam('frId', Boolean(frIdFromUrl) && selectedRequirementId === frIdFromUrl);
 
   // The API returns parentRequirementId on every FR (requirements/mappers.ts), so
   // sub-requirements can be ordered under their parent — which is what the card

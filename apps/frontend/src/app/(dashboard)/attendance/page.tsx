@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { useTabParam } from '@/hooks/use-tab-param';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/layout/page-header';
 import { AttendanceWidget } from '@/components/attendance/attendance-widget';
@@ -13,7 +14,11 @@ import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useAttendanceRealtime } from '@/hooks/use-realtime';
 import { Clock, Calendar, BarChart3, Users, FileText } from 'lucide-react';
 
+const ATTENDANCE_TABS = ['today', 'calendar', 'analytics', 'team'] as const;
+type AttendanceTab = (typeof ATTENDANCE_TABS)[number];
+
 export default function AttendancePage() {
+  const [tab, setTab] = useTabParam<AttendanceTab>(ATTENDANCE_TABS, 'today');
   const isManager = useIsManager();
   const { currentWorkspace } = useCurrentWorkspace();
   // Live updates: the gateway already broadcasts every write on this
@@ -40,7 +45,10 @@ export default function AttendancePage() {
         }
       />
 
-      <Tabs defaultValue="today" className="space-y-4">
+      {/* URL-driven, so /attendance?tab=team and the /attendance/team deep link
+          both land on the Team tab, and a refresh stays where the user was. It
+          used to hardcode "today" and ignore the query entirely. */}
+      <Tabs value={tab} onValueChange={(v) => setTab(v as AttendanceTab)} className="space-y-4">
         <TabsList>
           <TabsTrigger value="today" className="gap-2">
             <Clock className="h-4 w-4" />

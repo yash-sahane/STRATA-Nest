@@ -3,12 +3,12 @@
 import { PageHeader } from '@/components/layout/page-header';
 
 import * as React from 'react';
-import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useTheme } from 'next-themes';
 import { DeleteWorkspaceDialog } from '@/components/workspace/delete-workspace-dialog';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { useTabParam } from '@/hooks/use-tab-param';
 import { PASSWORD_RULES, passwordFailures } from '@/lib/password-policy';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -41,8 +41,9 @@ import type { UserRole } from '@/types';
 const SETTINGS_TABS = ['profile', 'workspace', 'notifications', 'security', 'appearance'] as const;
 type SettingsTab = (typeof SETTINGS_TABS)[number];
 
-/** `useSearchParams` opts the subtree into client rendering, so it needs its own
- *  Suspense boundary rather than suspending the whole route. */
+/** The tab lives in the URL (useTabParam -> useSearchParams), which opts the
+ *  subtree into client rendering — so it needs its own Suspense boundary rather
+ *  than suspending the whole route. */
 export default function SettingsPage() {
   return (
     <React.Suspense fallback={<PageLoader message="Loading settings..." />}>
@@ -57,17 +58,14 @@ function SettingsPageContent() {
   const { theme, setTheme, systemTheme } = useTheme();
   const updateWorkspace = useUpdateWorkspace();
 
-  // Deep links such as /settings?tab=workspace (the Workspaces page uses one)
-  // must land on the tab they name; anything else falls back to Profile.
-  const searchParams = useSearchParams();
-  const requestedTab = searchParams.get('tab');
-  const [tab, setTab] = React.useState<SettingsTab>(() =>
-    SETTINGS_TABS.includes(requestedTab as SettingsTab) ? (requestedTab as SettingsTab) : 'profile',
-  );
-  React.useEffect(() => {
-    // The page stays mounted when the deep link is followed from another route.
-    if (SETTINGS_TABS.includes(requestedTab as SettingsTab)) setTab(requestedTab as SettingsTab);
-  }, [requestedTab]);
+  // Deep links such as /settings?tab=workspace (the Workspaces page uses one) must
+  // land on the tab they name; anything else falls back to Profile.
+  //
+  // This used to be local state seeded from the URL and an effect syncing one way
+  // only: clicking a tab never wrote it back, so a refresh or Back jumped to
+  // whatever the address still said. The hook owns both directions, which also
+  // retires the mirror-state-and-sync dance.
+  const [tab, setTab] = useTabParam<SettingsTab>(SETTINGS_TABS, 'profile');
 
   const [mounted, setMounted] = React.useState(false);
   const [isUpdating, setIsUpdating] = React.useState(false);
