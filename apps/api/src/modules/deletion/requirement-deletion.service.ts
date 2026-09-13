@@ -6,6 +6,7 @@ import { Permission } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { DeletionSideEffectsService, type DeletedEntity } from './deletion-side-effects.service';
 import { collectDelete, collectUpdate, type TxLike } from './deletion.util';
+import { assertDeletable } from './assert-deletable';
 
 interface FrNode {
   id: string;
@@ -52,7 +53,10 @@ export class RequirementDeletionService {
   async deleteClientRequirement(user: User, id: string, cascade: boolean): Promise<void> {
     const cr = await this.prisma.clientRequirement.findUnique({ where: { id } });
     if (!cr) throw new NotFoundException('Not found.');
-    await this.access.assertPermission(user, cr.workspaceId, Permission.RequirementWrite);
+    // assertDeletable, not assertPermission: the pair (403 exists / 404 does
+    // not) answered "does this id exist?" for somebody with no membership at
+    // all. A stranger now gets 404; a member without the right still gets 403.
+    await assertDeletable(this.access, user, cr.workspaceId, Permission.RequirementWrite);
 
     const workspaceId = cr.workspaceId;
     // Every cascade query is scoped to the workspace the permission was checked
@@ -115,7 +119,10 @@ export class RequirementDeletionService {
   async deleteFunctionalRequirement(user: User, id: string, cascade: boolean): Promise<void> {
     const fr = await this.prisma.functionalRequirement.findUnique({ where: { id } });
     if (!fr) throw new NotFoundException('Not found.');
-    await this.access.assertPermission(user, fr.workspaceId, Permission.RequirementWrite);
+    // assertDeletable, not assertPermission: the pair (403 exists / 404 does
+    // not) answered "does this id exist?" for somebody with no membership at
+    // all. A stranger now gets 404; a member without the right still gets 403.
+    await assertDeletable(this.access, user, fr.workspaceId, Permission.RequirementWrite);
 
     const workspaceId = fr.workspaceId;
     const descendants = await this.collectDescendants([fr]);

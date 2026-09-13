@@ -6,6 +6,7 @@ import { Permission } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { DeletionSideEffectsService, type DeletedEntity } from './deletion-side-effects.service';
 import { collectUpdate, type TxLike } from './deletion.util';
+import { assertDeletable } from './assert-deletable';
 
 /**
  * EpicDeletionService — Epic delete with UNLINK semantics: linked tasks and
@@ -24,7 +25,10 @@ export class EpicDeletionService {
   async delete(user: User, epicId: string): Promise<void> {
     const epic = await this.prisma.epic.findUnique({ where: { id: epicId } });
     if (!epic) throw new NotFoundException('Not found.');
-    await this.access.assertPermission(user, epic.workspaceId, Permission.PlanningWrite);
+    // assertDeletable, not assertPermission: the pair (403 exists / 404 does
+    // not) answered "does this id exist?" for somebody with no membership at
+    // all. A stranger now gets 404; a member without the right still gets 403.
+    await assertDeletable(this.access, user, epic.workspaceId, Permission.PlanningWrite);
     const workspaceId = epic.workspaceId;
     const deleted: DeletedEntity[] = [];
     const detached: DeletedEntity[] = [];

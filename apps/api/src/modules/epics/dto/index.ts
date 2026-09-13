@@ -1,12 +1,22 @@
 import {
+  IsIn,
   IsInt,
   IsNotEmpty,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
 import { StrictString, TrimmedText } from '@strata/common';
+
+/**
+ * The epic's three statuses, as written by the task rollup and rendered by the
+ * badge maps on every screen. `status` was a bare @IsString(), so
+ * `{ status: 'NOT_A_STATUS' }` stored happily and then fell through every badge
+ * lookup to an unstyled label.
+ */
+export const EPIC_STATUSES = ['TODO', 'IN_PROGRESS', 'DONE'] as const;
 
 export class CreateEpicDto {
   @IsString() workspaceId!: string;
@@ -18,8 +28,8 @@ export class CreateEpicDto {
   @IsOptional() @IsString() color?: string;
   @IsOptional() @IsString() startDate?: string;
   @IsOptional() @IsString() endDate?: string;
-  @IsOptional() @IsString() status?: string;
-  @IsOptional() @IsInt() @Min(0) progress?: number;
+  @IsOptional() @IsString() @IsIn(EPIC_STATUSES) status?: string;
+  @IsOptional() @IsInt() @Min(0) @Max(100) progress?: number;
   @IsOptional() @IsString() assignedTeam?: string;
 }
 
@@ -54,8 +64,8 @@ export class UpdateEpicDto {
   @IsOptional() @IsString() startDate?: string;
   @IsOptional() @IsString() endDate?: string;
   /** Rollup column — see the note on this class before writing it alone. */
-  @IsOptional() @IsString() status?: string;
+  @IsOptional() @IsString() @IsIn(EPIC_STATUSES) status?: string;
   /** Rollup column — see the note on this class before writing it alone. */
-  @IsOptional() @IsInt() @Min(0) progress?: number;
+  @IsOptional() @IsInt() @Min(0) @Max(100) progress?: number;
   @IsOptional() @IsString() assignedTeam?: string;
 }

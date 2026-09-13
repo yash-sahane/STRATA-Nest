@@ -63,7 +63,16 @@ export class FilesService {
   ) {}
 
   private response(f: UploadedFile) {
-    return uploadedFileResponse(f, this.storage.url(f.filePath));
+    // The route that actually serves the bytes, not the storage driver's
+    // `media/<key>` path. Nothing serves `media/` — it is a leftover of a
+    // Django-style MEDIA_URL convention — so every file row advertised a URL
+    // that 404s on every host and prefix. Measured: 404.
+    //
+    // The driver's own url() is left alone: for a driver that really does expose
+    // blobs (S3 and the like) "where the blob lives, by key" is the right answer
+    // to a different question. This field is what an API consumer should fetch,
+    // and /view is the inline-display route the client already builds by hand.
+    return uploadedFileResponse(f, `/api/v1/files/${f.id}/view/`);
   }
 
   /** Scope: workspace_id in memberships + "" (global); admin sees all. */

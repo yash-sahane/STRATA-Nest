@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
-import { type ListQuerySpec } from '@strata/common';
+import { optionalScopeParam, type ListQuerySpec } from '@strata/common';
 import { PrismaService } from '@strata/prisma';
 import type { LeaveBalance, LeaveRequest, User } from '@prisma/client';
 import { Permission, type PermissionKey } from '../authz/permissions';
@@ -39,7 +39,12 @@ async function scopeQueryToCaller(
   query: Record<string, string | string[] | undefined>,
 ): Promise<Record<string, string | string[] | undefined>> {
   if (access.isPlatformAdmin(user)) return query;
-  const workspaceId = typeof query.workspaceId === 'string' ? query.workspaceId : undefined;
+  // optionalScopeParam, NOT the required variant: an absent workspaceId
+  // legitimately means "scope this to my own requests", so throwing would break
+  // the ordinary path. But a REPEATED one has to resolve — under the old
+  // `typeof === 'string'` test ?workspaceId=A&workspaceId=A read as absent, the
+  // leave:approve check silently failed, and an approver saw only their own leave.
+  const workspaceId = optionalScopeParam(query.workspaceId, 'workspaceId');
   if (workspaceId && (await access.can(user, workspaceId, Permission.LeaveApprove))) return query;
   // Every caller-supplied userId predicate is dropped before the caller's own id
   // is forced. Overwriting the `userId` key alone was NOT enough: the suffixed

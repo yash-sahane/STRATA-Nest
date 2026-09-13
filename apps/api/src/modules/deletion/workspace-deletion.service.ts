@@ -5,6 +5,7 @@ import { Permission } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { ArchiveService } from './archive.service';
 import { DeletionSideEffectsService, type DeletedEntity, type FileRef } from './deletion-side-effects.service';
+import { assertDeletable } from './assert-deletable';
 
 /** Workspace-scoped children deleted child-first (respecting NO ACTION FKs), with realtime slugs. */
 const WS_SCOPED: Array<{ model: string; collection: string }> = [
@@ -65,7 +66,10 @@ export class WorkspaceDeletionService {
   async delete(user: User, workspaceId: string): Promise<void> {
     const ws = await this.prisma.workspace.findUnique({ where: { id: workspaceId } });
     if (!ws) throw new NotFoundException('Not found.');
-    await this.access.assertPermission(user, workspaceId, Permission.WorkspaceDelete);
+    // assertDeletable, not assertPermission: the pair (403 exists / 404 does
+    // not) answered "does this id exist?" for somebody with no membership at
+    // all. A stranger now gets 404; a member without the right still gets 403.
+    await assertDeletable(this.access, user, workspaceId, Permission.WorkspaceDelete);
 
     // --- Zone 0: gather context needed by Zone 2 (before rows are gone) ---
     const projects = await this.prisma.project.findMany({ where: { workspaceId }, select: { id: true } });

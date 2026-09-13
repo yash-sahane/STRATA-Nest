@@ -6,6 +6,7 @@ import { Permission } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { DeletionSideEffectsService, type DeletedEntity, type FileRef } from './deletion-side-effects.service';
 import { collectDelete, type TxLike } from './deletion.util';
+import { assertDeletable } from './assert-deletable';
 
 /** Project-owned children, child-first (all keyed by projectId; comments by taskId). */
 const PROJECT_CHILDREN: Array<{ model: string; collection: string }> = [
@@ -42,7 +43,10 @@ export class ProjectDeletionService {
   async delete(user: User, projectId: string): Promise<void> {
     const project = await this.prisma.project.findUnique({ where: { id: projectId } });
     if (!project) throw new NotFoundException('Not found.');
-    await this.access.assertPermission(user, project.workspaceId, Permission.ProjectDelete);
+    // assertDeletable, not assertPermission: the pair (403 exists / 404 does
+    // not) answered "does this id exist?" for somebody with no membership at
+    // all. A stranger now gets 404; a member without the right still gets 403.
+    await assertDeletable(this.access, user, project.workspaceId, Permission.ProjectDelete);
     const workspaceId = project.workspaceId;
 
     const fileRows = await this.prisma.uploadedFile.findMany({ where: { projectId }, select: { id: true, filePath: true } });

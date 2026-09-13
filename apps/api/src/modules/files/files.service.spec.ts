@@ -86,8 +86,11 @@ describe('FilesService.create (multipart upload)', () => {
     expect(Buffer.isBuffer(buf)).toBe(true);
     expect(mime).toBe('text/plain');
     expect(create).toHaveBeenCalledTimes(1);
-    // response mapper: size is a Number, uploadedBy present, url from storage
-    expect(res).toMatchObject({ id: 'f1', size: 5, uploadedBy: 'u1', bucketId: 'default', url: 'media/uploads/w1/f1/a.txt' });
+    // response mapper: size is a Number, uploadedBy present, and `url` is the
+    // route that SERVES the file. It used to be the storage driver's
+    // `media/<key>` path, which nothing serves — every file row advertised a link
+    // that 404s, and this assertion pinned it.
+    expect(res).toMatchObject({ id: 'f1', size: 5, uploadedBy: 'u1', bucketId: 'default', url: '/api/v1/files/f1/view/' });
   });
 
   it('checks membership of the TARGET workspace before writing anything', async () => {

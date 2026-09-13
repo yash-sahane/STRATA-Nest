@@ -102,7 +102,9 @@ export class AuthService {
         password: this.passwords.hash(dto.password),
         name: dto.name,
         phone: dto.phone ?? '',
-        workspaceId: dto.workspaceId ?? '',
+        // Never from the request body — see the note on RegisterDto. A membership
+        // is what grants access, and that is created by the invite flow.
+        workspaceId: '',
       },
     });
     const tokens = await this.issueSession(user.id);

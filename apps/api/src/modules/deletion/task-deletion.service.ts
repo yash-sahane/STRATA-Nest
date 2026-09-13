@@ -6,6 +6,7 @@ import { Permission } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { DeletionSideEffectsService, type DeletedEntity } from './deletion-side-effects.service';
 import { collectDelete, collectUpdate, type TxLike } from './deletion.util';
+import { assertDeletable } from './assert-deletable';
 
 /**
  * TaskDeletionService — Task aggregate (→ TaskComment). Sub-tasks are NOT
@@ -24,7 +25,10 @@ export class TaskDeletionService {
   async delete(user: User, taskId: string): Promise<void> {
     const task = await this.prisma.task.findUnique({ where: { id: taskId } });
     if (!task) throw new NotFoundException('Not found.');
-    await this.access.assertPermission(user, task.workspaceId, Permission.TaskWrite);
+    // assertDeletable, not assertPermission: the pair (403 exists / 404 does
+    // not) answered "does this id exist?" for somebody with no membership at
+    // all. A stranger now gets 404; a member without the right still gets 403.
+    await assertDeletable(this.access, user, task.workspaceId, Permission.TaskWrite);
     const workspaceId = task.workspaceId;
     const deleted: DeletedEntity[] = [];
     const detached: DeletedEntity[] = [];

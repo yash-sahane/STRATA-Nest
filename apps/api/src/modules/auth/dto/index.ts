@@ -50,9 +50,19 @@ export class RegisterDto {
   @MaxLength(50)
   phone?: string;
 
-  @IsOptional()
-  @IsString()
-  workspaceId?: string;
+  /*
+   * `workspaceId` used to be accepted here and stored verbatim on the new user,
+   * where user.mapper exposes it as BOTH workspaceId and defaultWorkspaceId. So an
+   * unauthenticated caller could point a brand-new account's default workspace at
+   * somebody else's — mass assignment of a scope field from a public endpoint.
+   *
+   * Measured, it granted no access (GET /workspaces returned []), but it did set
+   * the client's idea of which workspace to open to one the user cannot see. No
+   * client ever sent it: registration is not exposed in the UI at all, since users
+   * are invited. Removed rather than validated, so ValidationPipe({ whitelist })
+   * strips it; joining a workspace goes through the invite flow, which is
+   * authorised.
+   */
 }
 
 export class ChangePasswordDto {

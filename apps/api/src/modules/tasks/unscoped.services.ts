@@ -1,5 +1,5 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { generateId, paginate, parseListQuery, type ListQuerySpec } from '@strata/common';
+import { generateId, paginate, parseListQuery, requiredScopeParam, type ListQuerySpec } from '@strata/common';
 import type { PaginatedResponse } from '@strata/shared';
 import { PrismaService } from '@strata/prisma';
 import type { Prisma, User } from '@prisma/client';
@@ -38,8 +38,12 @@ export class TaskCommentsService {
     // Scoped read path: a caller must name the parent task and be a member of
     // its workspace. (An unfiltered cross-workspace listing is intentionally
     // not offered here.)
-    const taskId = typeof query.taskId === 'string' ? query.taskId : undefined;
-    if (!taskId) throw new NotFoundException('Not found.');
+    // requiredScopeParam, not a typeof check. Express turns a repeated parameter
+    // into an array, so ?taskId=A&taskId=A failed the `typeof === 'string'` test
+    // and fell through to NotFound — the caller HAD named the task, just twice,
+    // and was told it does not exist. A missing value is now a 400, which is what
+    // a malformed request deserves.
+    const taskId = requiredScopeParam(query.taskId, 'taskId');
     await this.assertTaskAccess(user, taskId);
     const parsed = parseListQuery(query, this.spec);
     const where = parsed.where as Prisma.TaskCommentWhereInput;
@@ -151,8 +155,9 @@ export class KanbanColumnsService {
     user: User,
     query: Record<string, string | string[] | undefined>,
   ): Promise<PaginatedResponse<ReturnType<typeof kanbanColumnResponse>>> {
-    const projectId = typeof query.projectId === 'string' ? query.projectId : undefined;
-    if (!projectId) throw new NotFoundException('Not found.');
+    // Same fix as the comment list above: a repeated projectId is still one
+    // project, and a missing one is a malformed request rather than a 404.
+    const projectId = requiredScopeParam(query.projectId, 'projectId');
     await this.assertProjectAccess(user, projectId);
     const parsed = parseListQuery(query, this.spec);
     const where = parsed.where as Prisma.KanbanColumnWhereInput;

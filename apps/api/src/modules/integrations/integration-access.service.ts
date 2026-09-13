@@ -34,13 +34,28 @@ export class IntegrationAccess {
     return { projectId: { in: ids } };
   }
 
-  /** Assert the caller may write integrations for a project (member of its workspace). */
+  /**
+   * Assert the caller may write integrations for a project (member of its workspace).
+   *
+   * A stranger gets 404, not 403. The old order — find the project, then check the
+   * permission — answered 403 for a project that exists and 404 for one that does
+   * not, and that pair enumerates project ids for somebody with no membership at
+   * all. A member who simply lacks the right still gets 403, which tells them
+   * nothing they cannot already see.
+   */
   async assertProjectWrite(user: User, projectId: string, permission: PermissionKey): Promise<void> {
     const project = await this.prisma.project.findUnique({
       where: { id: projectId },
       select: { workspaceId: true },
     });
     if (!project) throw new NotFoundException('Project not found.');
+    if (!this.access.isPlatformAdmin(user)) {
+      try {
+        await this.access.assertMember(user, project.workspaceId);
+      } catch {
+        throw new NotFoundException('Project not found.');
+      }
+    }
     await this.access.assertPermission(user, project.workspaceId, permission);
   }
 

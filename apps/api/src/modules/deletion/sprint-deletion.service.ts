@@ -6,6 +6,7 @@ import { Permission } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { DeletionSideEffectsService, type DeletedEntity } from './deletion-side-effects.service';
 import { collectDelete, collectUpdate, type TxLike } from './deletion.util';
+import { assertDeletable } from './assert-deletable';
 
 /**
  * SprintDeletionService — Sprint aggregate (→ Retrospective). Tasks and
@@ -24,7 +25,10 @@ export class SprintDeletionService {
   async delete(user: User, sprintId: string): Promise<void> {
     const sprint = await this.prisma.sprint.findUnique({ where: { id: sprintId } });
     if (!sprint) throw new NotFoundException('Not found.');
-    await this.access.assertPermission(user, sprint.workspaceId, Permission.PlanningWrite);
+    // assertDeletable, not assertPermission: the pair (403 exists / 404 does
+    // not) answered "does this id exist?" for somebody with no membership at
+    // all. A stranger now gets 404; a member without the right still gets 403.
+    await assertDeletable(this.access, user, sprint.workspaceId, Permission.PlanningWrite);
     const workspaceId = sprint.workspaceId;
     const deleted: DeletedEntity[] = [];
     const detached: DeletedEntity[] = [];
