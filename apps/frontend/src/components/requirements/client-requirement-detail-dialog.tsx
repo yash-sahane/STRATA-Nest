@@ -17,6 +17,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Separator } from '@/components/ui/separator';
+import { Skeleton } from '@/components/ui/skeleton';
 import {
   Select,
   SelectContent,
@@ -79,7 +80,12 @@ export function ClientRequirementDetailDialog({
   canEdit = false,
   canDelete = false,
 }: ClientRequirementDetailDialogProps) {
-  const { data: requirement } = useClientRequirement(requirementId || undefined);
+  const {
+    data: requirement,
+    isError,
+    isFetching,
+    refetch,
+  } = useClientRequirement(requirementId || undefined);
   const updateRequirement = useUpdateClientRequirement();
   const deleteRequirement = useDeleteClientRequirement();
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
@@ -130,7 +136,56 @@ export function ClientRequirementDetailDialog({
     }
   }, [open, requirement, hasChanges]);
 
-  if (!requirement) return null;
+  // This used to `return null` whenever there was no data, which conflated two very
+  // different states. Closed is genuinely nothing to draw. But "open, fetch still in
+  // flight" also drew nothing, so clicking "View Details" on the requirements table
+  // opened no dialog at all until the response landed -- the click read as ignored, and
+  // the natural response to that is to click again. And a fetch that FAILED stayed
+  // blank forever, with no message and nothing to retry.
+  //
+  // Closed still renders nothing. Open renders the dialog immediately: a skeleton while
+  // the request is in flight, and an explanation with a retry if it failed.
+  if (!requirement) {
+    if (!open) return null;
+    return (
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent size="2xl">
+          <DialogHeader>
+            <DialogTitle>
+              {isError ? 'Requirement unavailable' : 'Loading requirement'}
+            </DialogTitle>
+            <DialogDescription>
+              {isError
+                ? 'This requirement could not be loaded. It may have been deleted, or the request failed.'
+                : 'Fetching the details for this client requirement.'}
+            </DialogDescription>
+          </DialogHeader>
+          {isError ? (
+            <DialogFooter>
+              <Button variant="outline" onClick={() => onOpenChange(false)}>
+                Close
+              </Button>
+              <Button onClick={() => void refetch()} disabled={isFetching}>
+                {isFetching ? 'Retrying...' : 'Try again'}
+              </Button>
+            </DialogFooter>
+          ) : (
+            // aria-busy so a screen reader announces the wait rather than an empty dialog.
+            <div className="space-y-4" aria-busy="true" data-testid="requirement-detail-loading">
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-6 w-24" />
+                <Skeleton className="h-6 w-20" />
+              </div>
+              <Skeleton className="h-7 w-2/3" />
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-5/6" />
+              <Skeleton className="h-4 w-1/2" />
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    );
+  }
 
   const currentStatusConfig = getRequirementStatusConfig(status);
   const currentPriorityConfig = getPriorityConfig(priority);

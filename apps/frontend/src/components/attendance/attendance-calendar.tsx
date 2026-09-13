@@ -358,7 +358,10 @@ export function AttendanceCalendar() {
                   {saturdayWorking && (
                     <Badge
                       variant="outline"
-                      className="text-[10px] px-1 py-0 mb-1 bg-blue-50 dark:bg-blue-950 border-blue-300 dark:border-blue-700"
+                      /* w-fit: this is a flex item of the flex-col wrapper, so the
+                         default align-items:stretch made a two-character label span
+                         the entire day cell and read as a filled bar, not a badge. */
+                      className="w-fit text-[10px] px-1 py-0 mb-1 bg-blue-50 dark:bg-blue-950 border-blue-300 dark:border-blue-700"
                     >
                       W{weekNum}
                     </Badge>
