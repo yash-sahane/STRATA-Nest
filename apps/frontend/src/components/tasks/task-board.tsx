@@ -415,7 +415,18 @@ export function TaskBoard({
                                     );
                                   })}
                                   {task.labels.length > 3 && (
-                                    <Badge variant="secondary" className="text-xs">
+                                    // "+2" on its own withholds the very thing it is
+                                    // counting. The remaining labels are already in
+                                    // hand, so they go in the title and the
+                                    // accessible name.
+                                    <Badge
+                                      variant="secondary"
+                                      className="text-xs"
+                                      title={task.labels.slice(3).join(', ')}
+                                      aria-label={`${task.labels.length - 3} more: ${task.labels
+                                        .slice(3)
+                                        .join(', ')}`}
+                                    >
                                       +{task.labels.length - 3}
                                     </Badge>
                                   )}

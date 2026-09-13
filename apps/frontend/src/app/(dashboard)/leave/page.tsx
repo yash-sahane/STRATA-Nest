@@ -250,7 +250,16 @@ export default function LeavePage() {
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-2">
-                      <p className="text-sm text-muted-foreground line-clamp-2">
+                      {/* Clamped to two lines with no way to read the rest, on the
+                          screen where somebody decides whether to approve it. The
+                          full text is right here, so it is available on hover and to
+                          a screen reader, and the clamp lifts on focus for anyone
+                          working from the keyboard. */}
+                      <p
+                        className="text-sm text-muted-foreground line-clamp-2 focus-visible:line-clamp-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm"
+                        title={leave.reason}
+                        tabIndex={0}
+                      >
                         {leave.reason}
                       </p>
                       {leave.rejectionReason && (

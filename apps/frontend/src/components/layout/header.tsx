@@ -393,9 +393,15 @@ export function Header() {
             size="icon"
             onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
             className="h-9 w-9"
+            // The icon shows what you would GET, which tells a sighted user the
+            // direction and a screen-reader user nothing at all — "Toggle theme"
+            // named neither the current theme nor the destination.
+            aria-label={
+              theme === 'dark' ? 'Switch to light theme (currently dark)' : 'Switch to dark theme (currently light)'
+            }
+            title={theme === 'dark' ? 'Currently dark' : 'Currently light'}
           >
             {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-            <span className="sr-only">Toggle theme</span>
           </Button>
         )}
 
