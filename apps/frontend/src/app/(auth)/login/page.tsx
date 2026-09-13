@@ -55,7 +55,13 @@ export default function LoginPage() {
               <Label htmlFor="email">Email</Label>
               <Input
                 id="email"
+                name="email"
                 type="email"
+                // `username`, with `current-password` below: together they tell a
+                // password manager this is a SIGN-IN and the saved credential applies.
+                // Neither field carried a name or an autocomplete hint, so saving and
+                // filling were both unreliable.
+                autoComplete="username"
                 placeholder="you@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -78,7 +84,9 @@ export default function LoginPage() {
               </div>
               <Input
                 id="password"
+                name="password"
                 type="password"
+                autoComplete="current-password"
                 placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}

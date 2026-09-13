@@ -54,6 +54,23 @@ export function TaskComments({ taskId, workspaceId }: TaskCommentsProps) {
   // unmounts — see restoreThreadFocus below.
   const threadRef = React.useRef<HTMLDivElement>(null);
   const composerRef = React.useRef<HTMLTextAreaElement>(null);
+  /**
+   * The edit box, so opening it actually puts the cursor in it.
+   *
+   * Pressing Edit unmounts the button that was focused and mounts this field, which
+   * left focus on nothing at all — a keyboard user was dropped back to the top of the
+   * document and had to hunt for the editor they had just opened. The caret goes to
+   * the END of the existing text, since the box is pre-filled and typing at the start
+   * would prepend.
+   */
+  const editRef = React.useRef<HTMLTextAreaElement>(null);
+  React.useEffect(() => {
+    if (!editingId) return;
+    const el = editRef.current;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  }, [editingId]);
 
   // userId -> display name/avatar. The comment record carries only the id.
   const authorOf = React.useCallback(
@@ -204,6 +221,7 @@ export function TaskComments({ taskId, workspaceId }: TaskCommentsProps) {
                   {editingId === comment.id ? (
                     <div className="mt-1 space-y-2">
                       <Textarea
+                        ref={editRef}
                         value={editDraft}
                         onChange={(e) => setEditDraft(e.target.value)}
                         rows={3}

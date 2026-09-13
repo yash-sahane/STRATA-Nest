@@ -104,7 +104,16 @@ export function CreateEpicDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        // Escape, the X and an outside click all arrive here and NOT through the
+        // Cancel button, which was the only path that reset the form — so the next
+        // open showed abandoned input and its stale validation error.
+        if (!next) form.reset();
+        onOpenChange(next);
+      }}
+    >
       <DialogContent size="lg" className="max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Create Epic</DialogTitle>

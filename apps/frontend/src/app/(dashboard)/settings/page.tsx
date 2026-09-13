@@ -545,6 +545,7 @@ function SettingsPageContent() {
                     <div className="relative">
                       <Input
                         id="current-password"
+                  autoComplete="current-password"
                         type={showPw.current ? 'text' : 'password'}
                         value={pwForm.current}
                         onChange={(e) => setPwForm({ ...pwForm, current: e.target.value })}
@@ -570,6 +571,7 @@ function SettingsPageContent() {
                     <div className="relative">
                       <Input
                         id="new-password"
+                  autoComplete="new-password"
                         type={showPw.next ? 'text' : 'password'}
                         value={pwForm.next}
                         onChange={(e) => setPwForm({ ...pwForm, next: e.target.value })}
@@ -608,6 +610,7 @@ function SettingsPageContent() {
                     <div className="relative">
                       <Input
                         id="confirm-password"
+                  autoComplete="new-password"
                         type={showPw.confirm ? 'text' : 'password'}
                         value={pwForm.confirm}
                         onChange={(e) => setPwForm({ ...pwForm, confirm: e.target.value })}

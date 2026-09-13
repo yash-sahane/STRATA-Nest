@@ -263,6 +263,7 @@ function ChangePasswordContent() {
               <div className="relative">
                 <Input
                   id="currentPassword"
+                  autoComplete="current-password"
                   type={showPasswords.current ? 'text' : 'password'}
                   value={formData.currentPassword}
                   onChange={(e) => setFormData({ ...formData, currentPassword: e.target.value })}
@@ -292,6 +293,7 @@ function ChangePasswordContent() {
               <div className="relative">
                 <Input
                   id="newPassword"
+                  autoComplete="new-password"
                   type={showPasswords.new ? 'text' : 'password'}
                   value={formData.newPassword}
                   onChange={(e) => setFormData({ ...formData, newPassword: e.target.value })}
@@ -329,6 +331,7 @@ function ChangePasswordContent() {
               <div className="relative">
                 <Input
                   id="confirmPassword"
+                  autoComplete="new-password"
                   type={showPasswords.confirm ? 'text' : 'password'}
                   value={formData.confirmPassword}
                   onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
