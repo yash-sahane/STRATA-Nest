@@ -29,9 +29,9 @@
   --color-info: hsl(var(--info));
   --color-info-foreground: hsl(var(--info-foreground));
   /* Text-role variants of the semantic hues — see the note in :root. */
-  --color-success-text: hsl(var(--success-text));
-  --color-warning-text: hsl(var(--warning-text));
-  --color-info-text: hsl(var(--info-text));
+  --color-success-text: hsl(var(--app-success-text));
+  --color-warning-text: hsl(var(--app-warning-text));
+  --color-info-text: hsl(var(--app-info-text));
   --color-destructive-text: hsl(var(--destructive-text));
   --color-border: hsl(var(--border));
   --color-input: hsl(var(--input));
@@ -85,9 +85,9 @@
        the card surface (chart legends and labels). A single token cannot serve
        both roles — one needs to be dark enough for white text on top, the other
        light/dark enough to be read against the page. */
-    --success-text: 142 71% 30.5%;
-    --warning-text: 38 92% 33%;
-    --info-text: 217 91% 52.5%;
+    --app-success-text: 142 71% 30.5%;
+    --app-warning-text: 38 92% 33%;
+    --app-info-text: 217 91% 52.5%;
     --destructive-text: 0 84.2% 49%;
     --border: 0 0% 89.8%;
     --input: 0 0% 89.8%;
@@ -137,9 +137,9 @@
     --info: 217 74% 51%;
     --info-foreground: 0 0% 98%;
     /* Text-role variants, read against the dark card rather than under white. */
-    --success-text: 142 71% 40%;
-    --warning-text: 38 92% 40%;
-    --info-text: 217 91% 55%;
+    --app-success-text: 142 71% 40%;
+    --app-warning-text: 38 92% 40%;
+    --app-info-text: 217 91% 55%;
     --destructive-text: 0 84.2% 54%;
     --border: 0 0% 14.9%;
     --input: 0 0% 14.9%;
@@ -372,11 +372,34 @@
      micro = hover/focus, standard = dropdowns/tabs, overlay = dialog/sheet,
      layout = large structural transitions (e.g. sidebar collapse).
      They live on :root, not in @theme, so there is no `duration-overlay`
-     utility — consume them as `duration-(--duration-overlay)`. */
+     utility — consume them as `duration-(--duration-overlay)`.
+     Consumers, so a future reader can tell a live token from a dead one:
+       micro     the `hover-lift` utility below, and tooltip.tsx
+       standard  dropdown-menu, select, popover
+       overlay   dialog, alert-dialog
+       layout    the dashboard shell, page-container, sidebar */
   --duration-micro: 120ms;
   --duration-standard: 180ms;
   --duration-overlay: 240ms;
   --duration-layout: 320ms;
+}
+
+/* The card hover-lift, in one place.
+ *
+ * This exact idiom -- `transition-all duration-200 hover:-translate-y-0.5
+ * hover:shadow-md` -- was copied into 14 components, which is why half the motion scale
+ * above was dead code: `overlay` and `layout` had consumers, `micro` and `standard` were
+ * declared and never referenced while a hard-coded 200ms stood in for `micro` at every
+ * hover site. A literal repeated 14 times cannot be kept in step, and the scale it
+ * contradicted could not be trusted.
+ *
+ * Defined as a utility rather than a component class so it still composes with the
+ * per-site classes at those call sites (`cursor-pointer`, `overflow-hidden`, `group`,
+ * `border-l-4`, focus rings) and can still be overridden by a later utility.
+ */
+@utility hover-lift {
+  @apply transition-all hover:-translate-y-0.5 hover:shadow-md;
+  transition-duration: var(--duration-micro);
 }
 
 /* Accessibility: honor the OS "reduce motion" preference (A11Y-01).
@@ -397,4 +420,73 @@
     animation-duration: 1s !important;
     animation-iteration-count: infinite !important;
   }
+}
+
+/* Toast text that clears the AA floor in LIGHT theme (A11Y).
+ *
+ * sonner ships its own palette for the coloured toast types, and in light theme every
+ * one of the four puts text under 4.5:1 on its own tinted background. Measured against
+ * sonner 2.0.7's stylesheet:
+ *
+ *     success  hsl(140 100% 27%) on hsl(143 85% 96%)   4.26:1
+ *     info     hsl(210  92% 45%) on hsl(208 100% 97%)  4.35:1
+ *     warning  hsl( 31  92% 45%) on hsl( 49 100% 97%)  3.08:1   <- worst
+ *     error    hsl(360 100% 45%) on hsl(359 100% 97%)  4.35:1
+ *
+ * The whole-app sweep caught only `info`, because an inbound realtime notification was
+ * the one toast on screen when it ran; the other three were found by reading sonner's
+ * own CSS rather than assuming they were fine.
+ *
+ * Only the TEXT lightness moves, on each type's existing hue and saturation, so the
+ * toasts still look like themselves. Backgrounds and borders are left alone. Dark theme
+ * is untouched: it measures 6.56:1 to 12.30:1 already.
+ *
+ * Specificity here is load-bearing, not decoration. sonner does not ship its CSS as a
+ * file the bundler can order; it injects a <style> element at runtime, which lands AFTER
+ * this stylesheet in the document. So an override at sonner's own specificity loses on
+ * order alone and does nothing whatsoever -- which is exactly what the first attempt did.
+ * `:root` plus the toaster, theme and type attributes reaches (0,6,0) against sonner's
+ * (0,3,0), which wins wherever sonner chooses to inject.
+ *
+ * The colours are set under PRIVATE `--toast-aa-*` names rather than by redefining
+ * sonner's own `--success-text` / `--info-text` / `--warning-text`.
+ *
+ * Those three bare names were the APP's as well until this was traced. sonner declares
+ * them on its toaster in both themes as full hsl() colours, while the app held them as
+ * channel triples consumed via `hsl(var(...))` -- so inside any toast the library's value
+ * shadowed the app's and `text-success-text` computed `hsl(hsl(...))`, which is invalid,
+ * leaving the text to inherit the toast's colour. Nothing renders those utilities in a
+ * toast today (every call site passes a plain string), but `toast()` takes a ReactNode, so
+ * it was one rich toast away. The app's tokens are now `--app-*`; see the @theme block at
+ * the top of this file. This block stays off sonner's names regardless -- re-entering a
+ * dependency's namespace is how the collision happened to begin with.
+ *
+ * `[data-close-button]` is listed because sonner colours it from the same variable.
+ * `[data-title]` and `[data-description]` need nothing: sonner has them inherit.
+ */
+:root [data-sonner-toaster][data-sonner-theme='light'] {
+  --toast-aa-success: hsl(140, 100%, 24.5%); /* 5.02:1 on hsl(143 85% 96%) */
+  --toast-aa-info: hsl(210, 92%, 42.5%); /* 4.81:1 on hsl(208 100% 97%) */
+  --toast-aa-warning: hsl(31, 92%, 35%); /* 4.79:1 on hsl( 49 100% 97%) */
+  --toast-aa-error: hsl(360, 100%, 42.5%); /* 4.80:1 on hsl(359 100% 97%) */
+}
+
+:root [data-sonner-toaster][data-sonner-theme='light'] [data-rich-colors='true'][data-sonner-toast][data-type='success'],
+:root [data-sonner-toaster][data-sonner-theme='light'] [data-rich-colors='true'][data-sonner-toast][data-type='success'] [data-close-button] {
+  color: var(--toast-aa-success);
+}
+
+:root [data-sonner-toaster][data-sonner-theme='light'] [data-rich-colors='true'][data-sonner-toast][data-type='info'],
+:root [data-sonner-toaster][data-sonner-theme='light'] [data-rich-colors='true'][data-sonner-toast][data-type='info'] [data-close-button] {
+  color: var(--toast-aa-info);
+}
+
+:root [data-sonner-toaster][data-sonner-theme='light'] [data-rich-colors='true'][data-sonner-toast][data-type='warning'],
+:root [data-sonner-toaster][data-sonner-theme='light'] [data-rich-colors='true'][data-sonner-toast][data-type='warning'] [data-close-button] {
+  color: var(--toast-aa-warning);
+}
+
+:root [data-sonner-toaster][data-sonner-theme='light'] [data-rich-colors='true'][data-sonner-toast][data-type='error'],
+:root [data-sonner-toaster][data-sonner-theme='light'] [data-rich-colors='true'][data-sonner-toast][data-type='error'] [data-close-button] {
+  color: var(--toast-aa-error);
 }

@@ -16,25 +16,25 @@
 export const STATUS_COLORS: Record<string, string> = {
   BACKLOG: 'hsl(var(--muted-foreground))',
   TODO: 'hsl(var(--chart-3))',
-  IN_PROGRESS: 'hsl(var(--info-text))',
+  IN_PROGRESS: 'hsl(var(--app-info-text))',
   REVIEW: 'hsl(var(--chart-4))',
-  DONE: 'hsl(var(--success-text))',
+  DONE: 'hsl(var(--app-success-text))',
 };
 
 /** Task priority colors. */
 export const PRIORITY_COLORS: Record<string, string> = {
-  LOW: 'hsl(var(--success-text))',
-  MEDIUM: 'hsl(var(--info-text))',
-  HIGH: 'hsl(var(--warning-text))',
+  LOW: 'hsl(var(--app-success-text))',
+  MEDIUM: 'hsl(var(--app-info-text))',
+  HIGH: 'hsl(var(--app-warning-text))',
   CRITICAL: 'hsl(var(--destructive-text))',
 };
 
 /** Project status colors. */
 export const PROJECT_STATUS_COLORS: Record<string, string> = {
   PLANNING: 'hsl(var(--muted-foreground))',
-  ACTIVE: 'hsl(var(--info-text))',
-  COMPLETED: 'hsl(var(--success-text))',
-  ON_HOLD: 'hsl(var(--warning-text))',
+  ACTIVE: 'hsl(var(--app-info-text))',
+  COMPLETED: 'hsl(var(--app-success-text))',
+  ON_HOLD: 'hsl(var(--app-warning-text))',
 };
 
 /** General-purpose series colors for line/bar charts without semantic keys. */
