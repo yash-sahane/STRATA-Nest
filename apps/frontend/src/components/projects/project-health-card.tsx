@@ -213,7 +213,7 @@ export function ProjectHealthCard({ health, projectName, loading }: ProjectHealt
               metrics
                 ? metrics.overdueTasksCount > 0
                   ? 'text-red-600 dark:text-red-400'
-                  : 'text-green-600 dark:text-green-400'
+                  : 'text-green-700 dark:text-green-400'
                 : undefined
             }
             caption={
@@ -247,7 +247,7 @@ export function ProjectHealthCard({ health, projectName, loading }: ProjectHealt
             valueClassName={
               metrics
                 ? metrics.blockedTasksCount > 0
-                  ? 'text-orange-600 dark:text-orange-400'
+                  ? 'text-orange-700 dark:text-orange-400'
                   : 'text-gray-600 dark:text-gray-400'
                 : undefined
             }
@@ -261,7 +261,7 @@ export function ProjectHealthCard({ health, projectName, loading }: ProjectHealt
             RECOMMENDATION_SLOT. */}
         <div className="space-y-2">
           <div className="flex items-center gap-2 text-sm font-medium">
-            <Lightbulb className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />
+            <Lightbulb className="h-4 w-4 text-yellow-700 dark:text-yellow-400" />
             <span>Recommendations</span>
             {hiddenRecommendations > 0 && (
               // whitespace-nowrap: this sits in a non-wrapping flex row whose

@@ -108,7 +108,7 @@ export function ResourceAllocationCard({
                     indicatorClassName={getWorkloadBarColor(member.workloadPercentage)}
                   />
                   {member.workloadPercentage > 100 && (
-                    <p className="flex items-center gap-1 text-xs text-orange-600 dark:text-orange-400">
+                    <p className="flex items-center gap-1 text-xs text-orange-700 dark:text-orange-400">
                       <AlertTriangle className="h-3 w-3" />
                       Overloaded by {member.workloadPercentage - 100}%
                     </p>

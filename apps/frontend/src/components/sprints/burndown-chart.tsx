@@ -187,7 +187,7 @@ export function BurndownChart({
           </div>
           <div className="text-center">
             <p className="text-sm text-muted-foreground">Completed</p>
-            <p className="text-2xl font-bold text-green-600 dark:text-green-400">
+            <p className="text-2xl font-bold text-green-700 dark:text-green-400">
               {tasks.filter(t => t.status === 'DONE').length}
             </p>
           </div>

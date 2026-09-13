@@ -225,7 +225,7 @@ export function AttendanceWidget() {
     if (lateMinutes > 0) {
       return (
         <div className="flex items-center gap-2 p-3 bg-orange-50 dark:bg-orange-950 border border-orange-200 dark:border-orange-800 rounded-lg">
-          <AlertCircle className="h-4 w-4 text-orange-600 dark:text-orange-400" />
+          <AlertCircle className="h-4 w-4 text-orange-700 dark:text-orange-400" />
           <p className="text-sm text-orange-800 dark:text-orange-200">
             Late by {formatMinutes(lateMinutes)}
           </p>

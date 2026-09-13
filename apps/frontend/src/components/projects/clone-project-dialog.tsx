@@ -134,7 +134,7 @@ export function CloneProjectDialog({
                       configuration
                     </p>
                   </div>
-                  <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400" />
+                  <CheckCircle2 className="h-4 w-4 text-green-700 dark:text-green-400" />
                 </div>
 
                 {/* Tasks */}
@@ -157,7 +157,7 @@ export function CloneProjectDialog({
                     </p>
                   </div>
                   {includeTasks ? (
-                    <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400" />
+                    <CheckCircle2 className="h-4 w-4 text-green-700 dark:text-green-400" />
                   ) : (
                     <XCircle className="h-4 w-4 text-muted-foreground" />
                   )}
@@ -183,7 +183,7 @@ export function CloneProjectDialog({
                     </p>
                   </div>
                   {includeMembers ? (
-                    <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400" />
+                    <CheckCircle2 className="h-4 w-4 text-green-700 dark:text-green-400" />
                   ) : (
                     <XCircle className="h-4 w-4 text-muted-foreground" />
                   )}
@@ -213,7 +213,7 @@ export function CloneProjectDialog({
                     </p>
                   </div>
                   {includeSprints ? (
-                    <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400" />
+                    <CheckCircle2 className="h-4 w-4 text-green-700 dark:text-green-400" />
                   ) : (
                     <XCircle className="h-4 w-4 text-muted-foreground" />
                   )}

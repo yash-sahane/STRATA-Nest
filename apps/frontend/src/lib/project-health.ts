@@ -135,11 +135,24 @@ export function calculateProjectHealth(
   };
 }
 
+/**
+ * Ink for the score, on the plain card.
+ *
+ * The -600 shades were measured as rendered and did not hold up in light theme: yellow-600
+ * came to 2.94:1 on the white card, which fails even the 3:1 large-text floor the
+ * `text-4xl font-bold` score faces, and green-600 (3.22:1) and emerald-600 (3.65:1) sat
+ * just above it. The whole-app sweep caught the yellow one on a real project page.
+ *
+ * -700 in light clears 4.5:1 on all four -- red 6.42:1, yellow 4.93:1, green 4.95:1,
+ * emerald 5.36:1 -- so this holds at normal size too, not just at the floor it happens to
+ * face at the one call site today. Dark keeps -400, measured 6.85:1 to 12.58:1 on the dark
+ * card. Hues are unchanged, so the four bands stay as tellable apart as they were.
+ */
 export function getHealthColor(score: number): string {
-  if (score < 40) return 'text-red-600 dark:text-red-400';
-  if (score < 70) return 'text-yellow-600 dark:text-yellow-400';
-  if (score < 90) return 'text-green-600 dark:text-green-400';
-  return 'text-emerald-600 dark:text-emerald-400';
+  if (score < 40) return 'text-red-700 dark:text-red-400';
+  if (score < 70) return 'text-yellow-700 dark:text-yellow-400';
+  if (score < 90) return 'text-green-700 dark:text-green-400';
+  return 'text-emerald-700 dark:text-emerald-400';
 }
 
 export function getHealthBgColor(score: number): string {

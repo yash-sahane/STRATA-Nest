@@ -137,16 +137,16 @@ export function getLeaveTypeColor(leaveType: LeaveType): string {
 /**
  * Get leave status color for UI
  */
-export function getLeaveStatusColor(status: LeaveStatus): string {
-  const colors: Record<LeaveStatus, string> = {
-    PENDING: 'bg-yellow-100 text-yellow-800 border-yellow-200 dark:bg-yellow-950 dark:text-yellow-200 dark:border-yellow-900',
-    APPROVED: 'bg-green-100 text-green-800 border-green-200 dark:bg-green-950 dark:text-green-200 dark:border-green-900',
-    REJECTED: 'bg-red-100 text-red-800 border-red-200 dark:bg-red-950 dark:text-red-200 dark:border-red-900',
-    CANCELLED: 'bg-gray-100 text-gray-800 border-gray-200 dark:bg-gray-950 dark:text-gray-200 dark:border-gray-900',
-  };
-
-  return colors[status] || 'bg-gray-100 text-gray-800 border-gray-200 dark:bg-gray-950 dark:text-gray-200 dark:border-gray-900';
-}
+/*
+ * `getLeaveStatusColor` was removed rather than kept.
+ *
+ * It handed back raw palette tints for a leave status, and leave statuses go through the
+ * semantic Badge variants now -- see components/leave/leave-status-badge.tsx, which
+ * documents why. Nothing called this any more. A dead helper that dispenses colours
+ * contradicting the design system is not harmless: it is the obvious thing to reach for
+ * next time a leave status needs a colour, which is how the divergence it caused arose in
+ * the first place. Resolve a tone in lib/semantic/tone.ts instead.
+ */
 
 /**
  * Format leave date range for display

@@ -95,7 +95,7 @@ export const NOTIFICATION_PRIORITY_CONFIG = {
     border: 'border-blue-200 dark:border-blue-900',
   },
   [NotificationPriority.HIGH]: {
-    text: 'text-orange-600 dark:text-orange-400',
+    text: 'text-orange-700 dark:text-orange-400',
     bg: 'bg-orange-100 dark:bg-orange-950',
     border: 'border-orange-200 dark:border-orange-900',
   },

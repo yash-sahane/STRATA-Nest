@@ -566,7 +566,7 @@ We need a mobile app for our e-commerce business that allows customers to browse
                         details about features, requirements, and business goals.
                       </FormDescription>
                       <span
-                        className={`text-sm font-medium ${charCount >= 100 ? 'text-green-600 dark:text-green-400' : charCount >= 50 ? 'text-yellow-600 dark:text-yellow-400' : 'text-red-600 dark:text-red-400'}`}
+                        className={`text-sm font-medium ${charCount >= 100 ? 'text-green-700 dark:text-green-400' : charCount >= 50 ? 'text-yellow-700 dark:text-yellow-400' : 'text-red-600 dark:text-red-400'}`}
                       >
                         {charCount} / 100
                       </span>

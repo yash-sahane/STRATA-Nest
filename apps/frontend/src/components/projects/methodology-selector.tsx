@@ -75,7 +75,7 @@ export function MethodologySelector({
           </DialogTitle>
           <DialogDescription>
             {isChanging ? (
-              <span className="flex items-center gap-2 text-orange-600 dark:text-orange-400">
+              <span className="flex items-center gap-2 text-orange-700 dark:text-orange-400">
                 <AlertTriangle className="h-4 w-4" />
                 Changing methodology will affect how your board and workflows operate.
               </span>
@@ -156,7 +156,7 @@ export function MethodologySelector({
         {isChanging && (
           <div className="rounded-md bg-orange-50 dark:bg-orange-950 p-4 border border-orange-200 dark:border-orange-800">
             <div className="flex gap-3">
-              <AlertTriangle className="h-5 w-5 text-orange-600 dark:text-orange-400 flex-shrink-0 mt-0.5" />
+              <AlertTriangle className="h-5 w-5 text-orange-700 dark:text-orange-400 flex-shrink-0 mt-0.5" />
               <div className="text-sm space-y-1">
                 <p className="font-medium text-orange-900 dark:text-orange-100">
                   Important: Methodology Change Impact

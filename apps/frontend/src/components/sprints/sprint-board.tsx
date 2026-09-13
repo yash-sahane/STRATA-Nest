@@ -300,10 +300,14 @@ export function SprintBoard({ tasks, frs = [] }: SprintBoardProps) {
                                     </div>
                                   )}
 
+                                  {/* -700/-400 below rather than a bare -500: the row
+                                      colours the dependency COUNT as well as the icon, and
+                                      orange-500 measured 2.89:1 on the light card, under
+                                      the 4.5:1 floor for small text. */}
                                   {isTask &&
                                     ((data as Task).blockedBy?.length > 0 ||
                                       (data as Task).blocks?.length > 0) && (
-                                      <div className="flex items-center gap-1 text-orange-500">
+                                      <div className="flex items-center gap-1 text-orange-700 dark:text-orange-400">
                                         <Link2 className="h-3 w-3" />
                                         <span>
                                           {((data as Task).blockedBy?.length || 0) +

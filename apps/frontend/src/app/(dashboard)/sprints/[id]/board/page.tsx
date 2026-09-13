@@ -236,7 +236,7 @@ export default function SprintBoardPage() {
             <CardTitle className="text-sm font-medium">Completed</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-green-600 dark:text-green-400">
+            <div className="text-2xl font-bold text-green-700 dark:text-green-400">
               {stats.completed}
             </div>
             <p className="text-xs text-muted-foreground mt-1">

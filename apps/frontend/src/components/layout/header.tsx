@@ -168,9 +168,9 @@ export function Header() {
       case 'project':
         return 'bg-purple-500/10 text-purple-600 dark:text-purple-400';
       case 'epic':
-        return 'bg-orange-500/10 text-orange-600 dark:text-orange-400';
+        return 'bg-orange-500/10 text-orange-700 dark:text-orange-400';
       case 'sprint':
-        return 'bg-green-500/10 text-green-600 dark:text-green-400';
+        return 'bg-green-500/10 text-green-700 dark:text-green-400';
       case 'requirement':
         return 'bg-pink-500/10 text-pink-600 dark:text-pink-400';
       default:

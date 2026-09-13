@@ -390,11 +390,11 @@ export function AttendanceCalendar() {
         {attendanceData && attendanceData.length > 0 && (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-4 border-t">
             <div className="text-center">
-              <p className="text-2xl font-bold text-green-600 dark:text-green-400">{monthSummary.present}</p>
+              <p className="text-2xl font-bold text-green-700 dark:text-green-400">{monthSummary.present}</p>
               <p className="text-xs text-muted-foreground">Present Days</p>
             </div>
             <div className="text-center">
-              <p className="text-2xl font-bold text-orange-600 dark:text-orange-400">{monthSummary.late}</p>
+              <p className="text-2xl font-bold text-orange-700 dark:text-orange-400">{monthSummary.late}</p>
               <p className="text-xs text-muted-foreground">Late Days</p>
             </div>
             <div className="text-center">

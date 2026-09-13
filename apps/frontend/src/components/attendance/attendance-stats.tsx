@@ -84,9 +84,9 @@ export function AttendanceStats({ year, month }: AttendanceStatsProps) {
 
   // Determine attendance rate color
   const getRateColor = (rate: number) => {
-    if (rate >= 95) return 'text-green-600 dark:text-green-400';
+    if (rate >= 95) return 'text-green-700 dark:text-green-400';
     if (rate >= 85) return 'text-blue-600 dark:text-blue-400';
-    if (rate >= 75) return 'text-orange-600 dark:text-orange-400';
+    if (rate >= 75) return 'text-orange-700 dark:text-orange-400';
     return 'text-red-600 dark:text-red-400';
   };
 
@@ -186,13 +186,13 @@ export function AttendanceStats({ year, month }: AttendanceStatsProps) {
               <div className="flex items-center gap-1 text-xs">
                 {averageWorkHours >= 8 ? (
                   <>
-                    <CheckCircle className="h-3 w-3 text-green-600 dark:text-green-400" />
-                    <span className="text-green-600 dark:text-green-400">Meeting target</span>
+                    <CheckCircle className="h-3 w-3 text-green-700 dark:text-green-400" />
+                    <span className="text-green-700 dark:text-green-400">Meeting target</span>
                   </>
                 ) : (
                   <>
-                    <AlertCircle className="h-3 w-3 text-orange-600 dark:text-orange-400" />
-                    <span className="text-orange-600 dark:text-orange-400">Below 8h/day</span>
+                    <AlertCircle className="h-3 w-3 text-orange-700 dark:text-orange-400" />
+                    <span className="text-orange-700 dark:text-orange-400">Below 8h/day</span>
                   </>
                 )}
               </div>
@@ -211,9 +211,9 @@ export function AttendanceStats({ year, month }: AttendanceStatsProps) {
               <div
                 className={`text-3xl font-bold ${
                   lateDays === 0
-                    ? 'text-green-600 dark:text-green-400'
+                    ? 'text-green-700 dark:text-green-400'
                     : lateDays <= 2
-                      ? 'text-orange-600 dark:text-orange-400'
+                      ? 'text-orange-700 dark:text-orange-400'
                       : 'text-red-600 dark:text-red-400'
                 }`}
               >
@@ -263,9 +263,9 @@ export function AttendanceStats({ year, month }: AttendanceStatsProps) {
               <div
                 className={`text-3xl font-bold ${
                   absentDays === 0
-                    ? 'text-green-600 dark:text-green-400'
+                    ? 'text-green-700 dark:text-green-400'
                     : absentDays <= 1
-                      ? 'text-orange-600 dark:text-orange-400'
+                      ? 'text-orange-700 dark:text-orange-400'
                       : 'text-red-600 dark:text-red-400'
                 }`}
               >
@@ -315,15 +315,15 @@ export function AttendanceStats({ year, month }: AttendanceStatsProps) {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div className="space-y-1">
                 <p className="text-sm text-muted-foreground">Present Days</p>
-                <p className="text-2xl font-bold text-green-600 dark:text-green-400">{analytics.presentDays}</p>
+                <p className="text-2xl font-bold text-green-700 dark:text-green-400">{analytics.presentDays}</p>
               </div>
               <div className="space-y-1">
                 <p className="text-sm text-muted-foreground">Late Days</p>
-                <p className="text-2xl font-bold text-orange-600 dark:text-orange-400">{analytics.lateDays}</p>
+                <p className="text-2xl font-bold text-orange-700 dark:text-orange-400">{analytics.lateDays}</p>
               </div>
               <div className="space-y-1">
                 <p className="text-sm text-muted-foreground">Half Days</p>
-                <p className="text-2xl font-bold text-yellow-600 dark:text-yellow-400">{analytics.halfDays}</p>
+                <p className="text-2xl font-bold text-yellow-700 dark:text-yellow-400">{analytics.halfDays}</p>
               </div>
               <div className="space-y-1">
                 <p className="text-sm text-muted-foreground">Leave Days</p>

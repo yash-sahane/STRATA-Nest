@@ -79,11 +79,11 @@ export function TeamAttendanceTab() {
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'PRESENT':
-        return <CheckCircle className="h-4 w-4 text-green-600 dark:text-green-400" />;
+        return <CheckCircle className="h-4 w-4 text-green-700 dark:text-green-400" />;
       case 'ABSENT':
         return <XCircle className="h-4 w-4 text-red-600 dark:text-red-400" />;
       case 'LATE':
-        return <Clock className="h-4 w-4 text-orange-600 dark:text-orange-400" />;
+        return <Clock className="h-4 w-4 text-orange-700 dark:text-orange-400" />;
       case 'ON_LEAVE':
         return <Calendar className="h-4 w-4 text-blue-600 dark:text-blue-400" />;
       default:
@@ -155,10 +155,10 @@ export function TeamAttendanceTab() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">Present</CardTitle>
-              <CheckCircle className="h-4 w-4 text-green-600 dark:text-green-400" />
+              <CheckCircle className="h-4 w-4 text-green-700 dark:text-green-400" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-green-600 dark:text-green-400">{analytics.presentCount}</div>
+              <div className="text-2xl font-bold text-green-700 dark:text-green-400">{analytics.presentCount}</div>
               <p className="text-xs text-muted-foreground">
                 {!analytics.isWorkingDay
                   ? 'Non-working day'
@@ -297,7 +297,7 @@ export function TeamAttendanceTab() {
                             </div>
                           )}
                         {(member.attendance.lateMinutes ?? 0) > 0 && (
-                          <div className="text-xs text-orange-600 dark:text-orange-400">
+                          <div className="text-xs text-orange-700 dark:text-orange-400">
                             Late by {formatMinutes(member.attendance.lateMinutes ?? 0)}
                           </div>
                         )}
