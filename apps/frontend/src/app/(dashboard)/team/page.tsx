@@ -5,6 +5,7 @@ import { ErrorState } from '@/components/ui/error-state';
 import * as React from 'react';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
+import { useWorkspaceMembersRealtime } from '@/hooks/use-realtime';
 import { useWorkspaceTasks } from '@/hooks/use-task';
 import {
   useTeamMembers,
@@ -87,6 +88,8 @@ import { getInitials } from '@/lib/utils';
 export default function TeamPage() {
   const { user } = useAuth();
   const { currentWorkspace, isLoading: workspacesLoading } = useCurrentWorkspace();
+  // Realtime: a member joining or leaving left both workload panels stale.
+  useWorkspaceMembersRealtime(currentWorkspace?.id);
 
   const {
     data: teamMembers = [],

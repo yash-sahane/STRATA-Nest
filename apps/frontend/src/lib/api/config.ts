@@ -26,6 +26,7 @@ export const COLLECTIONS = {
   SAVED_SEARCHES: 'saved_searches',
   TIME_ENTRIES: 'time_entries',
   ACTIVE_TIMERS: 'active_timers',
+  FILES: 'files',
   JOIN_REQUESTS: 'join_requests',
   EMAIL_INVITATIONS: 'email_invitations',
   INVITE_CODES: 'invite_codes',

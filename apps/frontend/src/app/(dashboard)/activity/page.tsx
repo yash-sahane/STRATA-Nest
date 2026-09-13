@@ -5,6 +5,7 @@ import { PageLoader } from '@/components/ui/page-loader';
 
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
+import { useActivityLogsRealtime } from '@/hooks/use-realtime';
 import { ActivityFeed } from '@/components/activity/activity-feed';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Activity } from 'lucide-react';
@@ -22,6 +23,8 @@ import { Activity } from 'lucide-react';
 export default function ActivityPage() {
   const { user } = useAuth();
   const { currentWorkspace, isLoading: workspacesLoading } = useCurrentWorkspace();
+  // Realtime: an audit feed that only updates on refresh defeats its own purpose.
+  useActivityLogsRealtime(currentWorkspace?.id);
 
   if (!user) {
     return (

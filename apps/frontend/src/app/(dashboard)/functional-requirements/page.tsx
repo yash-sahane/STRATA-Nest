@@ -16,6 +16,7 @@ import * as React from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
+import { useFunctionalRequirementsRealtime } from '@/hooks/use-realtime';
 import { useProjects } from '@/hooks/use-project';
 import {
   useFunctionalRequirement,
@@ -67,6 +68,8 @@ function FunctionalRequirementsPageContent() {
   const canDeleteFR = useHasPermission(Permission.DELETE_FUNCTIONAL_REQUIREMENT);
 
   const [selectedProjectId, setSelectedProjectId] = React.useState<string>('');
+  // Realtime for this list.
+  useFunctionalRequirementsRealtime(selectedProjectId);
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
   // Hold the id, not a snapshot: an object captured here never sees the refetch
   // that follows a save, so the dialog kept rendering stale values.

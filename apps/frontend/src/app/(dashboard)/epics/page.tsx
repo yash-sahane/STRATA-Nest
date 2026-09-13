@@ -3,6 +3,7 @@
 import * as React from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useCreateActionParam } from '@/hooks/use-create-action-param';
+import { useEpicsRealtime } from '@/hooks/use-realtime';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useProjects } from '@/hooks/use-project';
@@ -47,6 +48,8 @@ function EpicsPageContent() {
   const canEditEpic = useHasPermission(Permission.EDIT_EPIC);
 
   const [selectedProjectId, setSelectedProjectId] = React.useState<string>('');
+  // Realtime: an epic deleted by a teammate used to stay on this page until a refresh.
+  useEpicsRealtime(selectedProjectId);
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
   // The ID, never the row. Holding the Epic OBJECT froze the open detail dialog
   // at the snapshot it was opened with: after an edit saved, the invalidated

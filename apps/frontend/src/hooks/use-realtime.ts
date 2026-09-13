@@ -171,3 +171,92 @@ export function useAttendanceRealtime(workspaceId?: string) {
     !!workspaceId
   );
 }
+
+/**
+ * Epics.
+ *
+ * Roots: use-epic keys on ['epics', projectId] and ['epic', epicId]; an epic
+ * write also shifts the requirement and task rollups the same hook invalidates,
+ * so those go too.
+ *
+ * There was no epics subscription at all, though the server has always broadcast
+ * them — so an epic deleted by a teammate stayed on an open /epics page and
+ * clicking its card then failed against a record that no longer existed.
+ */
+export function useEpicsRealtime(projectId?: string) {
+  useCollectionSubscription(
+    COLLECTIONS.EPICS,
+    ['epics', 'epic', 'functional-requirements', 'tasks'],
+    !!projectId
+  );
+}
+
+/**
+ * Client requirements.
+ * Roots: use-client-requirement keys on ['client-requirements', …] and
+ * ['client-requirement', id], and a requirement write moves its FR/epic rollups.
+ */
+export function useClientRequirementsRealtime(projectId?: string) {
+  useCollectionSubscription(
+    COLLECTIONS.CLIENT_REQUIREMENTS,
+    ['client-requirements', 'client-requirement', 'functional-requirements', 'epics'],
+    !!projectId
+  );
+}
+
+/**
+ * Functional requirements.
+ * Roots: use-functional-requirement keys on ['functional-requirements', …],
+ * ['functional-requirement', id], plus the epic/task links it invalidates.
+ */
+export function useFunctionalRequirementsRealtime(projectId?: string) {
+  useCollectionSubscription(
+    COLLECTIONS.FUNCTIONAL_REQUIREMENTS,
+    ['functional-requirements', 'functional-requirement', 'epics', 'tasks'],
+    !!projectId
+  );
+}
+
+/**
+ * Time entries and the running timer.
+ * Roots: use-time-entry keys on ['time-entries', …] and ['active-timer', …]. The
+ * timer matters most: started on one device it was invisible on another until a
+ * manual refresh.
+ */
+export function useTimeEntriesRealtime(workspaceId?: string) {
+  useCollectionSubscription(
+    COLLECTIONS.TIME_ENTRIES,
+    ['time-entries', 'active-timer'],
+    !!workspaceId
+  );
+}
+
+/**
+ * Uploaded files. Root: use-file keys on ['files', …].
+ */
+export function useFilesRealtime(workspaceId?: string) {
+  useCollectionSubscription(COLLECTIONS.FILES, ['files'], !!workspaceId);
+}
+
+/**
+ * The activity feed. Root: activity-feed keys on ['activity-logs', workspaceId].
+ * An audit trail that only updates on refresh is the one list where being live
+ * is the entire point.
+ */
+export function useActivityLogsRealtime(workspaceId?: string) {
+  useCollectionSubscription(COLLECTIONS.ACTIVITY_LOGS, ['activity-logs'], !!workspaceId);
+}
+
+/**
+ * Workspace membership.
+ * Roots: use-team keys on ['team-members', wsId], ['team-member', id] and
+ * ['member-task-counts', wsId] — the last one feeds both workload panels on
+ * /team, so a member joining or leaving used to leave both of them stale.
+ */
+export function useWorkspaceMembersRealtime(workspaceId?: string) {
+  useCollectionSubscription(
+    COLLECTIONS.WORKSPACE_MEMBERS,
+    ['team-members', 'team-member', 'member-task-counts'],
+    !!workspaceId
+  );
+}

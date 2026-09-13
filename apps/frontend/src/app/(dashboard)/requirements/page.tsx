@@ -4,6 +4,7 @@ import * as React from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
+import { useClientRequirementsRealtime } from '@/hooks/use-realtime';
 import { useProjects } from '@/hooks/use-project';
 import { useClientRequirements } from '@/hooks/use-client-requirement';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -75,6 +76,8 @@ function RequirementsPageContent() {
   const canDeleteRequirement = useHasPermission(Permission.DELETE_REQUIREMENT);
 
   const [selectedProjectId, setSelectedProjectId] = React.useState<string>('');
+  // Realtime for this list.
+  useClientRequirementsRealtime(selectedProjectId);
   const [searchQuery, setSearchQuery] = React.useState('');
   const [statusFilter, setStatusFilter] = React.useState<RequirementStatus | 'ALL'>('ALL');
   const [priorityFilter, setPriorityFilter] = React.useState<RequirementPriority | 'ALL'>('ALL');

@@ -20,6 +20,7 @@ import { ManualTimeEntryDialog } from '@/components/time-tracking/manual-time-en
 import { RejectTimeEntryDialog } from '@/components/time-tracking/reject-time-entry-dialog';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
+import { useTimeEntriesRealtime } from '@/hooks/use-realtime';
 import { useConfirm } from '@/components/providers/confirm-provider';
 import { useHasPermission } from '@/hooks/use-permissions';
 import { Permission } from '@/lib/permissions';
@@ -39,6 +40,8 @@ const STATUS_FILTERS = ['ALL', 'PENDING', 'APPROVED', 'REJECTED'] as const;
 export default function TimeTrackingPage() {
   const { user } = useAuth();
   const { currentWorkspace, isLoading: workspaceLoading } = useCurrentWorkspace();
+  // Realtime: a timer started on another device was invisible here until a refresh.
+  useTimeEntriesRealtime(currentWorkspace?.id);
   const confirm = useConfirm();
   const canApprove = useHasPermission(Permission.APPROVE_TIME);
 
