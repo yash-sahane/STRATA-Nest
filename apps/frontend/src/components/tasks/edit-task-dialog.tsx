@@ -36,6 +36,11 @@ import { X } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import type { Task, TaskStatus } from '@/types';
 import { TeamMemberSelector } from '../tasks/team-member-selector';
+import { getPriorityConfig, type Priority } from '@/lib/semantic/priority';
+import { cn } from '@/lib/utils';
+
+/** Most-urgent-last, matching the order these pickers have always shown. */
+const PRIORITY_OPTIONS: readonly Priority[] = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
 
 const LABEL_COLORS = [
   { name: 'Red', value: 'red', class: 'bg-red-500' },
@@ -310,26 +315,25 @@ export function EditTaskDialog({
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="LOW">
-                          <span className="flex items-center gap-2">
-                            <span className="text-green-500">●</span> Low
-                          </span>
-                        </SelectItem>
-                        <SelectItem value="MEDIUM">
-                          <span className="flex items-center gap-2">
-                            <span className="text-yellow-500">●</span> Medium
-                          </span>
-                        </SelectItem>
-                        <SelectItem value="HIGH">
-                          <span className="flex items-center gap-2">
-                            <span className="text-orange-500">●</span> High
-                          </span>
-                        </SelectItem>
-                        <SelectItem value="CRITICAL">
-                          <span className="flex items-center gap-2">
-                            <span className="text-red-500">●</span> Critical
-                          </span>
-                        </SelectItem>
+                        {/* Dots and labels come from lib/semantic/priority.ts, the same
+                            resolver that paints the badge this task wears once it exists.
+                            The hand-written map here contradicted it -- LOW green against
+                            neutral, MEDIUM yellow against info -- which is the exact
+                            divergence that module's docstring says it replaced, so the
+                            picker disagreed with the board. Three of the four glyphs also
+                            measured under 3:1 on a light card (yellow 1.91:1), so the one
+                            graphic this control exists to show was barely visible. */}
+                        {PRIORITY_OPTIONS.map((value) => {
+                          const priority = getPriorityConfig(value);
+                          return (
+                            <SelectItem key={value} value={value}>
+                              <span className="flex items-center gap-2">
+                                <span className={cn('h-2 w-2 rounded-full', priority.dot)} />
+                                {priority.label}
+                              </span>
+                            </SelectItem>
+                          );
+                        })}
                       </SelectContent>
                     </Select>
                     <FormMessage />
