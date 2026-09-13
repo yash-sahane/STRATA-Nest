@@ -114,7 +114,39 @@ const getNotificationColor = (type: NotificationType) => {
  * anywhere to go.
  */
 function navigationUrlFor(notification: Notification): string | null {
-  const { type, relatedEntityType, relatedEntityId, projectId } = notification;
+  const { relatedEntityId, projectId } = notification;
+
+  /**
+   * Normalise before matching, exactly as the preferences service does.
+   *
+   * Every branch below is written in SCREAMING_SNAKE, and the server's
+   * NotifiableEvent map emits snake_case (`leave_approved`, `workspace_member_added`)
+   * with relatedEntityType to match (`leave_request`, `workspace`). None of the
+   * nine types this app actually produces matched anything — `leave_approved` does
+   * not start with `LEAVE_` — so notification rows led nowhere, and the
+   * relatedEntityType fallback was dead code for entity types the server never
+   * sends. notification-preferences.service documents this same dual spelling and
+   * fixes it the same way.
+   */
+  const type = (notification.type ?? '').trim().toUpperCase();
+  const relatedEntityType = (notification.relatedEntityType ?? '').trim().toUpperCase();
+
+  // The entity types the server really emits. Kept ahead of the legacy switch
+  // below so the real cases are the ones a reader sees first.
+  if (relatedEntityType === 'WORKSPACE') {
+    // relatedEntityId is the workspaceId. There is no per-workspace route, so the
+    // switcher is the honest destination for "you were added" / "your role changed".
+    return '/workspaces';
+  }
+  if (relatedEntityType === 'JOIN_REQUEST') {
+    return '/workspaces';
+  }
+  if (relatedEntityType === 'LEAVE_REQUEST') {
+    return '/leave';
+  }
+  if (relatedEntityType === 'TIME_ENTRY') {
+    return '/time-tracking';
+  }
 
   // Task-related notifications
   if (
