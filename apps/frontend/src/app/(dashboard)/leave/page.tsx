@@ -76,9 +76,23 @@ export default function LeavePage() {
 
   // A request can be withdrawn while it has not started and has not been
   // decided against; the server restores any deducted balance.
-  const isCancellable = (leave: LeaveRequest) =>
-    (leave.status === 'PENDING' || leave.status === 'APPROVED') &&
-    parseDateOnly(leave.startDate) >= parseDateOnly(todayDateOnly());
+  /**
+   * A PENDING request can always be withdrawn; an APPROVED one only before it
+   * starts.
+   *
+   * Both used to require `startDate >= today`, which left a pending request whose
+   * start date had passed unwithdrawable forever — nobody had approved it, the
+   * leave had not been taken, and there was no control to remove it. It also
+   * stayed approvable, so an approver could later debit the balance for days
+   * already in the past. The server enforces the same distinction.
+   */
+  const isCancellable = (leave: LeaveRequest) => {
+    if (leave.status === 'PENDING') return true;
+    return (
+      leave.status === 'APPROVED' &&
+      parseDateOnly(leave.startDate) >= parseDateOnly(todayDateOnly())
+    );
+  };
 
   // Filter team leaves (exclude own requests)
   const teamLeaveRequests = teamLeaves.filter((leave) => leave.userId !== user?.id);

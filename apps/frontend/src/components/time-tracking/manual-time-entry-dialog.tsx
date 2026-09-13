@@ -37,6 +37,16 @@ import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { parseTimeToMinutes } from '@/lib/utils/time-format';
 import type { Task, TimeEntry } from '@/types';
 
+/**
+ * Stands in for "no task" inside the Select.
+ *
+ * Radix treats an empty string as the absence of a selection and refuses a
+ * SelectItem with that value, so a genuinely optional field needs a sentinel to
+ * offer an explicit way back to none. Never leaves this component: it is mapped
+ * to '' on the way out.
+ */
+const NO_TASK = '__none__';
+
 interface ManualTimeEntryDialogProps {
   userId: string;
   userName: string;
@@ -355,14 +365,19 @@ export function ManualTimeEntryDialog({
               <div className="space-y-2">
                 <Label htmlFor="task">Task (Optional)</Label>
                 <Select
-                  value={selectedTaskId}
-                  onValueChange={setSelectedTaskId}
+                  // The sentinel exists because Radix reads value="" as "nothing
+                  // selected" and throws on a SelectItem carrying it — which is why
+                  // there was no way to un-choose a task at all, despite the label
+                  // saying the field is optional.
+                  value={selectedTaskId || NO_TASK}
+                  onValueChange={(next) => setSelectedTaskId(next === NO_TASK ? '' : next)}
                   disabled={isEditing}
                 >
                   <SelectTrigger id="task">
                     <SelectValue placeholder="Select a task" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value={NO_TASK}>No task</SelectItem>
                     {tasks?.map((task: Task) => (
                       <SelectItem key={task.id} value={task.id}>
                         {task.hierarchyId} - {task.title}

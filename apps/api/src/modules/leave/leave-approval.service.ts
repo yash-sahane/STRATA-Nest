@@ -186,8 +186,19 @@ export class LeaveApprovalService {
     }
     const today = new Date();
     const startOfToday = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
-    if (req.startDate.getTime() < startOfToday) {
-      throw new BadRequestException('Cannot cancel leave that has already started.');
+    /**
+     * "Already started" only bars an APPROVED request.
+     *
+     * Applied to a PENDING one it left the request unwithdrawable forever: nobody
+     * had approved it, the leave had not been taken, and the requester had no
+     * control to remove it. Worse, it stayed approvable — an approver could come
+     * along later and debit the balance for days already in the past.
+     *
+     * An approved request that has begun is a different thing: the leave is being
+     * taken, and un-taking it is not the requester's call.
+     */
+    if (req.status === 'APPROVED' && req.startDate.getTime() < startOfToday) {
+      throw new BadRequestException('Cannot cancel approved leave that has already started.');
     }
 
     const wasApproved = req.status === 'APPROVED';

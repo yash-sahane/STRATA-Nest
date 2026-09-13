@@ -91,13 +91,17 @@ export function CreateSprintDialog({
     }
   }, [initialData, form]);
 
-  // An already-running sprint keeps its stored start day selectable, otherwise
-  // editing it would disable the very value the form is showing.
-  const minSelectableDate = React.useMemo(() => {
-    const today = startOfDay(new Date());
-    const existing = initialData ? startOfDay(initialData.startDate) : null;
-    return existing && existing < today ? existing : today;
-  }, [initialData]);
+  /**
+   * Today, for the "this sprint has already started" hint below — NOT a floor on
+   * what can be chosen.
+   *
+   * This used to disable every day before today for a new sprint, so a team
+   * recording a sprint that began last Monday could not enter its real start
+   * date. The server checks ordering only, so the client was refusing what the
+   * API accepts. A past start is a normal thing to record; it is pointed out
+   * rather than forbidden.
+   */
+  const today = React.useMemo(() => startOfDay(new Date()), []);
 
   const handleSubmit = async (data: FormData) => {
     try {
@@ -196,13 +200,21 @@ export function CreateSprintDialog({
                           mode="single"
                           selected={field.value}
                           onSelect={field.onChange}
-                          // Compare against midnight, not `now` — calendar cells
-                          // are local midnight, so `new Date()` disables today.
-                          disabled={(date) => date < minSelectableDate}
+                          // No lower bound: a sprint may legitimately have
+                          // started before today, and the server accepts it.
                           initialFocus
                         />
                       </PopoverContent>
                     </Popover>
+                    {/* A past start is allowed — recording a sprint that has
+                        already begun is normal — so it is pointed out rather than
+                        blocked. The picker used to disable every earlier day, which
+                        made an already-running sprint impossible to enter. */}
+                    {field.value && startOfDay(field.value) < today && (
+                      <p className="text-xs text-muted-foreground">
+                        This sprint will be recorded as already started.
+                      </p>
+                    )}
                     <FormMessage />
                   </FormItem>
                 )}
@@ -241,7 +253,11 @@ export function CreateSprintDialog({
                           disabled={(date) => {
                             const startDate = form.getValues('startDate');
                             // `<`, not `<=`: the sprint may end on its start day.
-                            return startDate ? date < startDate : date < minSelectableDate;
+                            // With no start chosen there is nothing to order
+                            // against, so nothing is disabled — it used to fall
+                            // back to "not before today", which silently
+                            // reintroduced the floor this dialog just dropped.
+                            return startDate ? date < startDate : false;
                           }}
                           initialFocus
                         />
