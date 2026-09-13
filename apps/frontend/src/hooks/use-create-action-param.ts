@@ -23,7 +23,16 @@ export function useCreateActionParam(onCreate: () => void, ready = true): void {
   // Keep the latest callback without making the effect depend on its identity —
   // pages define these inline, so a dependency would re-fire it every render.
   const handler = React.useRef(onCreate);
-  handler.current = onCreate;
+  // Written in an effect, not during render. Assigning `handler.current` in the
+  // render body is a side effect in a function React is allowed to call more
+  // than once, discard, or replay — the compiler flags it, and under a discarded
+  // render it publishes a callback belonging to a tree that was never committed.
+  // Declared BEFORE the effect that reads it: React runs a component's effects in
+  // declaration order within a commit, so the ref is current by the time the
+  // consumer below runs, on the very first commit as well as later ones.
+  React.useEffect(() => {
+    handler.current = onCreate;
+  }, [onCreate]);
   // Once per arrival: opening the dialog re-renders, and the parameter is gone
   // by then, but a guard makes that ordering explicit rather than incidental.
   const consumed = React.useRef(false);
