@@ -470,6 +470,8 @@ export interface LeaveAvailability {
   isLoading: boolean;
   isError: boolean;
   error: unknown;
+  /** Retry both queries, so an error state can offer a way out of a failed load. */
+  refetch: () => void;
 }
 
 /**
@@ -507,6 +509,11 @@ export function useLeaveAvailability(workspaceId?: string, year?: number): Leave
     isLoading: balanceQuery.isLoading || commitmentsQuery.isLoading,
     isError: balanceQuery.isError || commitmentsQuery.isError,
     error: balanceQuery.error ?? commitmentsQuery.error,
+    /** Both halves, so an error state can offer a retry that actually retries. */
+    refetch: () => {
+      void balanceQuery.refetch();
+      void commitmentsQuery.refetch();
+    },
   };
 }
 

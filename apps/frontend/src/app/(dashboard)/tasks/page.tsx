@@ -87,6 +87,8 @@ function TasksPageContent() {
   const canCreateTask = useHasPermission(Permission.CREATE_TASK);
 
   const [selectedProjectId, setSelectedProjectId] = React.useState<string>(projectIdFromUrl || '');
+  /** The id a link asked for that this workspace has no such project for. */
+  const [missingProjectId, setMissingProjectId] = React.useState<string | null>(null);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = React.useState(false);
   // The command palette's "Create New Task" navigates here with ?action=create.
   useCreateActionParam(() => setIsCreateDialogOpen(true));
@@ -112,6 +114,28 @@ function TasksPageContent() {
   } | null>(null);
 
   const { data: projects, isLoading: projectsLoading } = useProjects(currentWorkspace?.id);
+
+  /**
+   * An id from the URL that names no project in this workspace.
+   *
+   * Without this the board rendered as a real-but-empty project: the bogus id went
+   * into four list calls, each answered 200 with nothing, and a stale bookmark looked
+   * exactly like a project with no work in it.
+   *
+   * Gated on `!projectsLoading` on purpose — while the list is in flight `projects` is
+   * empty and EVERY id would look invalid, which is the same "cannot tell none from
+   * not yet" mistake fixed elsewhere in this audit.
+   */
+  React.useEffect(() => {
+    if (projectsLoading || !projects) return;
+    if (!selectedProjectId) return;
+    if (projects.some((project) => project.id === selectedProjectId)) {
+      setMissingProjectId(null);
+      return;
+    }
+    setMissingProjectId(selectedProjectId);
+    setSelectedProjectId('');
+  }, [projects, projectsLoading, selectedProjectId]);
   const {
     data: tasks = [],
     isLoading: isLoadingTasks,
@@ -1137,10 +1161,26 @@ function TasksPageContent() {
       ) : (
         <div className="flex items-center justify-center h-96 border-2 border-dashed rounded-lg">
           <div className="text-center">
-            <p className="text-lg font-medium mb-2">Select a Project</p>
-            <p className="text-sm text-muted-foreground">
-              Choose a project from the dropdown to view its tasks
-            </p>
+            {/* Say WHY there is nothing selected when a link named a project this
+                workspace does not have. The board used to render as a real project
+                with no work in it, so a stale bookmark was indistinguishable from an
+                empty backlog. */}
+            {missingProjectId ? (
+              <>
+                <p className="text-lg font-medium mb-2">That project is not in this workspace</p>
+                <p className="text-sm text-muted-foreground">
+                  The link asked for a project that no longer exists here, or belongs to
+                  a different workspace. Choose one from the dropdown.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-lg font-medium mb-2">Select a Project</p>
+                <p className="text-sm text-muted-foreground">
+                  Choose a project from the dropdown to view its tasks
+                </p>
+              </>
+            )}
           </div>
         </div>
       )}

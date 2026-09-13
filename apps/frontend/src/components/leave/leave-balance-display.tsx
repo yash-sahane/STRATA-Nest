@@ -2,6 +2,7 @@
 
 import { Calendar, TrendingDown, TrendingUp } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { ErrorState } from '@/components/ui/error-state';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
@@ -32,6 +33,8 @@ export function LeaveBalanceDisplay() {
     balance: leaveBalance,
     committed,
     isLoading,
+    isError,
+    refetch,
   } = useLeaveAvailability(currentWorkspaceId || undefined);
 
   if (isLoading) {
@@ -50,6 +53,19 @@ export function LeaveBalanceDisplay() {
           </Card>
         ))}
       </div>
+    );
+  }
+
+  // A FAILED fetch is not an empty allowance. Both used to land on "No leave balance
+  // data available", so a member whose balance could not be loaded was told they had
+  // none — a different and considerably more alarming claim — with nothing to retry.
+  if (isError) {
+    return (
+      <ErrorState
+        title="Could not load your leave balance"
+        description="The request did not complete, so this is not a statement about your allowance."
+        onRetry={refetch}
+      />
     );
   }
 

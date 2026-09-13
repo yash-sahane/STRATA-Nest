@@ -397,6 +397,19 @@ export function FunctionalRequirementDetailDialog({
                   <Badge variant={complexity.badgeVariant}>{complexity.label}</Badge>
                 </div>
               </div>
+              {/* The create form REQUIRES a type and nothing ever showed it back, so
+                  every requirement was classified for no visible purpose. The grid
+                  already reserved a third column at md and above. */}
+              {requirement.type && (
+                <div>
+                  <label className="text-sm font-medium text-muted-foreground">Type</label>
+                  <div className="mt-1">
+                    <Badge variant="outline">
+                      {String(requirement.type).replace(/_/g, ' ').toLowerCase()}
+                    </Badge>
+                  </div>
+                </div>
+              )}
             </div>
 
             <Separator />
@@ -441,6 +454,53 @@ export function FunctionalRequirementDetailDialog({
                 placeholder="Select team members..."
                 multiSelect={true}
               />
+            </div>
+
+            <Separator />
+
+            {/* Implementing tasks.
+                These were already loaded — useTasksByFunctionalRequirement above —
+                and used only to push assignee changes onto them. "Which tasks
+                implement this requirement" was a question the dialog answered
+                internally and never told anybody. */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium flex items-center gap-2">
+                Implementing Tasks
+                <Badge variant="secondary">{linkedTasks.length}</Badge>
+              </label>
+              {linkedTasks.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  No tasks are linked to this requirement yet.
+                </p>
+              ) : (
+                <ul className="space-y-1">
+                  {linkedTasks.map((task) => (
+                    <li
+                      key={task.id}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-md border p-2"
+                    >
+                      <div className="flex min-w-0 items-center gap-2">
+                        <Badge variant="outline" className="font-mono text-xs shrink-0">
+                          {task.hierarchyId}
+                        </Badge>
+                        <span className="truncate text-sm">{task.title}</span>
+                      </div>
+                      <Badge
+                        variant={
+                          task.status === 'DONE'
+                            ? 'success'
+                            : task.status === 'IN_PROGRESS'
+                              ? 'default'
+                              : 'secondary'
+                        }
+                        className="shrink-0"
+                      >
+                        {task.status.replace(/_/g, ' ')}
+                      </Badge>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
 
             <Separator />
