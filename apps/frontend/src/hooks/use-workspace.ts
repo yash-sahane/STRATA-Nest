@@ -267,9 +267,24 @@ export function useJoinWorkspace() {
       // scoped to workspaces the caller is ALREADY in and does not accept an
       // `inviteCode` filter, so resolving the workspace client-side either
       // found nothing or matched an unrelated workspace.
-      return restClient.post('/api/v1/workspaces/accept-invitation/', {
-        code: data.inviteCode,
-      }) as Promise<{ success: true; workspaceId: string; role?: string }>;
+      //
+      // The endpoint takes EITHER a `code` (the workspace invite code) or a
+      // `token` (an EmailInvitation), and this posted `code` unconditionally — so
+      // somebody holding a token, which an admin can read off the pending
+      // invitations list and pass on, was told "Invalid invite code" because it
+      // was looked up as the wrong kind of secret.
+      //
+      // The two are distinguishable by shape:
+      //   code   randomBytes(8).base64url.slice(0,10).toUpperCase()  10 chars, uppercase
+      //   token  randomBytes(24).base64url                           ~32 chars, mixed case
+      // so a value that cannot be a code is offered as a token rather than
+      // refused on the caller's behalf. The server still decides.
+      const value = data.inviteCode.trim();
+      const looksLikeCode = /^[A-Z0-9_-]{1,12}$/.test(value.toUpperCase()) && value.length <= 12;
+      return restClient.post(
+        '/api/v1/workspaces/accept-invitation/',
+        looksLikeCode ? { code: value } : { token: value },
+      ) as Promise<{ success: true; workspaceId: string; role?: string }>;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['workspaces'] });

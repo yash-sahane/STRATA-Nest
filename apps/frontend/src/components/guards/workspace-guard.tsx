@@ -132,7 +132,9 @@ function WorkspaceMembershipGuard({ children }: { children: React.ReactNode }) {
                 screen offered no way to enter one — a user holding a valid code
                 had no path forward from here except asking to be added by hand. */}
             <form onSubmit={handleJoin} className="space-y-2">
-              <Label htmlFor="invite-code">Invite code</Label>
+              {/* Both kinds of secret land here — see useJoinWorkspace, which
+                  routes by shape — so the label should not promise only one. */}
+              <Label htmlFor="invite-code">Invite code or invitation link token</Label>
               <div className="flex gap-2">
                 <Input
                   id="invite-code"
