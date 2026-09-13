@@ -102,7 +102,20 @@ export class InvitationAcceptanceService {
   }
 
   private async acceptCode(user: User, code: string): Promise<JoinResult> {
-    const invite = await this.prisma.inviteCode.findUnique({ where: { code } });
+    /**
+     * Normalise before the lookup.
+     *
+     * Codes are GENERATED uppercase (`randomBytes(8).base64url.slice(0,10).toUpperCase()`)
+     * and were matched exactly, so somebody transcribing one from an e-mail in lower
+     * case — or pasting it with a stray space — was told "Invalid invite code" for a
+     * code that exists and is perfectly valid. The same reasoning as the e-mail
+     * normalisation on login: the user's spelling of a case-insensitive secret is not
+     * part of the secret.
+     *
+     * Lossless here because the stored form is already trimmed and uppercase.
+     */
+    const normalized = code.trim().toUpperCase();
+    const invite = await this.prisma.inviteCode.findUnique({ where: { code: normalized } });
     if (!invite) throw new BadRequestException('Invalid invite code');
     if (invite.expiresAt && invite.expiresAt < new Date()) throw new BadRequestException('Invite code expired');
     if (invite.maxUses !== null && invite.usedCount >= invite.maxUses) {

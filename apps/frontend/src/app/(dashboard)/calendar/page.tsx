@@ -2,11 +2,13 @@
 
 import { PageHeader } from '@/components/layout/page-header';
 import { cn } from '@/lib/utils';
+import { formatLeaveDateRange } from '@/lib/leave-utils';
 import { plural } from '@/lib/plural';
 import { toneStyle } from '@/lib/semantic/tone';
 
 import * as React from 'react';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
+import { useTeamLeaveRequests } from '@/hooks/use-leave';
 import { useProjects } from '@/hooks/use-project';
 import { useWorkspaceTasks } from '@/hooks/use-task';
 import { useWorkspaceSprints } from '@/hooks/use-sprint';
@@ -22,14 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import {
-  Calendar as CalendarIcon,
-  ChevronLeft,
-  ChevronRight,
-  Target,
-  GitBranch,
-  CheckCircle2,
-} from 'lucide-react';
+import { Calendar as CalendarIcon, CheckCircle2, ChevronLeft, ChevronRight, GitBranch, Plane, Target } from 'lucide-react';
 import {
   format,
   startOfMonth,
@@ -52,6 +47,18 @@ export default function CalendarPage() {
     useWorkspaceTasks(currentWorkspace?.id);
   const { data: sprints = [], isError: sprintsError, refetch: refetchSprints } =
     useWorkspaceSprints(currentWorkspace?.id);
+  /**
+   * Approved leave, so the calendar can say who is away.
+   *
+   * This page had no notion of leave at all, which is the single thing a team calendar
+   * is most often opened to check. APPROVED only: a pending request is a request, and
+   * drawing it here would tell the team somebody is away before anybody agreed.
+   */
+  const { data: allLeave = [] } = useTeamLeaveRequests(currentWorkspace?.id);
+  const approvedLeave = React.useMemo(
+    () => allLeave.filter((l) => l.status === 'APPROVED'),
+    [allLeave],
+  );
 
   const [selectedMonth, setSelectedMonth] = React.useState(new Date());
   const [selectedProject, setSelectedProject] = React.useState<string>('ALL');
@@ -83,7 +90,14 @@ export default function CalendarPage() {
       return dateStr >= startDate && dateStr <= endDate;
     });
 
-    return { tasks: tasksForDay, sprints: sprintsForDay };
+    // Leave spans a range, like a sprint, so a day inside it counts.
+    const leaveForDay = approvedLeave.filter((leave) => {
+      const start = String(leave.startDate).slice(0, 10);
+      const end = String(leave.endDate).slice(0, 10);
+      return dateStr >= start && dateStr <= end;
+    });
+
+    return { tasks: tasksForDay, sprints: sprintsForDay, leave: leaveForDay };
   };
 
   // Get calendar days
@@ -275,7 +289,8 @@ export default function CalendarPage() {
                   const isToday = isSameDay(day, new Date());
                   const isCurrentMonth = isSameMonth(day, selectedMonth);
                   const isSelected = selectedDay ? isSameDay(day, selectedDay) : false;
-                  const hasEvents = events.tasks.length > 0 || events.sprints.length > 0;
+                  const hasEvents =
+                    events.tasks.length > 0 || events.sprints.length > 0 || events.leave.length > 0;
 
                   return (
                     <button
@@ -299,6 +314,9 @@ export default function CalendarPage() {
                           {events.sprints.length > 0 && (
                             <div className="w-1 h-1 rounded-full bg-blue-500" />
                           )}
+                          {events.leave.length > 0 && (
+                            <div className="w-1 h-1 rounded-full bg-amber-500" />
+                          )}
                         </div>
                       )}
                     </button>
@@ -314,6 +332,10 @@ export default function CalendarPage() {
                   <div className="w-3 h-3 rounded-full bg-blue-500" />
                   <span>Sprints</span>
                 </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded-full bg-amber-500" />
+                  <span className="text-muted-foreground">Away</span>
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -328,7 +350,11 @@ export default function CalendarPage() {
               </CardTitle>
               <CardDescription>
                 {selectedDayEvents
-                  ? `${plural(selectedDayEvents.tasks.length, 'task')}, ${plural(selectedDayEvents.sprints.length, 'sprint')}`
+                  ? [
+                      plural(selectedDayEvents.tasks.length, 'task'),
+                      plural(selectedDayEvents.sprints.length, 'sprint'),
+                      plural(selectedDayEvents.leave.length, 'person', 'people') + ' away',
+                    ].join(', ')
                   : 'View events for a selected day'}
               </CardDescription>
             </CardHeader>
@@ -338,10 +364,38 @@ export default function CalendarPage() {
                   Click on a day to view events
                 </div>
               ) : !selectedDayEvents ||
-                (selectedDayEvents.tasks.length === 0 && selectedDayEvents.sprints.length === 0) ? (
+                (selectedDayEvents.tasks.length === 0 &&
+                  selectedDayEvents.sprints.length === 0 &&
+                  selectedDayEvents.leave.length === 0) ? (
                 <div className="text-center py-8 text-muted-foreground">No events on this day</div>
               ) : (
                 <div className="space-y-4">
+                  {/* Who is away. First in the panel on purpose: it is the thing a
+                      team calendar is usually opened to check, and this page showed
+                      it nowhere at all. */}
+                  {selectedDayEvents.leave.length > 0 && (
+                    <div className="space-y-2">
+                      <h3 className="text-sm font-medium flex items-center gap-2">
+                        <Plane className="h-4 w-4" />
+                        Away
+                      </h3>
+                      {selectedDayEvents.leave.map((leave) => (
+                        <div
+                          key={leave.id}
+                          className="p-3 rounded-lg border bg-amber-50 dark:bg-amber-950"
+                        >
+                          <div className="font-medium">{leave.userName || 'A team member'}</div>
+                          <div className="text-sm text-muted-foreground mt-1">
+                            {String(leave.leaveType).replace(/_/g, " ").toLowerCase()} leave
+                          </div>
+                          <div className="text-xs text-muted-foreground mt-1">
+                            {formatLeaveDateRange(leave.startDate, leave.endDate)}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   {selectedDayEvents.sprints.length > 0 && (
                     <div className="space-y-2">
                       <h3 className="text-sm font-medium flex items-center gap-2">
