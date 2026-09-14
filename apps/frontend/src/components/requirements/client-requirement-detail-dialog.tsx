@@ -322,7 +322,16 @@ export function ClientRequirementDetailDialog({
             {/* Status & Priority Controls */}
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <label className="text-sm font-medium">Status</label>
+                {/* `aria-labelledby`, not just the label text. A <label for> does not name
+                    a `button` -- button's accessible name comes from aria-labelledby,
+                    aria-label, its contents, then title -- and this trigger's only content
+                    is <SelectValue /> with no placeholder, which Radix renders from a
+                    registry populated by the SelectItems inside SelectContent. Those mount
+                    only once the select has been opened, so before first open the button
+                    was empty and axe reported it, correctly, as unnamed. */}
+                <label id="crd-status-label" htmlFor="crd-status" className="text-sm font-medium">
+                  Status
+                </label>
                 <Select
                   value={status}
                   onValueChange={(value) => {
@@ -331,7 +340,7 @@ export function ClientRequirementDetailDialog({
                   }}
                   disabled={!canEdit}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger id="crd-status" aria-labelledby="crd-status-label">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -346,7 +355,10 @@ export function ClientRequirementDetailDialog({
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm font-medium">Priority</label>
+                {/* See the note on the status select above. */}
+                <label id="crd-priority-label" htmlFor="crd-priority" className="text-sm font-medium">
+                  Priority
+                </label>
                 <Select
                   value={priority}
                   onValueChange={(value) => {
@@ -355,7 +367,7 @@ export function ClientRequirementDetailDialog({
                   }}
                   disabled={!canEdit}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger id="crd-priority" aria-labelledby="crd-priority-label">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
