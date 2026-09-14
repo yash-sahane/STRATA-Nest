@@ -55,7 +55,14 @@ export default function GlobalError({
             cursor: 'pointer',
             fontSize: '0.875rem',
             fontWeight: 500,
-            background: '#5a6fe0',
+            // White on #5a6fe0 measured 4.39:1, just under the 4.5:1 floor this
+            // 14px/500 label earns. #5468de is the same hue and saturation two
+            // points darker (hsl 231 68% 60%) and measures 4.76:1, so the button
+            // looks as designed and the label is legible. The colour is written
+            // out rather than taken from a token on purpose: this boundary
+            // replaces the whole document when the root layout throws, so global
+            // CSS and its custom properties may not be present at all.
+            background: '#5468de',
             color: '#ffffff',
           }}
         >
