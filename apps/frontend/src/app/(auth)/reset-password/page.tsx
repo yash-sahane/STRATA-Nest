@@ -135,6 +135,7 @@ function ResetPasswordContent() {
                     onClick={() =>
                       setShowPasswords({ ...showPasswords, next: !showPasswords.next })
                     }
+                    aria-label={showPasswords.next ? 'Hide new password' : 'Show new password'}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                   >
                     {showPasswords.next ? (
@@ -164,6 +165,7 @@ function ResetPasswordContent() {
                     onClick={() =>
                       setShowPasswords({ ...showPasswords, confirm: !showPasswords.confirm })
                     }
+                    aria-label={showPasswords.confirm ? 'Hide password confirmation' : 'Show password confirmation'}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                   >
                     {showPasswords.confirm ? (

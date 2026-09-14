@@ -276,6 +276,7 @@ function ChangePasswordContent() {
                   onClick={() =>
                     setShowPasswords({ ...showPasswords, current: !showPasswords.current })
                   }
+                  aria-label={showPasswords.current ? 'Hide current password' : 'Show current password'}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                 >
                   {showPasswords.current ? (
@@ -305,6 +306,7 @@ function ChangePasswordContent() {
                 <button
                   type="button"
                   onClick={() => setShowPasswords({ ...showPasswords, new: !showPasswords.new })}
+                  aria-label={showPasswords.new ? 'Hide new password' : 'Show new password'}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                 >
                   {showPasswords.new ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -344,6 +346,7 @@ function ChangePasswordContent() {
                   onClick={() =>
                     setShowPasswords({ ...showPasswords, confirm: !showPasswords.confirm })
                   }
+                  aria-label={showPasswords.confirm ? 'Hide password confirmation' : 'Show password confirmation'}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                 >
                   {showPasswords.confirm ? (

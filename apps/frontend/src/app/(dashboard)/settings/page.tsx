@@ -554,6 +554,7 @@ function SettingsPageContent() {
                       />
                       <button
                         type="button"
+                        aria-label={showPw.current ? 'Hide current password' : 'Show current password'}
                         className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                         onClick={() => setShowPw({ ...showPw, current: !showPw.current })}
                       >
@@ -581,6 +582,7 @@ function SettingsPageContent() {
                       />
                       <button
                         type="button"
+                        aria-label={showPw.next ? 'Hide new password' : 'Show new password'}
                         className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                         onClick={() => setShowPw({ ...showPw, next: !showPw.next })}
                       >
@@ -619,6 +621,7 @@ function SettingsPageContent() {
                       />
                       <button
                         type="button"
+                        aria-label={showPw.confirm ? 'Hide password confirmation' : 'Show password confirmation'}
                         className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                         onClick={() => setShowPw({ ...showPw, confirm: !showPw.confirm })}
                       >
