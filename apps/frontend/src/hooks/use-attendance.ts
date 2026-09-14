@@ -13,7 +13,11 @@ import {
   calculateAttendanceSummary,
   type AttendanceStatus,
 } from '@/lib/attendance-utils';
-import { countWorkingDaysBetween } from '@/lib/utils/working-days';
+import {
+  countWorkingDaysBetween,
+  formatDateOnly,
+  parseDateOnly,
+} from '@/lib/utils/working-days';
 import { useHolidays } from '@/hooks/use-holidays';
 import { useTeamMembers } from './use-team';
 
@@ -312,8 +316,29 @@ export function useAttendanceAnalytics(userId?: string, workspaceId?: string, ye
       // Only days that have already happened can be attended, so the rate's
       // denominator stops at today for the current month (using the whole
       // month renders a perfect record as ~26% on the 8th).
+      //
+      // And it stops BEFORE today, not at it. Today is in progress: a member who
+      // has not checked in yet at 11am has not missed the day, and counting it
+      // showed them "1 absence" and "0% — 0 of 1 day" the morning they joined,
+      // while the Calendar tab beside it said 0. The calendar was right; its
+      // `getDayStatus` marks a day ABSENT only when it is strictly before today.
+      //
+      // This adopts that same rule so the two agree by construction: a day counts
+      // if it has a record, or if it is a completed working day. Today therefore
+      // re-enters the window as soon as there IS a row for it, which is what makes
+      // checking in this morning count as present rather than vanish until
+      // tomorrow. One `periodEnd` still drives the denominator, the leave
+      // subtraction and the numerator predicate, so they cannot drift apart.
       const today = getCurrentDate();
-      const periodEnd = end < today ? end : today;
+      const lastCompletedDay = (() => {
+        const d = parseDateOnly(today);
+        d.setDate(d.getDate() - 1);
+        return formatDateOnly(d);
+      })();
+      const hasRecordToday = records.some(
+        (r: { date?: string }) => r.date && String(r.date).slice(0, 10) === today,
+      );
+      const periodEnd = end < today ? end : hasRecordToday ? today : lastCompletedDay;
       const elapsedWorkingDays =
         periodEnd < start ? 0 : countWorkingDaysBetween(start, periodEnd, holidays);
 
