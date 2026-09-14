@@ -377,7 +377,11 @@
        micro     the `hover-lift` utility below, and tooltip.tsx
        standard  dropdown-menu, select, popover
        overlay   dialog, alert-dialog
-       layout    the dashboard shell, page-container, sidebar */
+       layout    the dashboard shell, page-container, sidebar, and both progress
+                 fills (the Progress primitive and the password-strength bar, which
+                 were the last two hard-coded durations in the app -- 500ms and
+                 300ms for the same kind of bar, which is the drift this scale
+                 exists to prevent) */
   --duration-micro: 120ms;
   --duration-standard: 180ms;
   --duration-overlay: 240ms;

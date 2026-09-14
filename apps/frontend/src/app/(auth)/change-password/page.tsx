@@ -316,7 +316,7 @@ function ChangePasswordContent() {
                 <div className="space-y-2">
                   <div className="flex h-2 overflow-hidden rounded-full bg-muted">
                     <div
-                      className={`transition-all duration-300 ${passwordStrength.color}`}
+                      className={`transition-all duration-(--duration-layout) ${passwordStrength.color}`}
                       style={{ width: `${(passwordStrength.score / 6) * 100}%` }}
                     />
                   </div>
