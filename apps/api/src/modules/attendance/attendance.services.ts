@@ -22,6 +22,7 @@ import type {
   UpdateHolidayDto,
 } from './dto';
 import { attendanceResponse, holidayResponse } from './mappers';
+import { businessDayMarker } from '@strata/config';
 
 /**
  * The server's LOCAL calendar day, stored as UTC midnight. The `date` column is
@@ -31,10 +32,7 @@ import { attendanceResponse, holidayResponse } from './mappers';
  * it back unshifted. Day-level rules (isWeekend) then read this marker's UTC
  * parts, so they describe exactly the day the row is filed under.
  */
-const todayUtc = (): Date => {
-  const now = new Date();
-  return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
-};
+const todayUtc = (): Date => businessDayMarker();
 
 /** Manager-level HR marker. Attendance rows are personal, so a caller may only
  *  file/read/alter someone else's with the workspace's HR-approver permission. */

@@ -17,6 +17,7 @@ import { PasswordService } from './services/password.service';
 import { PasswordResetStore } from './services/password-reset.store';
 import { RefreshTokenStore } from './services/refresh-token.store';
 import { TokenService } from './services/token.service';
+import { businessTimezone } from '@strata/config';
 
 export interface SessionTokens {
   access: string;
@@ -168,6 +169,7 @@ export class AuthService {
     workspaceIds: string[];
     hasTempPassword: boolean;
     isAdmin: boolean;
+    businessTimezone: string;
   }> {
     // The /me endpoint intentionally queries memberships WITHOUT a status filter, so a user sees every workspace they belong to regardless of membership state.
     const rows = await this.prisma.workspaceMember.findMany({
@@ -180,6 +182,11 @@ export class AuthService {
       workspaceIds: rows.map((r) => r.workspaceId),
       hasTempPassword: user.hasTempPassword,
       isAdmin: user.isAdminFlag || user.isSuperuser,
+      // The zone this server files attendance days in. The browser derives "today" from
+      // this rather than from its own clock: the two used to disagree, and a member in
+      // Pacific/Midway saw their check-in land on a day their own calendar called
+      // tomorrow — absent from the calendar, and outside the attendance-rate window.
+      businessTimezone: businessTimezone(),
     };
   }
 

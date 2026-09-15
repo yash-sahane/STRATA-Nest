@@ -31,9 +31,52 @@ export function parseDateOnly(value: string): Date {
   return new Date(year, (month || 1) - 1, day || 1);
 }
 
-/** Today's LOCAL calendar date as 'YYYY-MM-DD'. */
+/**
+ * The zone the SERVER files days in, reported by `/auth/me`.
+ *
+ * Null until that response lands, and on an API that does not send it — in both cases
+ * the browser's own date is used, which is what this always did.
+ *
+ * A module-level value rather than React state because `todayDateOnly()` is called from
+ * pure helpers (this file, attendance-utils, leave-utils) that have no hooks.
+ */
+let businessTimeZone: string | null = null;
+
+/** Called once when `/auth/me` resolves. See setBusinessTimeZone's caller in auth-client. */
+export function setBusinessTimeZone(timeZone: string | null | undefined): void {
+  businessTimeZone = timeZone && timeZone.trim() ? timeZone.trim() : null;
+}
+
+/** What the app currently believes the business zone to be, for diagnostics. */
+export function getBusinessTimeZone(): string | null {
+  return businessTimeZone;
+}
+
+/**
+ * Today's calendar date as 'YYYY-MM-DD', in the zone the SERVER files days in.
+ *
+ * This used to be the BROWSER's local date, and the two disagree for anyone not sharing
+ * the server's timezone: a member in Pacific/Midway checked in and the row was filed
+ * under a day their own calendar called tomorrow — so the calendar showed nothing on the
+ * day they were living in, and the row fell outside the attendance-rate window entirely.
+ *
+ * Falls back to the browser's date while the zone is unknown, which is the previous
+ * behaviour and correct for everyone in the server's own region.
+ */
 export function todayDateOnly(): string {
-  return formatDateOnly(new Date());
+  if (!businessTimeZone) return formatDateOnly(new Date());
+  try {
+    // `en-CA` short format IS ISO order.
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: businessTimeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date());
+  } catch {
+    // An unrecognised zone must not take the app down over a date label.
+    return formatDateOnly(new Date());
+  }
 }
 
 /** Week of the month (1-5) a date falls in. */

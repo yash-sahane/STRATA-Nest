@@ -1,5 +1,6 @@
 import { restClient } from './rest-client';
 import type { ApiModels } from './types';
+import { setBusinessTimeZone } from '@/lib/utils/working-days';
 
 interface AuthMeResponse {
   user: ApiModels.User;
@@ -7,6 +8,9 @@ interface AuthMeResponse {
   workspaceIds: string[];
   hasTempPassword: boolean;
   isAdmin: boolean;
+  /** The IANA zone the server files attendance days in. Optional: an older API omits it,
+   *  and the date helpers fall back to the browser's own date when it is absent. */
+  businessTimezone?: string;
 }
 
 let cachedUser: ApiModels.User | null = null;
@@ -14,6 +18,11 @@ let cachedSession: ApiModels.Session | null = null;
 
 async function loadMe(): Promise<AuthMeResponse> {
   const me = await restClient.get('/api/v1/auth/me/') as AuthMeResponse;
+  // Before anything reads a date: the calendar, the attendance rate and the leave forms
+  // all ask `todayDateOnly()` which day it is, and it answered with the BROWSER's date
+  // while the server filed rows against its own. A member outside the server's timezone
+  // saw their check-in land on a day their calendar called tomorrow.
+  setBusinessTimeZone(me.businessTimezone);
   cachedUser = {
     id: me.user.id,
     email: me.user.email,
