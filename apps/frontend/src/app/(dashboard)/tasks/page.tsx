@@ -58,6 +58,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import type { Task, TaskStatus } from '@/types';
 import { useIsAdmin, useHasPermission, useHasPermissionResolved } from '@/hooks/use-permissions';
 import { Permission } from '@/lib/permissions';
+import { changedFields } from '@/lib/utils/changed-fields';
 
 // The two halves of the Manual-order notice, shared by the banner and the live
 // region that announces it, so they can never drift apart.
@@ -725,11 +726,18 @@ function TasksPageContent() {
   const handleEditTask = async (values: any) => {
     if (!selectedTask || !selectedProjectId) return;
 
-    await updateTask.mutateAsync({
-      taskId: selectedTask.id,
-      projectId: selectedProjectId,
-      canMarkDone,
-      updates: {
+    // Assembled in full, then narrowed to what actually changed.
+    //
+    // This form submits every field regardless of which one was touched, and the API's
+    // update is a plain `prisma.update` with no version column — so a save used to carry
+    // values that were already stale when the dialog opened and overwrite somebody else's
+    // work. Measured: B set priority CRITICAL while A was typing a new title; A saved and
+    // priority went back to LOW, with no error shown to either of them.
+    //
+    // The normalisation below is load-bearing and unchanged — a cleared due date must
+    // still travel as null and "No epic" as '' — and a cleared field still differs from
+    // what was there, so it is still sent.
+    const submitted = {
         title: values.title,
         description: values.description,
         status: values.status,
@@ -747,8 +755,27 @@ function TasksPageContent() {
         labels: values.labels || [],
         assigneeIds: values.assigneeIds || [],
         assignedTo: values.assigneeIds || [],
-      },
-    });
+    };
+
+    // `selectedTask` is the snapshot the dialog opened with, which is exactly the right
+    // baseline: it is what A believed the task to be, so the diff is what A meant to
+    // change. A field A never touched compares equal to its own original, is not sent at
+    // all, and therefore cannot overwrite a concurrent change to it.
+    const updates = changedFields(
+      selectedTask as unknown as Record<string, unknown>,
+      submitted as Record<string, unknown>,
+    );
+
+    // Nothing changed: skip the round trip rather than writing the record back over
+    // itself, which would bump `updatedAt` and log an audit entry for a non-event.
+    if (Object.keys(updates).length > 0) {
+      await updateTask.mutateAsync({
+        taskId: selectedTask.id,
+        projectId: selectedProjectId,
+        canMarkDone,
+        updates: updates as Parameters<typeof updateTask.mutateAsync>[0]['updates'],
+      });
+    }
 
     setIsEditDialogOpen(false);
     setSelectedTask(null);

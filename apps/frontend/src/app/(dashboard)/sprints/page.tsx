@@ -31,6 +31,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { PageLoader, InlineLoader } from '@/components/ui/page-loader';
 import { useRouter } from 'next/navigation';
 import { useCreateActionParam } from '@/hooks/use-create-action-param';
+import { changedFields } from '@/lib/utils/changed-fields';
 
 export default function SprintsPage() {
   const router = useRouter();
@@ -132,15 +133,23 @@ export default function SprintsPage() {
   }) => {
     if (!editingSprint) return;
 
-    await updateSprint.mutateAsync({
-      sprintId: editingSprint.id,
-      updates: {
+    // Only what changed — see changedFields. Submitting the whole form over an update
+    // with no version check overwrote concurrent edits to fields nobody had touched.
+    const updates = changedFields(
+      editingSprint as unknown as Record<string, unknown>,
+      {
         name: data.name,
         goal: data.goal,
         startDate: data.startDate,
         endDate: data.endDate,
-      },
-    });
+      } as Record<string, unknown>,
+    );
+    if (Object.keys(updates).length > 0) {
+      await updateSprint.mutateAsync({
+        sprintId: editingSprint.id,
+        updates: updates as { name: string; goal: string; startDate: string; endDate: string },
+      });
+    }
 
     setEditingSprint(null);
   };

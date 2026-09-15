@@ -72,6 +72,7 @@ import { useRouter } from 'next/navigation';
 import type { ProjectStatus, Project } from '@/types';
 import { useHasPermission, useIsAdmin } from '@/hooks/use-permissions';
 import { Permission } from '@/lib/permissions';
+import { changedFields } from '@/lib/utils/changed-fields';
 
 export default function ProjectsPage() {
   const { user } = useAuth();
@@ -137,9 +138,7 @@ export default function ProjectsPage() {
     if (!selectedProject || !currentWorkspace) return;
 
     try {
-      await updateProject.mutateAsync({
-        projectId: selectedProject.id,
-        workspaceId: currentWorkspace.id,
+      const submitted = {
         name: values.name,
         description: values.description,
         clientName: values.clientName,
@@ -150,6 +149,21 @@ export default function ProjectsPage() {
         // field and the date the user had just removed came straight back.
         startDate: values.startDate ? format(values.startDate, 'yyyy-MM-dd') : null,
         endDate: values.endDate ? format(values.endDate, 'yyyy-MM-dd') : null,
+      };
+      // Only what changed — see changedFields. The identity fields below are not part of
+      // the diff; they address the record rather than alter it.
+      const changes = changedFields(
+        selectedProject as unknown as Record<string, unknown>,
+        submitted as Record<string, unknown>,
+      );
+      if (Object.keys(changes).length === 0) {
+        setEditDialogOpen(false);
+        return;
+      }
+      await updateProject.mutateAsync({
+        projectId: selectedProject.id,
+        workspaceId: currentWorkspace.id,
+        ...(changes as Partial<typeof submitted>),
       });
     } catch {
       return; // error toast handled inside the mutation

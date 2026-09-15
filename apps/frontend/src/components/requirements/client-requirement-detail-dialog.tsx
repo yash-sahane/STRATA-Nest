@@ -44,6 +44,7 @@ import {
 } from '@/hooks/use-client-requirement';
 import { ApiError } from '@/lib/api/rest-client';
 import type { RequirementPriority, RequirementStatus } from '@/types';
+import { changedFields } from '@/lib/utils/changed-fields';
 
 /** Server copy ends with developer instructions; the UI offers the button instead. */
 const stripCascadeHint = (message: string) =>
@@ -200,16 +201,28 @@ export function ClientRequirementDetailDialog({
   const handleSave = async () => {
     if (!isValid) return;
     try {
-      await updateRequirement.mutateAsync({
-        requirementId: requirement.id,
-        projectId,
-        updates: {
+      // Only what changed — see changedFields. This dialog holds every field in local
+      // state seeded when it opened, so saving after someone else edited a different
+      // field used to write the stale value back over theirs, silently.
+      const updates = changedFields(
+        requirement as unknown as Record<string, unknown>,
+        {
           title: title.trim(),
           description: description.trim(),
           status,
           priority,
-        },
-      });
+        } as Record<string, unknown>,
+      );
+      if (Object.keys(updates).length > 0) {
+        await updateRequirement.mutateAsync({
+          requirementId: requirement.id,
+          projectId,
+          updates: updates as {
+            title: string; description: string;
+            status: RequirementStatus; priority: RequirementPriority;
+          },
+        });
+      }
     } catch {
       return; // onError already toasted; keep the dialog open with the edits intact
     }

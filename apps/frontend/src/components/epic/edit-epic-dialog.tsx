@@ -33,6 +33,7 @@ import {
 import { useUpdateEpic } from '@/hooks/use-epic';
 import { useClientRequirements } from '@/hooks/use-client-requirement';
 import type { Epic } from '@/types';
+import { changedFields } from '@/lib/utils/changed-fields';
 
 /**
  * The same fields the create dialog owns — deliberately NOT status or progress.
@@ -94,21 +95,34 @@ export function EditEpicDialog({ open, onOpenChange, epic }: EditEpicDialogProps
 
   const onSubmit = async (values: FormData) => {
     try {
+      const submitted = {
+        name: values.name.trim(),
+        description: values.description ?? '',
+        requirementId: values.requirementId || '',
+        // '' — never `undefined` — for an emptied date field. `undefined` is
+        // dropped by JSON.stringify, so clearing a date sent no key at all:
+        // the PATCH succeeded, the toast said so, and the epic kept the date
+        // forever. The API maps '' to null (toDate in @strata/common), which
+        // is how a date is actually removed.
+        startDate: values.startDate ?? '',
+        endDate: values.endDate ?? '',
+      };
+      // Only what changed. This form submits every field, and the API's update has no
+      // version check — so a save used to carry values that were stale from the moment
+      // the dialog opened and overwrite a concurrent edit to a field nobody here touched.
+      // Diffed against `epic`, the snapshot this dialog was opened with.
+      const updates = changedFields(
+        epic as unknown as Record<string, unknown>,
+        submitted as Record<string, unknown>,
+      );
+      if (Object.keys(updates).length === 0) {
+        onOpenChange(false);
+        return;
+      }
       await updateEpic.mutateAsync({
         epicId: epic.id,
         projectId: epic.projectId,
-        updates: {
-          name: values.name.trim(),
-          description: values.description ?? '',
-          requirementId: values.requirementId || '',
-          // '' — never `undefined` — for an emptied date field. `undefined` is
-          // dropped by JSON.stringify, so clearing a date sent no key at all:
-          // the PATCH succeeded, the toast said so, and the epic kept the date
-          // forever. The API maps '' to null (toDate in @strata/common), which
-          // is how a date is actually removed.
-          startDate: values.startDate ?? '',
-          endDate: values.endDate ?? '',
-        },
+        updates: updates as typeof submitted,
       });
     } catch {
       // The mutation toasts the reason; keep the dialog open with the input.
