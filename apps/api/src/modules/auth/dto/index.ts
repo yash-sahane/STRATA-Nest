@@ -5,7 +5,6 @@ import {
   IsOptional,
   IsString,
   MaxLength,
-  MinLength,
 } from 'class-validator';
 import { StrongPassword, TrimmedText } from '@strata/common';
 

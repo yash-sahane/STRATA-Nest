@@ -79,6 +79,11 @@ export class FilesController {
     // Strip anything outside printable ASCII, then the characters that would
     // terminate or inject into the header: quote, backslash, CR, LF.
     const ascii = String(name || 'file').replace(new RegExp('[^\x20-\x7E]', 'g'), '_');
+    // The CR and LF in the pattern below are load-bearing: a filename carrying them
+    // can terminate Content-Disposition and inject a second header. `no-control-regex`
+    // is for control characters that arrived by ACCIDENT, and spelling them as unicode
+    // escapes does not satisfy it either — it flags those too.
+    // eslint-disable-next-line no-control-regex
     const fallback = ascii.replace(new RegExp('["\\\r\n]', 'g'), '_');
     return `${kind}; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(name || 'file')}`;
   }
