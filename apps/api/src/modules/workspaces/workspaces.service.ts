@@ -1,4 +1,9 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { randomBytes } from 'node:crypto';
 import { generateId, paginate, parseListQuery, type ListQuerySpec } from '@strata/common';
@@ -10,6 +15,7 @@ import { Permission } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import type { CreateWorkspaceDto, UpdateWorkspaceDto } from './dto';
 import { workspaceResponse } from './mappers';
+import { isValidTimeZone } from '@strata/config';
 
 const SPEC: ListQuerySpec = {
   filterable: { name: { field: 'name' }, ownerId: { field: 'ownerId' } },
@@ -167,7 +173,20 @@ export class WorkspacesService {
     if (dto.description !== undefined) data.description = dto.description;
     if (dto.logo !== undefined) data.logo = dto.logo;
     if (dto.color !== undefined) data.color = dto.color;
-    if (dto.settings !== undefined) data.settings = dto.settings as Prisma.InputJsonValue;
+    if (dto.settings !== undefined) {
+      // A timezone the runtime does not recognise would be silently ignored by every
+      // consumer and quietly leave attendance on the server's zone, so it is refused here
+      // rather than stored and forgotten.
+      const incoming = (dto.settings ?? {}) as Record<string, unknown>;
+      if (incoming.timezone !== undefined && incoming.timezone !== null && incoming.timezone !== '') {
+        if (typeof incoming.timezone !== 'string' || !isValidTimeZone(incoming.timezone)) {
+          throw new BadRequestException(
+            `'${String(incoming.timezone)}' is not a recognised IANA timezone (for example 'Asia/Kolkata').`,
+          );
+        }
+      }
+      data.settings = dto.settings as Prisma.InputJsonValue;
+    }
     const updated = await this.prisma.workspace.update({ where: { id: ws.id }, data });
     const members = await this.memberIds([updated.id]);
     return workspaceResponse(updated, members.get(updated.id) ?? []);

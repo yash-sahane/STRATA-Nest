@@ -2,6 +2,7 @@ import { useWorkspaceContext } from '@/components/providers/workspace-provider';
 import { useWorkspaces } from '@/hooks/use-workspace';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useEffect } from 'react';
+import { setWorkspaceTimeZone } from '@/lib/utils/working-days';
 import { toast } from 'sonner';
 
 /**
@@ -34,6 +35,21 @@ export function useCurrentWorkspace() {
 
     // Find current workspace object
     const currentWorkspace = workspaces?.find(w => w.id === currentWorkspaceId);
+
+    // Keep the date helpers on the workspace's own calendar.
+    //
+    // The API files attendance against `Workspace.settings.timezone` when it is set, so
+    // the browser has to resolve "today" the same way or the two disagree — which is
+    // exactly how a member in another timezone came to see their check-in land on a day
+    // their own calendar called tomorrow. Null when the workspace has declared nothing,
+    // which falls the resolution through to the server's zone.
+    const workspaceTimeZone =
+        typeof currentWorkspace?.settings?.timezone === 'string'
+            ? currentWorkspace.settings.timezone
+            : null;
+    useEffect(() => {
+        setWorkspaceTimeZone(workspaceTimeZone);
+    }, [workspaceTimeZone]);
 
     // Wrapper function that adds toast notification
     const setCurrentWorkspaceId = (id: string) => {

@@ -44,6 +44,43 @@ type SettingsTab = (typeof SETTINGS_TABS)[number];
 /** The tab lives in the URL (useTabParam -> useSearchParams), which opts the
  *  subtree into client rendering — so it needs its own Suspense boundary rather
  *  than suspending the whole route. */
+/**
+ * Every timezone this runtime can actually resolve.
+ *
+ * `Intl.supportedValuesOf` rather than a bundled list: the runtime already knows exactly
+ * which zones it can resolve, and a hand-maintained list drifts from that — offering a
+ * value the server would then refuse. Older runtimes without it get a short list of common
+ * zones, and the caller adds whatever the workspace already has set so an existing value
+ * is never missing from its own picker.
+ */
+const FALLBACK_TIMEZONES = [
+  'Asia/Kolkata', 'Asia/Dubai', 'Asia/Singapore', 'Asia/Tokyo',
+  'Europe/London', 'Europe/Berlin', 'America/New_York', 'America/Chicago',
+  'America/Los_Angeles', 'Australia/Sydney', 'UTC',
+];
+
+function supportedTimezones(): string[] {
+  try {
+    const supported = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] })
+      .supportedValuesOf?.('timeZone');
+    if (supported?.length) return supported;
+  } catch {
+    // fall through
+  }
+  return FALLBACK_TIMEZONES;
+}
+
+const TIMEZONE_OPTIONS = supportedTimezones();
+
+/** What "same as the server" actually resolves to, so the default is not a blank. */
+const serverTimezoneLabel = (() => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    return 'UTC';
+  }
+})();
+
 export default function SettingsPage() {
   return (
     <React.Suspense fallback={<PageLoader message="Loading settings..." />}>
@@ -103,6 +140,8 @@ function SettingsPageContent() {
   const [allowMemberInvites, setAllowMemberInvites] = React.useState(true);
   const [isPublicWorkspace, setIsPublicWorkspace] = React.useState(false);
   const [requireTaskApproval, setRequireTaskApproval] = React.useState(false);
+  // '' means "not declared" — the API and the date helpers then use the server's zone.
+  const [wsTimezone, setWsTimezone] = React.useState('');
   // The role an invite code hands out. MEMBER is the read-only floor, which is
   // the safe default for a code that may be pasted into a group chat.
   const [inviteCodeRole, setInviteCodeRole] = React.useState<UserRole>('MEMBER');
@@ -115,6 +154,7 @@ function SettingsPageContent() {
       if (typeof s.allowMemberInvites === 'boolean') setAllowMemberInvites(s.allowMemberInvites);
       if (typeof s.isPublic === 'boolean') setIsPublicWorkspace(s.isPublic);
       if (typeof s.requireTaskApproval === 'boolean') setRequireTaskApproval(s.requireTaskApproval);
+      setWsTimezone(typeof s.timezone === 'string' ? s.timezone : '');
     }
   }, [currentWorkspace]);
 
@@ -200,6 +240,10 @@ function SettingsPageContent() {
           allowMemberInvites,
           isPublic: isPublicWorkspace,
           requireTaskApproval,
+          // Omitted entirely when not declared, rather than stored as '': the API and the
+          // date helpers both test for a non-empty string, and an empty one would read as
+          // a declaration of nothing.
+          ...(wsTimezone ? { timezone: wsTimezone } : {}),
         },
       });
       // success toast is fired by the mutation
@@ -413,6 +457,31 @@ function SettingsPageContent() {
 
                     <div className="space-y-4">
                       <h3 className="text-lg font-medium">Workspace Preferences</h3>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="ws-timezone">Working-day timezone</Label>
+                        <p className="text-sm text-muted-foreground">
+                          Attendance is recorded against a calendar day. This decides whose
+                          day that is — set it to the office&apos;s timezone so a member
+                          working elsewhere still files against the same day as everyone
+                          here.
+                        </p>
+                        <select
+                          id="ws-timezone"
+                          value={wsTimezone}
+                          onChange={(e) => setWsTimezone(e.target.value)}
+                          className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                        >
+                          <option value="">
+                            Same as the server ({serverTimezoneLabel})
+                          </option>
+                          {TIMEZONE_OPTIONS.map((zone) => (
+                            <option key={zone} value={zone}>
+                              {zone}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
 
                       <div className="flex items-center justify-between">
                         <div className="space-y-0.5">

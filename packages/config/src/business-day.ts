@@ -32,10 +32,31 @@
  * both derivations and the reported value follow from it.
  */
 
-/** The IANA zone the server files days in. */
-export function businessTimezone(): string {
-  // The host's zone. `todayUtc()` has always read host-local calendar parts, so reporting
-  // this is a statement of fact about current behaviour, not a new policy.
+/** Whether a string names a timezone this runtime actually knows. */
+export function isValidTimeZone(zone: string): boolean {
+  if (!zone || typeof zone !== 'string') return false;
+  try {
+    new Intl.DateTimeFormat('en-CA', { timeZone: zone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The IANA zone to file days in.
+ *
+ * `workspaceZone` is the organisation's own setting, when it has declared one. An
+ * organisation's working day belongs to its office, not to wherever the server happens to
+ * be deployed — a container moved from Mumbai to Virginia should not silently redraw
+ * everybody's attendance.
+ *
+ * Without one, the host's zone, which is what this has always used. An unrecognised value
+ * falls back the same way rather than throwing: a bad setting should not be able to take
+ * attendance down.
+ */
+export function businessTimezone(workspaceZone?: string | null): string {
+  if (workspaceZone && isValidTimeZone(workspaceZone)) return workspaceZone;
   return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 }
 
@@ -62,7 +83,7 @@ export function todayIn(timeZone: string, now: Date = new Date()): string {
  * unshifted. Day-level rules (isWeekend) then read this marker's UTC parts, so they
  * describe exactly the day the row is filed under.
  */
-export function businessDayMarker(now: Date = new Date()): Date {
-  const [year, month, day] = todayIn(businessTimezone(), now).split('-').map(Number);
+export function businessDayMarker(workspaceZone?: string | null, now: Date = new Date()): Date {
+  const [year, month, day] = todayIn(businessTimezone(workspaceZone), now).split('-').map(Number);
   return new Date(Date.UTC(year, month - 1, day));
 }

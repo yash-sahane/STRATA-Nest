@@ -24,15 +24,6 @@ import type {
 import { attendanceResponse, holidayResponse } from './mappers';
 import { businessDayMarker } from '@strata/config';
 
-/**
- * The server's LOCAL calendar day, stored as UTC midnight. The `date` column is
- * a day marker, not an instant: keying it off the local day (like
- * attendance-compute's time-of-day rules, which read local hours) keeps a 01:00
- * check-in on the day the employee is actually working, and the mapper renders
- * it back unshifted. Day-level rules (isWeekend) then read this marker's UTC
- * parts, so they describe exactly the day the row is filed under.
- */
-const todayUtc = (): Date => businessDayMarker();
 
 /** Manager-level HR marker. Attendance rows are personal, so a caller may only
  *  file/read/alter someone else's with the workspace's HR-approver permission. */
@@ -112,12 +103,36 @@ export class AttendanceService extends ScopedCrudService<
    * So: managers only, and the figures that describe the day are DERIVED here
    * rather than taken from the request.
    */
+  /**
+   * Today's day marker, in the WORKSPACE's declared timezone.
+   *
+   * The `date` column is a day MARKER, not an instant: it is the local day stored as UTC
+   * midnight, so a 01:00 check-in stays on the day the employee is actually working and
+   * the mapper renders it back unshifted. Day-level rules (isWeekend) then read this
+   * marker's UTC parts, so they describe exactly the day the row is filed under.
+   *
+   * Which local day, though, used to mean the SERVER's — a deployment detail. An
+   * organisation's working day belongs to its office, so `settings.timezone` is the
+   * declaration. Absent or unrecognised, this falls back to the server's zone, which is
+   * the behaviour before the setting existed: a bad value must not be able to stop people
+   * checking in.
+   */
+  private async businessToday(workspaceId: string): Promise<Date> {
+    const ws = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { settings: true },
+    });
+    const settings = (ws?.settings ?? {}) as Record<string, unknown>;
+    const zone = typeof settings.timezone === 'string' ? settings.timezone : null;
+    return businessDayMarker(zone);
+  }
+
   async create(user: User, dto: CreateAttendanceDto) {
     await this.access.assertPermission(user, dto.workspaceId, HR_MANAGE);
     const date = toRequiredDate(dto.date, 'Date');
     const checkInTime = toRequiredDate(dto.checkInTime, 'Check-in time');
     const checkOutTime = toDate(dto.checkOutTime, 'Check-out time');
-    if (date.getTime() > todayUtc().getTime()) {
+    if (date.getTime() > (await this.businessToday(dto.workspaceId)).getTime()) {
       throw new BadRequestException('Attendance cannot be filed for a future date.');
     }
     if (checkOutTime && checkOutTime.getTime() <= checkInTime.getTime()) {
@@ -257,7 +272,7 @@ export class AttendanceService extends ScopedCrudService<
   /** Server-computed check-in (lateMinutes + status). */
   async checkIn(user: User, dto: CheckInDto) {
     await this.access.assertPermission(user, dto.workspaceId, Permission.HrWrite);
-    const date = todayUtc();
+    const date = await this.businessToday(dto.workspaceId);
     // The workspace calendar LABELS this day; it does not veto it.
     //
     // Check-in used to refuse outright on a declared (non-optional) holiday,
@@ -343,7 +358,7 @@ export class AttendanceService extends ScopedCrudService<
   /** Server-computed check-out (workHours + status). */
   async checkOut(user: User, dto: CheckOutDto) {
     await this.access.assertPermission(user, dto.workspaceId, Permission.HrWrite);
-    const date = todayUtc();
+    const date = await this.businessToday(dto.workspaceId);
     const record = await this.prisma.attendance.findFirst({
       where: { workspaceId: dto.workspaceId, userId: user.id, date },
     });

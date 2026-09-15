@@ -40,20 +40,53 @@ export function parseDateOnly(value: string): Date {
  * A module-level value rather than React state because `todayDateOnly()` is called from
  * pure helpers (this file, attendance-utils, leave-utils) that have no hooks.
  */
-let businessTimeZone: string | null = null;
+/**
+ * Where "today" comes from, in order of authority.
+ *
+ *   workspace  the organisation's own declaration (Workspace.settings.timezone)
+ *   server     what the API itself files days against (/auth/me businessTimezone)
+ *   browser    before either has arrived, and on an API that sends neither
+ *
+ * Two slots rather than one variable, because the two writers would otherwise fight: a
+ * workspace with no declared zone writing null would wipe the server zone and drop the
+ * browser back to its own clock — the exact disagreement this exists to prevent.
+ *
+ * Module-level rather than React state because `todayDateOnly()` is called from pure
+ * helpers (this file, attendance-utils, leave-utils) that have no hooks.
+ */
+let workspaceTimeZone: string | null = null;
+let serverTimeZone: string | null = null;
 
-/** Called once when `/auth/me` resolves. See setBusinessTimeZone's caller in auth-client. */
-export function setBusinessTimeZone(timeZone: string | null | undefined): void {
-  businessTimeZone = timeZone && timeZone.trim() ? timeZone.trim() : null;
+const clean = (v: string | null | undefined): string | null =>
+  v && v.trim() ? v.trim() : null;
+
+/** The zone the API reports it files days in. Set when `/auth/me` resolves. */
+export function setServerTimeZone(timeZone: string | null | undefined): void {
+  serverTimeZone = clean(timeZone);
 }
 
-/** What the app currently believes the business zone to be, for diagnostics. */
-export function getBusinessTimeZone(): string | null {
-  return businessTimeZone;
+/** The current workspace's declared zone, or null when it has not declared one. */
+export function setWorkspaceTimeZone(timeZone: string | null | undefined): void {
+  workspaceTimeZone = clean(timeZone);
 }
 
 /**
- * Today's calendar date as 'YYYY-MM-DD', in the zone the SERVER files days in.
+ * Kept for the original caller in auth-client, which supplies the SERVER's zone.
+ *
+ * @deprecated Prefer `setServerTimeZone`; this is the same thing under its first name.
+ */
+export function setBusinessTimeZone(timeZone: string | null | undefined): void {
+  setServerTimeZone(timeZone);
+}
+
+/** The zone actually in force, for diagnostics. */
+export function getBusinessTimeZone(): string | null {
+  return workspaceTimeZone ?? serverTimeZone;
+}
+
+/**
+ * Today's calendar date as 'YYYY-MM-DD', in the zone days are FILED against — the
+ * workspace's declared zone if it has one, otherwise the server's.
  *
  * This used to be the BROWSER's local date, and the two disagree for anyone not sharing
  * the server's timezone: a member in Pacific/Midway checked in and the row was filed
@@ -64,11 +97,12 @@ export function getBusinessTimeZone(): string | null {
  * behaviour and correct for everyone in the server's own region.
  */
 export function todayDateOnly(): string {
-  if (!businessTimeZone) return formatDateOnly(new Date());
+  const zone = workspaceTimeZone ?? serverTimeZone;
+  if (!zone) return formatDateOnly(new Date());
   try {
     // `en-CA` short format IS ISO order.
     return new Intl.DateTimeFormat('en-CA', {
-      timeZone: businessTimeZone,
+      timeZone: zone,
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',

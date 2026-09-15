@@ -49,6 +49,16 @@ export interface WorkspaceSettings {
   allowMemberInvites?: boolean;
   isPublic?: boolean;
   requireTaskApproval?: boolean;
+  /**
+   * The IANA zone this organisation's working day belongs to, e.g. 'Asia/Kolkata'.
+   *
+   * Attendance is filed against a DAY, and without this the day is whichever one the
+   * server happens to be living in — so moving the deployment would redraw everyone's
+   * attendance, and a member in another timezone saw their check-in land on a day their
+   * own calendar called tomorrow. Both the API and the date helpers resolve this first
+   * and fall back to the server's zone when it is unset.
+   */
+  timezone?: string;
   [key: string]: unknown;
 }
 
