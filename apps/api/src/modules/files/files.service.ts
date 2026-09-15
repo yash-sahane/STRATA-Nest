@@ -18,6 +18,46 @@ import { uploadedFileResponse } from './mappers';
 /** Longest filename kept, including the extension. */
 const MAX_FILENAME = 200;
 
+/**
+ * The filename as the user actually typed it.
+ *
+ * A multipart `filename` parameter is transmitted as raw bytes, and busboy (under multer)
+ * hands them back decoded as LATIN-1. A name with any character outside ASCII therefore
+ * arrives mojibake'd: `ü` travels as the UTF-8 pair C3 BC and comes out as the two Latin-1
+ * characters `Ã¼`.
+ *
+ * Measured end to end before this: uploading `ünïcödé — spec (v2).txt` stored
+ * `Ã¼nÃ¯cÃ¶dÃ© â spec (v2).txt`, and the download header then carried
+ * `filename*=UTF-8''%C3%83%C2%BC…` — the UTF-8 encoding of the mojibake, double-encoded.
+ * The BYTES were always perfect; it is only ever the label that was wrong, which is why
+ * nothing caught it. For an app used in a country with several scripts, that is every
+ * attachment whose name is not plain English.
+ *
+ * Reversing it is safe because the two cases are distinguishable:
+ *
+ *   * a name carrying any character above U+00FF cannot have come from a Latin-1 decode,
+ *     so busboy read it correctly (an RFC 5987 `filename*` parameter) and it is left alone;
+ *   * otherwise the bytes are re-read as UTF-8, and a name that was genuinely Latin-1 —
+ *     not UTF-8 misread — fails that decode with U+FFFD and is likewise left alone.
+ *
+ * Pure ASCII passes through either path unchanged.
+ *
+ * Files uploaded before this are stored under their mojibake'd names. Renaming them is a
+ * data migration rather than a code fix, and is deliberately not attempted here.
+ */
+function decodeMultipartFilename(raw: string): string {
+  if (!raw) return raw;
+  // Anything above U+00FF proves this did not come out of a Latin-1 decode. Checked by
+  // code point rather than a character-class regex, which would have to spell a control
+  // character to express the range.
+  for (const ch of raw) {
+    if ((ch.codePointAt(0) ?? 0) > 0xff) return raw;
+  }
+  const reread = Buffer.from(raw, 'latin1').toString('utf8');
+  // U+FFFD means those bytes were not UTF-8 after all — a real Latin-1 name.
+  return reread.includes('�') ? raw : reread;
+}
+
 /** Shorten an over-long filename, preserving its extension. */
 function truncateFilename(original: string): string {
   const name = original || 'file';
@@ -142,7 +182,10 @@ export class FilesService {
     // system has its own path limit. Truncate rather than refuse — the file is
     // fine, only its label is unreasonable — keeping the extension so the
     // download still opens in the right application.
-    const name = truncateFilename(part.originalname);
+    // Decoded before truncating: the mojibake form is LONGER than the real name (each
+    // non-ASCII character becomes two), so truncating first would cut in the wrong place
+    // as well as store the wrong text.
+    const name = truncateFilename(decodeMultipartFilename(part.originalname));
     const key = StorageService.key(workspaceId, id, name);
     const mimeType = part.mimetype ?? '';
 
