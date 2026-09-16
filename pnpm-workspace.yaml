@@ -2,3 +2,6 @@
 packages:
   - "apps/*"
   - "packages/*"
+  # The end-to-end suite. Not under packages/ because it is not a library the apps
+  # build against — it drives the running stack from outside.
+  - "e2e"

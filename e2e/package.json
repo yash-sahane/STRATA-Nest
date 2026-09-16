@@ -1,0 +1,19 @@
+{
+  "name": "@strata/e2e",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "End-to-end regression suite: drives the real API and the real browser against a running stack.",
+  "scripts": {
+    "test:e2e": "node regression-suite.mjs",
+    "sweep:routes": "node sweep-all.mjs",
+    "sweep:dialogs": "node sweep-dialogs.mjs",
+    "sweep:entry": "node sweep-entry.mjs",
+    "sweep:roles": "node sweep-roles.mjs"
+  },
+  "dependencies": {
+    "axe-core": "^4.10.0",
+    "playwright": "^1.47.0",
+    "ws": "^8.18.0"
+  }
+}
