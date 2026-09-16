@@ -5,9 +5,24 @@
 // every block and every browser context. Cookies are cached on disk, validated
 // against /auth/me, and only re-minted when genuinely expired.
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const API = 'http://localhost:8000/api/v1';
-const FILE = new URL('./.sessions.json', import.meta.url).pathname.replace(/^\//, '');
+
+/**
+ * `fileURLToPath`, not `.pathname.replace(/^\//, '')`.
+ *
+ * A URL's pathname is PERCENT-ENCODED. This suite used to live under a path with no
+ * spaces, so stripping the leading slash happened to produce something openable; moving it
+ * into the repo put it under `D:/Code/Full Stack/...` and the pathname became
+ * `D:/Code/Full%20Stack/...` — a path that cannot exist.
+ *
+ * Both `load()` and `save()` swallow their errors, so nothing complained. The cache simply
+ * stopped working, and every script fell back to logging in again against a limiter that
+ * allows five per minute. The suite still passed, slower and noisier, which is the worst
+ * way for a thing to break.
+ */
+const FILE = fileURLToPath(new URL('./.sessions.json', import.meta.url));
 
 function load() {
   try { return existsSync(FILE) ? JSON.parse(readFileSync(FILE, 'utf8')) : {}; } catch { return {}; }

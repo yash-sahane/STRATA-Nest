@@ -1,0 +1,15 @@
+# Session cookies for the seeded test accounts, cached so the suite does not re-log-in
+# for every script and trip the 5-per-minute login limiter.
+#
+# These are live credentials. They must never be committed, which is the reason this file
+# exists at all: the cache had been silently failing to write, so nothing had appeared in
+# `git status` to prompt the question.
+.sessions.json
+
+# auth-fixes.mjs remembers the mixed-case account it registered, so a re-run does not need
+# another registration against the 3-per-hour limiter. Also a credential.
+.qa-*.json
+
+# Sweep output. Findings from a run, not source.
+sweep-findings.json
+*shots/
