@@ -137,38 +137,67 @@ console.log('\n===== /activity');
 console.log('\n===== /team');
 {
   const { ctx, page } = await signedInPage(browser, 'role.manager@strata.local', p.ws);
-  await visit(page, '/team', 8000);
-  await page.waitForTimeout(3000);
-  const before = await page.locator('body').innerText().catch(() => '');
-  const hadTester = before.includes('Role TESTER');
-  rec(!hadTester, 'team: the tester is not on the roster yet',
-    before.slice(0, 240).replace(/\n/g, ' | '));
 
-  await addRole(p.ws, 'TESTER', 'role.tester@strata.local');
-
-  // Confirm the member is REALLY on the roster before asking whether the page noticed.
-  // Under a full-suite run the invite/accept calls share the rate limiter with everything
-  // else and can be held back by tens of seconds; without this the page has nothing to
-  // notice, and "realtime is broken" and "the fixture was slow" produce the same failure.
-  // This check flaked exactly that way once, and passed alone straight afterwards.
-  const onRoster = async () => {
-    const r = await api(p.admin, 'GET', `/workspace_members?workspaceId=${p.ws}`);
-    return JSON.stringify(r.j ?? '').includes('role.tester@strata.local');
+  /**
+   * A LOADED roster, not merely a rendered one.
+   *
+   * The whole suite shares one rate-limit budget, and in a full run this page's workspace
+   * fetch can come back 429. The app handles that correctly — it shows "Could not load
+   * your workspaces … this is a connection problem" — but a page sitting on an error
+   * state has no roster to update, so the realtime assertion below failed and blamed the
+   * socket for the limiter. Reload rather than guess: the window is 60s, and a
+   * precondition that is retryable should be retried before anything is called broken.
+   */
+  const loadRoster = async () => {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await visit(page, '/team', 8000);
+      await page.waitForTimeout(3000);
+      const text = await page.locator('body').innerText().catch(() => '');
+      if (!/could not load|did not come back/i.test(text)) return text;
+      console.log(`   team: the page could not load its workspaces — waiting out the limiter`);
+      await page.waitForTimeout(20000);
+    }
+    return null;
   };
-  let added = false;
-  for (let i = 0; i < 20 && !added; i += 1) {
-    added = await onRoster();
-    if (!added) await page.waitForTimeout(1000);
-  }
-  rec(added, 'team: the tester really was added', 'the fixture never landed — nothing to notice');
 
-  const appeared = added ? await waitForText(page, 'Role TESTER', true, 30000) : false;
-  console.log(`   team: tester appeared = ${appeared}`);
-  if (added) {
-    const after = await page.locator('body').innerText().catch(() => '');
-    rec(appeared && after.includes('Role TESTER'),
-      'team: a member added elsewhere appears without a refresh',
-      after.slice(0, 400).replace(/\n/g, ' | '));
+  const before = await loadRoster();
+  if (before === null) {
+    // Loud, and named for what actually happened. Silently passing here would mean the
+    // realtime path goes untested whenever the suite is busy, which is always.
+    rec(false, 'team: the roster page could be loaded at all',
+      'three attempts, each answered with the workspace-load error state — the shared rate '
+      + 'limiter, not the realtime path, which this run therefore did not test');
+  } else {
+    const hadTester = before.includes('Role TESTER');
+    rec(!hadTester, 'team: the tester is not on the roster yet',
+      before.slice(0, 240).replace(/\n/g, ' | '));
+
+    await addRole(p.ws, 'TESTER', 'role.tester@strata.local');
+
+    // Confirm the member is REALLY on the roster before asking whether the page noticed.
+    // Under a full-suite run the invite/accept calls share the rate limiter with
+    // everything else and can be held back by tens of seconds; without this the page has
+    // nothing to notice, and "realtime is broken" and "the fixture was slow" produce the
+    // same failure. This check flaked exactly that way, and passed alone straight after.
+    const onRoster = async () => {
+      const r = await api(p.admin, 'GET', `/workspace_members?workspaceId=${p.ws}`);
+      return JSON.stringify(r.j ?? '').includes('role.tester@strata.local');
+    };
+    let added = false;
+    for (let i = 0; i < 20 && !added; i += 1) {
+      added = await onRoster();
+      if (!added) await page.waitForTimeout(1000);
+    }
+    rec(added, 'team: the tester really was added', 'the fixture never landed — nothing to notice');
+
+    const appeared = added ? await waitForText(page, 'Role TESTER', true, 30000) : false;
+    console.log(`   team: tester appeared = ${appeared}`);
+    if (added) {
+      const after = await page.locator('body').innerText().catch(() => '');
+      rec(appeared && after.includes('Role TESTER'),
+        'team: a member added elsewhere appears without a refresh',
+        after.slice(0, 400).replace(/\n/g, ' | '));
+    }
   }
   await ctx.close();
 }
