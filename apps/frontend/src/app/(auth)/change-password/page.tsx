@@ -16,6 +16,42 @@ import { logger } from '@/lib/logger';
 import { PASSWORD_RULES, passwordFailures } from '@/lib/password-policy';
 import Link from 'next/link';
 
+/** The highest score each band covers; `STRENGTH_MAX` is the last one's `upTo`. */
+const STRENGTH_MAX = 6;
+
+/**
+ * One table for the words AND the colour, because they used to disagree.
+ *
+ * The bar was driven by a seven-entry colour array and the words by a separate ladder of
+ * thresholds, and the two did not line up: at score 4 the bar was already green while the
+ * label read "Fair", and the two green steps either side of it ("Fair" green-500 and
+ * "Good" green-600) measured 1.13:1 apart, which is no distinction at all.
+ *
+ * FILLS, measured against `bg-muted` — the track they sit directly on — with no compiled
+ * utility in the way (see e2e/probe-strength-track.mjs; an earlier pass measured
+ * uncompiled classes and read the absence of a rule as a pass):
+ *
+ *     bg-red-600     light 4.38   dark(bg-red-400)     5.24
+ *     bg-orange-700  light 4.79   dark(bg-orange-500)  5.24
+ *     bg-green-700   light 4.54   dark(bg-green-500)   6.82
+ *
+ * What they replace: yellow-500 measured 1.75:1 against the light track. At "Fair" —
+ * the step somebody is most likely to be sitting on while they decide whether to keep
+ * typing — the filled part of the bar was very nearly indistinguishable from the empty
+ * part, which is the one thing the bar is for. 3:1 is the WCAG 1.4.11 floor.
+ *
+ * Excellent shares Good's green deliberately. A fourth hue would have to be another
+ * green to keep the ramp legible, and two greens a person cannot tell apart imply a
+ * distinction the colour does not actually carry. What separates Excellent is that the
+ * bar is FULL, which is unmistakable, plus the word.
+ */
+const STRENGTH_BANDS = [
+  { upTo: 2, label: 'Weak', hint: 'Add more characters and variety', fill: 'bg-red-600 dark:bg-red-400' },
+  { upTo: 4, label: 'Fair', hint: 'Consider adding special characters', fill: 'bg-orange-700 dark:bg-orange-500' },
+  { upTo: 5, label: 'Good', hint: 'Strong password', fill: 'bg-green-700 dark:bg-green-500' },
+  { upTo: STRENGTH_MAX, label: 'Excellent', hint: 'Very strong password', fill: 'bg-green-700 dark:bg-green-500' },
+] as const;
+
 function ChangePasswordContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -69,32 +105,10 @@ function ChangePasswordContent() {
     if (/[0-9]/.test(password)) score++;
     if (/[^a-zA-Z0-9]/.test(password)) score++;
 
-    // Determine feedback
-    if (score <= 2) {
-      feedback = 'Weak - Add more characters and variety';
-    } else if (score <= 4) {
-      feedback = 'Fair - Consider adding special characters';
-    } else if (score <= 5) {
-      feedback = 'Good - Strong password';
-    } else {
-      feedback = 'Excellent - Very strong password';
-    }
+    const band = STRENGTH_BANDS.find((b) => score <= b.upTo) ?? STRENGTH_BANDS[0];
+    feedback = `${band.label} - ${band.hint}`;
 
-    const colors = [
-      'bg-red-500',
-      'bg-red-500',
-      'bg-orange-500',
-      'bg-yellow-500',
-      'bg-green-500',
-      'bg-green-600',
-      'bg-emerald-600',
-    ];
-
-    setPasswordStrength({
-      score,
-      feedback,
-      color: colors[score] || 'bg-gray-300',
-    });
+    setPasswordStrength({ score, feedback, color: band.fill });
   }, [formData.newPassword]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -316,13 +330,20 @@ function ChangePasswordContent() {
               {/* Password Strength Indicator */}
               {formData.newPassword && (
                 <div className="space-y-2">
-                  <div className="flex h-2 overflow-hidden rounded-full bg-muted">
+                  {/* Decorative: the line underneath says the same thing in words, and
+                      announcing both would read the strength out twice on every keystroke. */}
+                  <div aria-hidden="true" className="flex h-2 overflow-hidden rounded-full bg-muted">
                     <div
                       className={`transition-all duration-(--duration-layout) ${passwordStrength.color}`}
-                      style={{ width: `${(passwordStrength.score / 6) * 100}%` }}
+                      style={{ width: `${(passwordStrength.score / STRENGTH_MAX) * 100}%` }}
                     />
                   </div>
-                  <p className="text-xs text-muted-foreground">{passwordStrength.feedback}</p>
+                  {/* Polite, so it settles rather than interrupting mid-word: this text is
+                      the only form the strength takes for somebody who cannot see the bar,
+                      and it used to change in silence. */}
+                  <p aria-live="polite" className="text-xs text-muted-foreground">
+                    {passwordStrength.feedback}
+                  </p>
                 </div>
               )}
             </div>
