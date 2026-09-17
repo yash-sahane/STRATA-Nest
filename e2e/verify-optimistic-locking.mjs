@@ -201,6 +201,39 @@ const read = async (jar, path) => (await api(jar, 'GET', path)).j;
   );
 }
 
+// ------------------------------------------------ an empty list is the same absence
+
+{
+  const t = await newTask('nobody is assigned to me');
+  // The row holds `[]`; a client that never had a value for the field sends null. Read as
+  // different, every unassigned record would refuse the first save made to it.
+  const save = await api(mgr, 'PATCH', `/tasks/${t.id}`, {
+    assigneeIds: [mgrId],
+    basedOn: { assigneeIds: null },
+  });
+  rec(
+    save.s === 200,
+    'an empty list and no value at all are one absence',
+    `status ${save.s} — a 409 here refuses the first assignment of every unassigned record`,
+  );
+
+  // And a list somebody else really did fill is still caught.
+  const b = await read(dev, `/tasks/${t.id}`);
+  await api(dev, 'PATCH', `/tasks/${t.id}`, {
+    assigneeIds: [],
+    basedOn: { assigneeIds: b.assigneeIds },
+  });
+  const clash = await api(mgr, 'PATCH', `/tasks/${t.id}`, {
+    assigneeIds: [mgrId],
+    basedOn: { assigneeIds: b.assigneeIds },
+  });
+  rec(
+    clash.s === 409,
+    'and a list somebody else really changed is still caught',
+    `status ${clash.s} — 200 means the list comparison passes everything`,
+  );
+}
+
 // ------------------------------------------------------- a client that sends no baseline
 
 {
@@ -209,7 +242,7 @@ const read = async (jar, path) => (await api(jar, 'GET', path)).j;
   rec(r.s === 200, 'a save with no basedOn still applies', `status ${r.s} ${r.t}`);
 }
 
-// --------------------------------------------- the four other collections behave the same
+// ---------------------------------------------- the other collections behave the same
 
 {
   const cr = (await api(mgr, 'POST', '/client_requirements', {
@@ -231,11 +264,19 @@ const read = async (jar, path) => (await api(jar, 'GET', path)).j;
     startDate: '2026-10-01',
     endDate: '2026-10-14',
   })).j;
+  const fr = (await api(mgr, 'POST', '/functional_requirements', {
+    workspaceId: p.ws,
+    projectId: p.project,
+    hierarchyId: 'LOCK-FR',
+    title: 'Functional requirement under two editors',
+    description: 'seed',
+  })).j;
   const project = (await api(p.admin, 'GET', `/projects/${p.project}`)).j;
 
   // [label, path, the row as loaded, the clashing field, a second untouched field]
   const cases = [
     ['client requirement', `/client_requirements/${cr?.id}`, cr, 'title', 'description'],
+    ['functional requirement', `/functional_requirements/${fr?.id}`, fr, 'title', 'description'],
     ['epic', `/epics/${epic?.id}`, epic, 'name', 'description'],
     ['sprint', `/sprints/${sprint?.id}`, sprint, 'goal', 'name'],
     ['project', `/projects/${p.project}`, project, 'description', 'name'],
