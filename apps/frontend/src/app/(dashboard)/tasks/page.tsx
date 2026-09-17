@@ -58,7 +58,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import type { Task, TaskStatus } from '@/types';
 import { useIsAdmin, useHasPermission, useHasPermissionResolved } from '@/hooks/use-permissions';
 import { Permission } from '@/lib/permissions';
-import { changedFields } from '@/lib/utils/changed-fields';
+import { basedOnFor, changedFields } from '@/lib/utils/changed-fields';
 
 // The two halves of the Manual-order notice, shared by the banner and the live
 // region that announces it, so they can never drift apart.
@@ -728,11 +728,12 @@ function TasksPageContent() {
 
     // Assembled in full, then narrowed to what actually changed.
     //
-    // This form submits every field regardless of which one was touched, and the API's
-    // update is a plain `prisma.update` with no version column — so a save used to carry
-    // values that were already stale when the dialog opened and overwrite somebody else's
-    // work. Measured: B set priority CRITICAL while A was typing a new title; A saved and
-    // priority went back to LOW, with no error shown to either of them.
+    // This form submits every field regardless of which one was touched, so a save used
+    // to carry values that were already stale when the dialog opened and overwrite
+    // somebody else's work. Measured: B set priority CRITICAL while A was typing a new
+    // title; A saved and priority went back to LOW, with no error shown to either of
+    // them. Sending only the diff removes that case entirely; `basedOn` below covers
+    // the one it cannot, where both people edited the same field.
     //
     // The normalisation below is load-bearing and unchanged — a cleared due date must
     // still travel as null and "No epic" as '' — and a cleared field still differs from
@@ -773,7 +774,14 @@ function TasksPageContent() {
         taskId: selectedTask.id,
         projectId: selectedProjectId,
         canMarkDone,
-        updates: updates as Parameters<typeof updateTask.mutateAsync>[0]['updates'],
+        // What the diff above cannot cover: two people editing the SAME field, where the
+        // later save would still win outright. `basedOn` is what those fields held in
+        // this snapshot; if somebody else has changed one, the API refuses the save and
+        // names it rather than quietly discarding their work.
+        updates: {
+          ...updates,
+          basedOn: basedOnFor(selectedTask as unknown as Record<string, unknown>, updates),
+        } as Parameters<typeof updateTask.mutateAsync>[0]['updates'],
       });
     }
 

@@ -1,8 +1,9 @@
 ﻿import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { resources } from '@/lib/api/client';
 import { query, id } from '@/lib/api/client';
-import type { Epic, Task } from '@/types';
+import type { EditBasedOn, Epic, Task } from '@/types';
 import { toast } from '@/hooks/use-toast';
+import { saveFailureToast } from '@/lib/api/mutation-error';
 import { createBulkNotifications } from '@/hooks/use-notification';
 import { logger } from '@/lib/logger';
 
@@ -231,7 +232,7 @@ export function useUpdateEpic() {
     mutationFn: async (data: {
       epicId: string;
       projectId: string;
-      updates: {
+      updates: EditBasedOn<{
         name?: string;
         description?: string;
         color?: string;
@@ -241,7 +242,7 @@ export function useUpdateEpic() {
         progress?: number;
         requirementId?: string; // ? FIXED: Use requirementId
         assignedTeam?: string; // ? NEW: Team assignment
-      };
+      }>;
     }) => {
       const { epicId, ...updates } = data;
 
@@ -265,12 +266,7 @@ export function useUpdateEpic() {
       });
     },
     onError: (error: Error) => {
-      toast({
-        title: 'Error',
-        description:
-          (error instanceof Error ? error.message : String(error)) || 'Failed to update epic',
-        variant: 'destructive',
-      });
+      toast(saveFailureToast(error, 'Failed to update epic'));
     },
   });
 }

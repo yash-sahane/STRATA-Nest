@@ -2,9 +2,10 @@
 import { resources } from '@/lib/api/client';
 import { query, id } from '@/lib/api/client';
 import { restClient } from '@/lib/api/rest-client';
-import type { Sprint, Task } from '@/types';
+import type { EditBasedOn, Sprint, Task } from '@/types';
 import { toast } from '@/hooks/use-toast';
 import { createBulkNotifications } from '@/hooks/use-notification';
+import { saveFailureToast } from '@/lib/api/mutation-error';
 
 export function useSprints(projectId?: string) {
   return useQuery({
@@ -132,10 +133,12 @@ export function useUpdateSprint() {
       updates,
     }: {
       sprintId: string;
-      updates: Partial<
-        Omit<
-          Sprint,
-          'id' | 'createdAt' | 'updatedAt' | 'workspaceId' | 'projectId' | 'createdBy'
+      updates: EditBasedOn<
+        Partial<
+          Omit<
+            Sprint,
+            'id' | 'createdAt' | 'updatedAt' | 'workspaceId' | 'projectId' | 'createdBy'
+          >
         >
       >;
     }) => {
@@ -154,12 +157,7 @@ export function useUpdateSprint() {
       });
     },
     onError: (error: unknown) => {
-      toast({
-        title: 'Error',
-        description:
-          (error instanceof Error ? error.message : String(error)) || 'Failed to update sprint',
-        variant: 'destructive',
-      });
+      toast(saveFailureToast(error, 'Failed to update sprint'));
     },
   });
 }

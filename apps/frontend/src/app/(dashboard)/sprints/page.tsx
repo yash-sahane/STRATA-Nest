@@ -31,7 +31,8 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { PageLoader, InlineLoader } from '@/components/ui/page-loader';
 import { useRouter } from 'next/navigation';
 import { useCreateActionParam } from '@/hooks/use-create-action-param';
-import { changedFields } from '@/lib/utils/changed-fields';
+import { basedOnFor, changedFields } from '@/lib/utils/changed-fields';
+import type { EditBasedOn, Sprint } from '@/types';
 
 export default function SprintsPage() {
   const router = useRouter();
@@ -133,8 +134,10 @@ export default function SprintsPage() {
   }) => {
     if (!editingSprint) return;
 
-    // Only what changed — see changedFields. Submitting the whole form over an update
-    // with no version check overwrote concurrent edits to fields nobody had touched.
+    // Only what changed — see changedFields. Submitting the whole form wrote back
+    // values that were stale from the moment the dialog opened, over concurrent edits
+    // to fields nobody here had touched. `basedOn` below covers the remaining case,
+    // where both people edited the same field.
     const updates = changedFields(
       editingSprint as unknown as Record<string, unknown>,
       {
@@ -147,7 +150,14 @@ export default function SprintsPage() {
     if (Object.keys(updates).length > 0) {
       await updateSprint.mutateAsync({
         sprintId: editingSprint.id,
-        updates: updates as { name: string; goal: string; startDate: string; endDate: string },
+        // What those fields held when this dialog opened. Narrowing the patch cannot
+        // cover two people editing the SAME field; this can. If somebody else changed
+        // one of them the API refuses the save and names it, this function rethrows,
+        // `setEditingSprint(null)` below is skipped, and the dialog stays open holding
+        // what was typed.
+        updates: { ...updates, basedOn: basedOnFor(editingSprint, updates) } as EditBasedOn<
+          Partial<Sprint>
+        >,
       });
     }
 

@@ -5,6 +5,7 @@ import { parseJsonObject, parseJsonStringArray } from '@/lib/api/json-fields';
 import type { Project, ProjectMethodology, ProjectStatus } from '@/types';
 import { toast } from '@/hooks/use-toast';
 import { generateProjectCode } from '@/lib/utils';
+import { saveFailureToast } from '@/lib/api/mutation-error';
 
 /**
  * Derive a project code that is free within the workspace.
@@ -178,6 +179,8 @@ export function useUpdateProject() {
       startDate?: string | null;
       endDate?: string | null;
       settings?: Project['settings'];
+      /** See EditBasedOn: refuses the save if somebody else has edited these fields. */
+      basedOn?: Record<string, unknown>;
     }) => {
       const { projectId, workspaceId, ...updates } = data;
 
@@ -208,11 +211,7 @@ export function useUpdateProject() {
       });
     },
     onError: (error: Error) => {
-      toast({
-        title: 'Error',
-        description: (error instanceof Error ? error.message : String(error)) || 'Failed to update project',
-        variant: 'destructive',
-      });
+      toast(saveFailureToast(error, 'Failed to update project'));
     },
   });
 }

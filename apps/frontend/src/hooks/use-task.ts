@@ -2,8 +2,15 @@
 import { resources } from '@/lib/api/client';
 import { query, id } from '@/lib/api/client';
 import { restClient } from '@/lib/api/rest-client';
-import type { Task, TaskStatus, TaskPriority, FunctionalRequirement } from '@/types';
+import type {
+  Task,
+  TaskStatus,
+  TaskPriority,
+  FunctionalRequirement,
+  EditBasedOn,
+} from '@/types';
 import { toast } from 'sonner';
+import { saveFailureToast } from '@/lib/api/mutation-error';
 import { createBulkNotifications } from '@/hooks/use-notification';
 import { deriveEpicMetrics } from '@/hooks/use-epic';
 import { calculateFRStatusFromTasks } from '@/hooks/use-functional-requirement';
@@ -585,7 +592,7 @@ export function useUpdateTask() {
     mutationFn: async (data: {
       taskId: string;
       projectId: string;
-      updates: Partial<Task>;
+      updates: EditBasedOn<Partial<Task>>;
       /** Tri-state capability answer — see `assertCanMarkDone`. */
       canMarkDone?: boolean;
       /** Suppress the success toast (bulk callers toast once for the batch). */
@@ -641,7 +648,11 @@ export function useUpdateTask() {
       // Optimistically update the cache
       queryClient.setQueryData<Task[]>(['tasks', data.projectId], (old) => {
         if (!old) return old;
-        return old.map((task) => (task.id === data.taskId ? { ...task, ...data.updates } : task));
+        // `basedOn` addresses the save; it is not a field of the task, and writing it
+        // into the cached row would leave a phantom property on every optimistically
+        // updated task until the next refetch.
+        const { basedOn: _ignored, ...fields } = data.updates;
+        return old.map((task) => (task.id === data.taskId ? { ...task, ...fields } : task));
       });
 
       return { previousTasks };
@@ -656,9 +667,10 @@ export function useUpdateTask() {
         toast.warning(error.message);
         return;
       }
-      toast.error(
-        (error instanceof Error ? error.message : String(error)) || 'Failed to update task'
-      );
+      // sonner takes the title positionally, so the shared shape is unpacked rather
+      // than passed whole the way the useToast callers do.
+      const { title, description } = saveFailureToast(error, 'Failed to update task');
+      toast.error(title, { description });
     },
     onSuccess: async (updatedTask, variables, context) => {
       queryClient.invalidateQueries({ queryKey: ['task', variables.taskId] });

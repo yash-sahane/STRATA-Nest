@@ -8,7 +8,7 @@ import {
   IsString,
   MaxLength,
 } from 'class-validator';
-import { StrictString, TrimmedText } from '@strata/common';
+import { BasedOn, StrictString, TrimmedText } from '@strata/common';
 import { IsStrictBoolean } from '@strata/common';
 
 export class CreateProjectDto {
@@ -34,6 +34,8 @@ export class CreateProjectDto {
 }
 
 export class UpdateProjectDto {
+  /** What the editor believed the fields they are changing held; see BasedOn. */
+  @BasedOn() basedOn?: Record<string, unknown>;
   @TrimmedText() @IsOptional() @IsString() @IsNotEmpty() @MaxLength(255) name?: string;
   @TrimmedText() @IsOptional() @IsString() @IsNotEmpty() @MaxLength(10) shortCode?: string;
   @IsOptional() @IsString() description?: string;

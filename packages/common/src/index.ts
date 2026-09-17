@@ -5,5 +5,6 @@ export * from './http';
 export * from './validation/is-strict-boolean';
 export * from './validation/trimmed-text';
 export * from './validation/strict-string';
+export * from './validation/based-on';
 export * from './validation/password-policy';
 export * from './sanitize/lone-surrogates';

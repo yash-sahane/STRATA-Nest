@@ -68,6 +68,20 @@ export type ProjectMethodology = 'SCRUM';
 export type ProjectStatus = 'PLANNING' | 'ACTIVE' | 'ON_HOLD' | 'COMPLETED' | 'ARCHIVED';
 
 // Project
+/**
+ * An update body that can say what the editor believed they were changing.
+ *
+ * `basedOn` holds the values those fields had when the form opened, exactly as the API
+ * rendered them. The API refuses the save — 409, nothing written — if somebody else has
+ * changed any of the fields this save writes; other fields they may have changed are
+ * none of this edit's business and are left alone, so two people working on different
+ * parts of the same record never interrupt each other.
+ *
+ * Omit it and the save applies unconditionally, which is the behaviour before this
+ * existed. See `basedOnFor` for building one from a diff.
+ */
+export type EditBasedOn<T> = T & { basedOn?: Record<string, unknown> };
+
 export interface Project {
   id: string;
   workspaceId: string;

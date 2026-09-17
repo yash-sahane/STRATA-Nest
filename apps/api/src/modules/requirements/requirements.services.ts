@@ -33,6 +33,8 @@ export class ClientRequirementsService extends ScopedCrudService<
   ReturnType<typeof clientRequirementResponse>
 > {
   protected readonly model = 'clientRequirement';
+  /** Carries a `version` column, so a stale save is refused rather than applied. */
+  protected override readonly versioned = true;
   protected readonly auditEntity = 'client_requirement';
   protected readonly writePermission: PermissionKey = Permission.RequirementWrite;
   protected readonly spec: ListQuerySpec = {
@@ -76,7 +78,7 @@ export class ClientRequirementsService extends ScopedCrudService<
     if (dto.priority !== undefined) data.priority = dto.priority;
     if (dto.status !== undefined) data.status = dto.status;
     if (dto.attachments !== undefined) data.attachments = dto.attachments;
-    return this.update(user, id, data);
+    return this.update(user, id, data, dto.basedOn);
   }
 }
 

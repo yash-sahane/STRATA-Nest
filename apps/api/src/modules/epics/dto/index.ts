@@ -8,7 +8,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
-import { StrictString, TrimmedText } from '@strata/common';
+import { BasedOn, StrictString, TrimmedText } from '@strata/common';
 
 /**
  * The epic's three statuses, as written by the task rollup and rendered by the
@@ -56,6 +56,8 @@ export class CreateEpicDto {
  * requires `planning:write`.
  */
 export class UpdateEpicDto {
+  /** What the editor believed the fields they are changing held; see BasedOn. */
+  @BasedOn() basedOn?: Record<string, unknown>;
   @IsOptional() @IsString() @MaxLength(100) hierarchyId?: string;
   @TrimmedText() @IsOptional() @IsString() @IsNotEmpty() @MaxLength(500) name?: string;
   @IsOptional() @IsString() requirementId?: string;

@@ -32,8 +32,8 @@ import {
 } from '@/components/ui/select';
 import { useUpdateEpic } from '@/hooks/use-epic';
 import { useClientRequirements } from '@/hooks/use-client-requirement';
-import type { Epic } from '@/types';
-import { changedFields } from '@/lib/utils/changed-fields';
+import type { EditBasedOn, Epic } from '@/types';
+import { basedOnFor, changedFields } from '@/lib/utils/changed-fields';
 
 /**
  * The same fields the create dialog owns — deliberately NOT status or progress.
@@ -107,10 +107,10 @@ export function EditEpicDialog({ open, onOpenChange, epic }: EditEpicDialogProps
         startDate: values.startDate ?? '',
         endDate: values.endDate ?? '',
       };
-      // Only what changed. This form submits every field, and the API's update has no
-      // version check — so a save used to carry values that were stale from the moment
-      // the dialog opened and overwrite a concurrent edit to a field nobody here touched.
-      // Diffed against `epic`, the snapshot this dialog was opened with.
+      // Only what changed. This form submits every field, so a save used to carry values
+      // that were stale from the moment the dialog opened and overwrite a concurrent edit
+      // to a field nobody here touched. Diffed against `epic`, the snapshot this dialog
+      // was opened with.
       const updates = changedFields(
         epic as unknown as Record<string, unknown>,
         submitted as Record<string, unknown>,
@@ -122,7 +122,14 @@ export function EditEpicDialog({ open, onOpenChange, epic }: EditEpicDialogProps
       await updateEpic.mutateAsync({
         epicId: epic.id,
         projectId: epic.projectId,
-        updates: updates as typeof submitted,
+        // Narrowing the patch cannot cover two people editing the SAME field — there the
+        // last save would still win outright. `basedOn` is what those fields held when
+        // this dialog opened: unchanged, the save lands; changed by somebody else, the
+        // API refuses it and names the field, and the `catch` below leaves every word of
+        // this form where the person left it.
+        updates: { ...updates, basedOn: basedOnFor(epic as unknown as Record<string, unknown>, updates) } as EditBasedOn<
+          Partial<typeof submitted>
+        >,
       });
     } catch {
       // The mutation toasts the reason; keep the dialog open with the input.

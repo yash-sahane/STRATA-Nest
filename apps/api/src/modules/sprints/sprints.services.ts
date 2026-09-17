@@ -19,6 +19,8 @@ import { retrospectiveResponse, sprintResponse } from './mappers';
 @Injectable()
 export class SprintsService extends ScopedCrudService<Sprint, ReturnType<typeof sprintResponse>> {
   protected readonly model = 'sprint';
+  /** Carries a `version` column, so a stale save is refused rather than applied. */
+  protected override readonly versioned = true;
   protected readonly auditEntity = 'sprint';
   protected readonly writePermission: PermissionKey = Permission.PlanningWrite;
   protected readonly spec: ListQuerySpec = {
@@ -108,7 +110,7 @@ export class SprintsService extends ScopedCrudService<Sprint, ReturnType<typeof 
     // event fires on the PLANNING -> ACTIVE transition only, never on a repeat
     // PATCH of an already-active sprint.
     const before = dto.status === 'ACTIVE' ? await this.findScoped(user, id) : null;
-    const result = await this.update(user, id, data);
+    const result = await this.update(user, id, data, dto.basedOn);
     if (before && before.status !== 'ACTIVE') {
       this.events.emit(PlanningEvents.SprintStarted, {
         name: PlanningEvents.SprintStarted,

@@ -7,7 +7,7 @@ import {
   IsString,
   MaxLength,
 } from 'class-validator';
-import { StrictString, TrimmedText } from '@strata/common';
+import { BasedOn, StrictString, TrimmedText } from '@strata/common';
 
 /** Sprint lifecycle. A free string here let a sprint hold a status no screen renders. */
 export const SPRINT_STATUSES = ['PLANNING', 'ACTIVE', 'COMPLETED'] as const;
@@ -26,6 +26,8 @@ export class CreateSprintDto {
   @IsOptional() @IsString() retrospectiveNotes?: string;
 }
 export class UpdateSprintDto {
+  /** What the editor believed the fields they are changing held; see BasedOn. */
+  @BasedOn() basedOn?: Record<string, unknown>;
   @TrimmedText() @IsOptional() @IsString() @IsNotEmpty() @MaxLength(255) name?: string;
   @IsOptional() @IsDateString() startDate?: string;
   @IsOptional() @IsDateString() endDate?: string;

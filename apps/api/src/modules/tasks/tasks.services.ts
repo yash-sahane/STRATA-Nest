@@ -19,6 +19,8 @@ import { labelResponse, taskResponse } from './mappers';
 @Injectable()
 export class TasksService extends ScopedCrudService<Task, ReturnType<typeof taskResponse>> {
   protected readonly model = 'task';
+  /** Carries a `version` column, so a stale save is refused rather than applied. */
+  protected override readonly versioned = true;
   protected readonly auditEntity = 'task';
   protected readonly writePermission: PermissionKey = Permission.TaskWrite;
   /** Editing an existing task is open to the delivery roles; creating and
@@ -225,8 +227,8 @@ export class TasksService extends ScopedCrudService<Task, ReturnType<typeof task
     }
     // Keep the self-reference rejection synchronous — only the status path needs
     // to read the stored row first.
-    if (dto.status === undefined) return this.update(user, id, data);
-    return this.patchStatus(user, id, dto.status, data);
+    if (dto.status === undefined) return this.update(user, id, data, dto.basedOn);
+    return this.patchStatus(user, id, dto.status, data, dto.basedOn);
   }
 
   /**
@@ -257,6 +259,7 @@ export class TasksService extends ScopedCrudService<Task, ReturnType<typeof task
     id: string,
     status: string,
     data: Record<string, unknown>,
+    basedOn?: Record<string, unknown>,
   ) {
     const current = await this.findScoped(user, id);
     if (status === 'DONE' && current.status !== 'DONE') {
@@ -272,7 +275,7 @@ export class TasksService extends ScopedCrudService<Task, ReturnType<typeof task
     } else if (status !== 'DONE' && current.status === 'DONE') {
       data.completedAt = null;
     }
-    return this.update(user, id, data);
+    return this.update(user, id, data, basedOn);
   }
 
   /** Record a dependency edge (both sides, one transaction, cycle-checked). */

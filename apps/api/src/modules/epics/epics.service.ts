@@ -15,6 +15,8 @@ const ROLLUP_FIELDS: ReadonlySet<string> = new Set(['progress', 'status']);
 @Injectable()
 export class EpicsService extends ScopedCrudService<Epic, ReturnType<typeof epicResponse>> {
   protected readonly model = 'epic';
+  /** Carries a `version` column, so a stale save is refused rather than applied. */
+  protected override readonly versioned = true;
   protected readonly auditEntity = 'epic';
   protected readonly writePermission: PermissionKey = Permission.PlanningWrite;
   protected readonly spec: ListQuerySpec = {
@@ -89,7 +91,7 @@ export class EpicsService extends ScopedCrudService<Epic, ReturnType<typeof epic
     if (fields.length > 0 && fields.every((f) => ROLLUP_FIELDS.has(f))) {
       return this.patchRollup(user, id, data);
     }
-    return this.update(user, id, data);
+    return this.update(user, id, data, dto.basedOn);
   }
 
   /** The epic's rollup as its task set actually stands. */

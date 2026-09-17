@@ -43,8 +43,8 @@ import {
   useDeleteClientRequirement,
 } from '@/hooks/use-client-requirement';
 import { ApiError } from '@/lib/api/rest-client';
-import type { RequirementPriority, RequirementStatus } from '@/types';
-import { changedFields } from '@/lib/utils/changed-fields';
+import type { EditBasedOn, RequirementPriority, RequirementStatus } from '@/types';
+import { basedOnFor, changedFields } from '@/lib/utils/changed-fields';
 
 /** Server copy ends with developer instructions; the UI offers the button instead. */
 const stripCascadeHint = (message: string) =>
@@ -217,10 +217,16 @@ export function ClientRequirementDetailDialog({
         await updateRequirement.mutateAsync({
           requirementId: requirement.id,
           projectId,
-          updates: updates as {
-            title: string; description: string;
-            status: RequirementStatus; priority: RequirementPriority;
-          },
+          // What these fields held when the dialog was seeded. The diff above covers two
+          // people editing DIFFERENT fields; this covers them editing the same one, where
+          // the later save would otherwise win outright and say nothing.
+          updates: {
+            ...updates,
+            basedOn: basedOnFor(requirement as unknown as Record<string, unknown>, updates),
+          } as EditBasedOn<{
+            title?: string; description?: string;
+            status?: RequirementStatus; priority?: RequirementPriority;
+          }>,
         });
       }
     } catch {

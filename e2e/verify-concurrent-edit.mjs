@@ -1,21 +1,30 @@
-// Two people editing the same task. Does either of them lose work silently?
+// Two people editing the same task, through the real dialog. Two outcomes, both required.
 //
-// Nothing has tested this, and the shape is the dangerous one:
+// The shape that made this dangerous:
 //
-//   the server   ScopedCrudService.update does `prisma.update({ where: { id }, data })`
-//                — no version column, no If-Match, no conflict detection. Last write wins.
-//   the client   handleEditTask sends the WHOLE form every time — title, description,
+//   the server   ScopedCrudService.update was `prisma.update({ where: { id }, data })`
+//                — no version column, no If-Match, no conflict detection. Last write won.
+//   the client   handleEditTask sent the WHOLE form every time — title, description,
 //                status, priority, dueDate, estimatedHours — not just what changed.
 //
-// Together those mean a save can carry values that were already stale when the dialog
-// opened, and overwrite somebody else's change to a field the saver never touched. No
-// error, no warning, no trace: the other person's edit is simply gone.
+// Together those meant a save carried values that were already stale when the dialog
+// opened and overwrote somebody else's change to a field the saver never touched. No
+// error, no warning, no trace: the other person's edit was simply gone.
 //
 // The edit dialog re-seeds from its prop while `hasChanges` is false, so a background
 // refetch does rescue the untouched case. The moment the first key is pressed that guard
 // stops re-seeding — deliberately, to protect the edit in progress — and from then on
-// every other field in the form is a snapshot of when it opened. That is the path tested
+// every other field in the form is a snapshot of when it opened. That is the path driven
 // here, because it is the one a real edit takes.
+//
+// DIFFERENT fields (part one): both saves land, and neither person is interrupted. This
+// is the ordinary case and the reason the API's check is per field rather than per row —
+// a row-level version counter refuses this too, and sends somebody away to redo work
+// that clashed with nothing.
+//
+// The SAME field (part two): the save is refused, and refused USABLY — a message naming
+// the field, and every word still in the form. A conflict that clears the box has taken
+// the work it was supposed to protect.
 import { chromium, api, provision, addRole, signedInPage, visit, whoami } from './kit.mjs';
 
 const out = [];
@@ -51,7 +60,7 @@ const { ctx, page } = await signedInPage(browser, 'role.manager@strata.local', p
 await visit(page, `/tasks?taskId=${taskId}`, 9000);
 
 // ---- person A opens the edit dialog -----------------------------------------
-console.log('\n===== A opens the task and starts editing the TITLE');
+console.log('\n===== part one: DIFFERENT fields. A edits the title...');
 {
   // From the details dialog, into edit.
   const editBtn = page.locator('[role="dialog"]:visible').getByRole('button', { name: /^Edit$/ }).first();
@@ -111,6 +120,72 @@ console.log('\n===== A opens the task and starts editing the TITLE');
   console.log('\n===== what A\'s save actually sent');
   const sent = await page.evaluate(() => window.__lastPatchBody ?? null);
   if (sent) console.log(`   PATCH body: ${JSON.stringify(sent).slice(0, 300)}`);
+}
+
+// ---- part two: the SAME field -----------------------------------------------
+//
+// The case the diff cannot cover. Both people change the title; the second save must be
+// refused rather than winning — and the refusal has to leave the person somewhere they
+// can act from, which means their typing is still in the box.
+console.log('\n===== part two: the SAME field. Both of us retitle it.');
+{
+  await visit(page, `/tasks?taskId=${taskId}`, 9000);
+  const editBtn = page.locator('[role="dialog"]:visible').getByRole('button', { name: /^Edit$/ }).first();
+  const haveEdit = await until(page, async () => ((await editBtn.count()) > 0 ? true : null), 15000);
+  rec(Boolean(haveEdit), 'A can reopen the edit dialog', String(await editBtn.count()));
+  if (haveEdit) {
+    await editBtn.click();
+    await page.waitForTimeout(2500);
+
+    const dialog = page.locator('[role="dialog"]:visible').first();
+    const titleInput = dialog.locator('#title, input[name="title"]').first();
+    const TYPED = 'A spent a while writing this one';
+    await titleInput.fill(TYPED);
+    await page.waitForTimeout(500);
+
+    // B retitles it first — the same field A is holding.
+    const bEdit = await api(mgr, 'PATCH', `/tasks/${taskId}`, { title: 'B got there first' });
+    rec(bEdit.s < 400, "B's title change is accepted", `${bEdit.s} ${bEdit.t.slice(0, 160)}`);
+    await page.waitForTimeout(4000);
+
+    const save = dialog.getByRole('button', { name: /save|update/i }).last();
+    await save.click();
+    await page.waitForTimeout(4000);
+
+    const after = await readTask();
+    rec(
+      after?.title === 'B got there first',
+      "B's title survives — A's save did not overwrite it",
+      `title is ${JSON.stringify(after?.title)}`,
+    );
+
+    // The dialog must still be open, still holding what A typed. This is the half a
+    // conflict check is easy to get wrong: refusing the write and clearing the form
+    // loses exactly the work the refusal existed to protect.
+    const stillOpen = await dialog.count();
+    rec(stillOpen > 0, 'the dialog stays open after the refusal', `visible dialogs: ${stillOpen}`);
+    const held = stillOpen > 0 ? await titleInput.inputValue().catch(() => '') : '';
+    rec(
+      held === TYPED,
+      "and still holds every word A typed",
+      `the box reads ${JSON.stringify(held)}, A typed ${JSON.stringify(TYPED)}`,
+    );
+
+    // And A is told what happened, in words that name the field.
+    const text = await page.evaluate(() => document.body.innerText);
+    rec(
+      /somebody else changed the title/i.test(text),
+      'A is told which field somebody else changed',
+      `nothing on the page says so; body text contains ${JSON.stringify(
+        (text.match(/[^\n]*(changed|conflict|not been applied)[^\n]*/i) || ['<no such line>'])[0],
+      )}`,
+    );
+    rec(
+      /reload/i.test(text),
+      'and what to do about it',
+      'no instruction shown alongside the refusal',
+    );
+  }
 }
 
 await ctx.close();

@@ -15,12 +15,32 @@ const user = { id: 'u1', name: 'Ada' } as User;
 const existing = {
   id: 'p1',
   workspaceId: 'w1',
+  name: 'Mobile Alpha',
   shortCode: 'MOA',
+  description: 'as it was',
+  status: 'PLANNING',
   startDate: new Date('2026-06-01T00:00:00.000Z'),
   endDate: new Date('2026-08-01T00:00:00.000Z'),
+  // The conflict check renders this row with `projectResponse` to compare it against
+  // what the editor believed, so the fields that mapper reads have to be here — a
+  // half-filled row would make every comparison one between two undefineds.
+  createdAt: new Date(0),
+  updatedAt: new Date(0),
+  version: 7,
 } as Project;
 
-function build(clash: { id: string } | null) {
+function build(
+  clash: { id: string } | null,
+  conflictCheck: { writes?: number[]; present?: boolean } = {},
+) {
+  // A list, so a test can make the first conditional write lose a race and the second
+  // win it. Default: every attempt lands.
+  const writes = [...(conflictCheck.writes ?? [1, 1, 1])];
+  const updateMany = jest.fn().mockImplementation(() => {
+    const count = writes.shift();
+    return Promise.resolve({ count: count === undefined ? 1 : count });
+  });
+  const present = conflictCheck.present ?? true;
   const create = jest.fn().mockResolvedValue({
     id: 'p2',
     workspaceId: 'w1',
@@ -61,6 +81,19 @@ function build(clash: { id: string } | null) {
       ),
       create,
       update,
+      // The conditional write. `count` is what decides the outcome, so it is what these
+      // tests vary: 1 means it landed, 0 means somebody wrote in the gap and the service
+      // should look again rather than declare a conflict.
+      updateMany,
+      // Re-read after each attempt, both to report the result and to see what the other
+      // writer actually did.
+      findUnique: jest
+        .fn()
+        .mockImplementation(() =>
+          Promise.resolve(
+            present ? { ...existing, createdAt: new Date(0), updatedAt: new Date(0) } : null,
+          ),
+        ),
     },
     activityLog: { create: activityLogCreate },
   } as unknown as PrismaService;
@@ -68,7 +101,7 @@ function build(clash: { id: string } | null) {
     assertPermission: jest.fn().mockResolvedValue(undefined),
     scopeWhere: jest.fn().mockResolvedValue({}),
   } as unknown as WorkspaceAccessService;
-  return { svc: new ProjectsService(prisma, access), create, update, activityLogCreate };
+  return { svc: new ProjectsService(prisma, access), create, update, updateMany, activityLogCreate };
 }
 
 const dto = { workspaceId: 'w1', name: 'Mobile Alpha', shortCode: 'MOA' };
@@ -195,5 +228,87 @@ describe('ProjectsService — a project cannot end before it starts', () => {
       'Start date is not a valid date.',
     );
     expect(create).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Projects own their CRUD instead of inheriting ScopedCrudService, so the lost-update
+ * guard is written out a second time in projects.service.ts. Two copies of a rule is
+ * exactly how the two drift apart, and the failure would be silent — a project settings
+ * page that overwrites without a word while four other screens refuse to. These pin this
+ * copy to the same behaviour scoped-crud.locking.spec.ts pins the other to.
+ */
+describe('ProjectsService — two people editing one project', () => {
+  /** What the editor believed, matching the stored row above. */
+  const openedWith = { name: 'Mobile Alpha', description: 'as it was' };
+
+  it('writes conditionally on the row it just read', async () => {
+    const { svc, updateMany } = build(null);
+    await svc.update(user, 'p1', { name: 'Renamed', basedOn: openedWith });
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: 'p1', version: 7 },
+      data: { name: 'Renamed', version: { increment: 1 } },
+    });
+  });
+
+  it('refuses a save to a field somebody else has changed', async () => {
+    const { svc, updateMany } = build(null);
+    await expect(
+      svc.update(user, 'p1', { name: 'Renamed', basedOn: { name: 'what it used to be' } }),
+    ).rejects.toThrow(/changed the name/);
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
+  it('lets a save through when the other change was to a different field', async () => {
+    // They edited the description; this edits the name. Nothing clashes, so nobody is
+    // sent away to redo work — the case a row-level version counter gets wrong.
+    const { svc, updateMany } = build(null);
+    await expect(
+      svc.update(user, 'p1', {
+        name: 'Renamed',
+        basedOn: { name: 'Mobile Alpha', description: 'something else entirely' },
+      }),
+    ).resolves.toMatchObject({ id: 'p1' });
+    expect(updateMany).toHaveBeenCalled();
+  });
+
+  it('compares dates in the shape the client received them', async () => {
+    // The row holds an instant; the response renders `yyyy-MM-dd`. Comparing the two raw
+    // would call every date a conflict.
+    const { svc } = build(null);
+    await expect(
+      svc.update(user, 'p1', { name: 'Renamed', basedOn: { startDate: '2026-06-01' } }),
+    ).resolves.toMatchObject({ id: 'p1' });
+  });
+
+  it('looks again when somebody writes between the read and the write', async () => {
+    const { svc, updateMany } = build(null, { writes: [0, 1] });
+    await svc.update(user, 'p1', { name: 'Renamed', basedOn: openedWith });
+    expect(updateMany).toHaveBeenCalledTimes(2);
+  });
+
+  it('says the project was deleted rather than changed when it is gone', async () => {
+    const { svc } = build(null, { writes: [0], present: false });
+    await expect(
+      svc.update(user, 'p1', { name: 'Renamed', basedOn: openedWith }),
+    ).rejects.toThrow(/deleted while you were editing/);
+  });
+
+  it('bumps the counter even when the caller sent no basedOn', async () => {
+    const { svc, update, updateMany } = build(null);
+    await svc.update(user, 'p1', { name: 'Renamed' });
+    // The counter is what makes the checked path atomic. An unchecked save that did not
+    // move it could land between another client's read and its write, unnoticed.
+    expect(writtenData(update)).toMatchObject({ version: { increment: 1 } });
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
+  it('records the edited fields in the audit trail, not the counter', async () => {
+    const { svc, activityLogCreate } = build(null);
+    await svc.update(user, 'p1', { name: 'Renamed' });
+    const changed = activityLogCreate.mock.calls[0][0].data.changes.fields as string[];
+    // `version` is bookkeeping. Listing it would put "changed version" in front of
+    // somebody reading the trail to find out what a colleague actually did.
+    expect(changed).toEqual(['name']);
   });
 });

@@ -72,7 +72,7 @@ import { useRouter } from 'next/navigation';
 import type { ProjectStatus, Project } from '@/types';
 import { useHasPermission, useIsAdmin } from '@/hooks/use-permissions';
 import { Permission } from '@/lib/permissions';
-import { changedFields } from '@/lib/utils/changed-fields';
+import { basedOnFor, changedFields } from '@/lib/utils/changed-fields';
 
 export default function ProjectsPage() {
   const { user } = useAuth();
@@ -163,6 +163,11 @@ export default function ProjectsPage() {
       await updateProject.mutateAsync({
         projectId: selectedProject.id,
         workspaceId: currentWorkspace.id,
+        // What those fields held when this form opened. Narrowing the patch cannot cover
+        // two people editing the SAME field; this can. Changed since, the API refuses the
+        // save and names the field, and the `catch` below keeps the dialog open with the
+        // input still in it.
+        basedOn: basedOnFor(selectedProject as unknown as Record<string, unknown>, changes),
         ...(changes as Partial<typeof submitted>),
       });
     } catch {

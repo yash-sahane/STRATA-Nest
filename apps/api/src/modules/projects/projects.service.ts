@@ -4,13 +4,26 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { generateId, paginate, parseListQuery, toDate, type ListQuerySpec } from '@strata/common';
+import {
+  generateId,
+  paginate,
+  parseListQuery,
+  sameFieldValue,
+  toDate,
+  type ListQuerySpec,
+} from '@strata/common';
 import type { PaginatedResponse } from '@strata/shared';
 import { PrismaService } from '@strata/prisma';
 import type { Prisma, Project, User } from '@prisma/client';
 import { Permission } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { writeAuditRow } from '../activity/audit-writer';
+import {
+  changedWhileEditing,
+  CHANGED_WHILE_EDITING_TYPE,
+  DELETED_WHILE_EDITING,
+  DELETED_WHILE_EDITING_TYPE,
+} from '../workspaces/scoped-crud.base';
 import type { CreateProjectDto, UpdateProjectDto } from './dto';
 import { projectResponse } from './mappers';
 
@@ -167,7 +180,7 @@ export class ProjectsService {
     if (dto.endDate !== undefined) data.endDate = endDate;
     if (dto.memberIds !== undefined) data.memberIds = dto.memberIds as Prisma.InputJsonValue;
     if (dto.settings !== undefined) data.projectSettings = dto.settings as Prisma.InputJsonValue;
-    const updated = await this.prisma.project.update({ where: { id }, data });
+    const updated = await this.writeUpdate(existing, id, data, dto.basedOn);
     await this.audit(user, updated.workspaceId, 'updated', id, updated, Object.keys(data));
     return projectResponse(updated);
   }
@@ -177,6 +190,74 @@ export class ProjectsService {
     await this.access.assertPermission(user, existing.workspaceId, Permission.ProjectDelete);
     await this.prisma.project.delete({ where: { id } });
     await this.audit(user, existing.workspaceId, 'deleted', id, existing);
+  }
+
+  /**
+   * The write, with the lost-update guard ScopedCrudService applies to the other four
+   * versioned collections. Projects predate that base and own their CRUD, so the rule is
+   * spelled out here rather than inherited — deliberately the same behaviour and the same
+   * messages, so nobody can tell from the wording which screen they hit it on.
+   *
+   * The counter moves on every edit, including one that sent no `basedOn`: a save from an
+   * older client has to be visible to a newer one, or the overwrite this exists to catch
+   * is the one it cannot see.
+   *
+   * `basedOn` is compared against the RESPONSE shape, which is where the client got those
+   * values — `startDate` is `yyyy-MM-dd` there and a full instant in the row, and
+   * `settings` is stored as `projectSettings`.
+   */
+  private async writeUpdate(
+    existing: Project,
+    id: string,
+    data: Prisma.ProjectUpdateInput,
+    basedOn?: Record<string, unknown>,
+  ): Promise<Project> {
+    const withBump = { ...data, version: { increment: 1 } };
+    if (basedOn === undefined) {
+      return this.prisma.project.update({ where: { id }, data: withBump });
+    }
+    // Only the fields this save is actually writing, so an edit to the name is never
+    // refused because somebody changed the status.
+    const written = new Set(Object.keys(data));
+    const writtenAs: Record<string, string> = { projectSettings: 'settings' };
+    const submitted = new Set([...written].map((k) => writtenAs[k] ?? k));
+
+    let current: Project | null = existing;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (!current) {
+        throw new NotFoundException({
+          message: DELETED_WHILE_EDITING,
+          type: DELETED_WHILE_EDITING_TYPE,
+        });
+      }
+      const rendered = projectResponse(current) as unknown as Record<string, unknown>;
+      const clashing = Object.keys(basedOn).filter(
+        (field) => submitted.has(field) && !sameFieldValue(rendered[field], basedOn[field]),
+      );
+      if (clashing.length > 0) {
+        throw new ConflictException({
+          message: changedWhileEditing(clashing),
+          type: CHANGED_WHILE_EDITING_TYPE,
+          fields: clashing,
+        });
+      }
+      // `updateMany`, because `update` accepts only unique columns in `where` and the
+      // condition that matters here is on a non-unique one. A zero count means somebody
+      // wrote between the read above and this write, so look again rather than refuse.
+      const { count } = await this.prisma.project.updateMany({
+        where: { id, version: current.version },
+        data: withBump as Prisma.ProjectUpdateManyMutationInput,
+      });
+      current = await this.prisma.project.findUnique({ where: { id } });
+      if (count === 1) return current as Project;
+    }
+    throw new ConflictException({
+      message:
+        'This project is being changed by several people at once, so your save could not ' +
+        'be applied. Reload and try again.',
+      type: CHANGED_WHILE_EDITING_TYPE,
+      fields: [],
+    });
   }
 
   /** Projects predate ScopedCrudService and own their CRUD, so the audit row is

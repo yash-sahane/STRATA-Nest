@@ -2,10 +2,16 @@
 import { resources } from '@/lib/api/client';
 import { query, id } from '@/lib/api/client';
 import { ApiError, restClient } from '@/lib/api/rest-client';
-import type { ClientRequirement, RequirementPriority, RequirementStatus } from '@/types';
+import type {
+  ClientRequirement,
+  RequirementPriority,
+  RequirementStatus,
+  EditBasedOn,
+} from '@/types';
 import { toast } from '@/hooks/use-toast';
 import { createBulkNotifications } from '@/hooks/use-notification';
 import { logger } from '@/lib/logger';
+import { saveFailureToast } from '@/lib/api/mutation-error';
 
 export function useClientRequirements(projectId?: string) {
   return useQuery({
@@ -152,13 +158,13 @@ export function useUpdateClientRequirement() {
     mutationFn: async (data: {
       requirementId: string;
       projectId: string;
-      updates: {
+      updates: EditBasedOn<{
         title?: string;
         description?: string;
         clientName?: string;
         priority?: RequirementPriority;
         status?: RequirementStatus;
-      };
+      }>;
     }) => {
       const { requirementId, ...updates } = data;
 
@@ -177,13 +183,7 @@ export function useUpdateClientRequirement() {
       });
     },
     onError: (error: Error) => {
-      toast({
-        title: 'Error',
-        description:
-          (error instanceof Error ? error.message : String(error)) ||
-          'Failed to update client requirement',
-        variant: 'destructive',
-      });
+      toast(saveFailureToast(error, 'Failed to update client requirement'));
     },
   });
 }

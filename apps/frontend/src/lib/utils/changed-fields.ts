@@ -3,8 +3,8 @@
  *
  * Every edit dialog in this app submits its WHOLE form — title, description, status,
  * priority, dueDate, estimatedHours — regardless of which field was touched. The API's
- * update is a plain `prisma.update({ where: { id }, data })` with no version column and no
- * If-Match, so the last write wins outright.
+ * update used to be a plain `prisma.update({ where: { id }, data })` with no version
+ * column and no If-Match, so the last write won outright.
  *
  * Together those lose work silently. Measured on a shared task:
  *
@@ -29,9 +29,10 @@
  * they did touch is sent, including when they CLEARED it — `null` and `''` differ from a
  * previous value and travel, which the dueDate and epic fields depend on.
  *
- * What this does NOT solve is two people editing the SAME field. That needs a version
- * column and a conflict the user can see, which is a larger change and a product decision;
- * this removes the case where someone loses work they never had any way to notice.
+ * What this does NOT solve on its own is two people editing the SAME field. That is what
+ * `basedOnFor` below is for: the diff says what to write, and the baseline says what those
+ * fields were believed to hold, so the API can refuse a save that would overwrite somebody
+ * else's change to one of them.
  */
 
 /** `undefined`, `null` and `''` all mean "not set" in these payloads. */
@@ -79,4 +80,34 @@ export function changedFields<T extends Record<string, unknown>>(
     if (!sameValue(original[key], next[key])) changed[key] = next[key];
   }
   return changed;
+}
+
+/**
+ * What those fields were believed to hold, for the API to check against.
+ *
+ * `changedFields` says what to write; this says what the writer thought they were writing
+ * over. Sent together as `basedOn`, they let the API refuse a save that would overwrite
+ * somebody else's change to one of those same fields — and, just as importantly, accept
+ * one that would not. Two people editing different parts of the same record is the normal
+ * case and stays silent.
+ *
+ * Keyed on the CHANGES, not on the whole snapshot. A baseline covering fields this save
+ * does not write would make the check row-level in effect, refusing an edit to the title
+ * because somebody else set the priority. The API ignores such keys as well, but there is
+ * no reason to put a whole record on the wire to have it thrown away.
+ *
+ * Values are taken from `original` — the row as the API rendered it, which is what the
+ * dialog was seeded from — so both sides of the comparison are in the same shape. A key
+ * missing from `original` is sent as `null`, which the API reads as "there was nothing
+ * here", the same as `''` and `undefined`.
+ */
+export function basedOnFor<T extends Record<string, unknown>>(
+  original: Partial<T> | null | undefined,
+  changes: Partial<T>,
+): Record<string, unknown> {
+  const baseline: Record<string, unknown> = {};
+  for (const key of Object.keys(changes)) {
+    baseline[key] = (original as Record<string, unknown> | null | undefined)?.[key] ?? null;
+  }
+  return baseline;
 }

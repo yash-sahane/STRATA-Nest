@@ -11,7 +11,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
-import { StrictString, TrimmedText } from '@strata/common';
+import { BasedOn, StrictString, TrimmedText } from '@strata/common';
 
 /**
  * The kanban columns. A free-string `status` let a task hold a value that
@@ -56,6 +56,8 @@ export class CreateTaskDto {
 }
 // PATCH: every task field optional (kanban move = PATCH status + position).
 export class UpdateTaskDto {
+  /** What the editor believed the fields they are changing held; see BasedOn. */
+  @BasedOn() basedOn?: Record<string, unknown>;
   @IsOptional() @IsString() @MaxLength(100) hierarchyId?: string;
   @StrictString() @TrimmedText() @IsOptional() @IsString() @IsNotEmpty() @MaxLength(500) title?: string;
   @IsOptional() @IsString() sprintId?: string;

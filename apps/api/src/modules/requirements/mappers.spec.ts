@@ -4,6 +4,10 @@ import { clientRequirementResponse, functionalRequirementResponse } from './mapp
 const base = {
   createdAt: new Date('2026-06-30T12:34:56.789Z'),
   updatedAt: new Date('2026-06-30T12:34:56.789Z'),
+  // On the row but deliberately NOT in the response: the lost-update check compares
+  // fields, not row versions, so no client ever sends this back. It is here because the
+  // Prisma type has it, not because the mapper should.
+  version: 0,
   workspaceId: 'w1',
   projectId: 'p1',
   createdById: 'u1',

@@ -10,7 +10,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
-import { IsStrictBoolean, StrictString, TrimmedText } from '@strata/common';
+import { BasedOn, IsStrictBoolean, StrictString, TrimmedText } from '@strata/common';
 
 // The value sets the UI actually renders. An API that accepts a status no screen
 // can paint stores rows nobody can read: an unknown priority was silently drawn
@@ -43,6 +43,8 @@ export class CreateClientRequirementDto {
   @IsOptional() @IsArray() attachments?: unknown[];
 }
 export class UpdateClientRequirementDto {
+  /** What the editor believed the fields they are changing held; see BasedOn. */
+  @BasedOn() basedOn?: Record<string, unknown>;
   @StrictString() @TrimmedText() @IsOptional() @IsString() @IsNotEmpty() @MaxLength(500) title?: string;
   @IsOptional() @IsString() description?: string;
   @IsOptional() @IsString() clientName?: string;
