@@ -27,14 +27,14 @@ export function MetricCard({
 }: MetricCardProps) {
   const getTrendIcon = () => {
     if (!trend) return null;
-    if (trend.value > 0) return <TrendingUp className="h-4 w-4 text-green-500" />;
+    if (trend.value > 0) return <TrendingUp className="h-4 w-4 text-green-700 dark:text-green-500" />;
     if (trend.value < 0) return <TrendingDown className="h-4 w-4 text-red-500" />;
     return <Minus className="h-4 w-4 text-gray-500" />;
   };
 
   const getTrendColor = () => {
     if (!trend) return '';
-    if (trend.value > 0) return 'text-green-500';
+    if (trend.value > 0) return 'text-green-700 dark:text-green-500';
     if (trend.value < 0) return 'text-red-500';
     return 'text-gray-500';
   };

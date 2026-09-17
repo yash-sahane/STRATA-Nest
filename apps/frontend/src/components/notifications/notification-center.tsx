@@ -86,16 +86,16 @@ const getNotificationColor = (type: NotificationType) => {
     case 'TASK_REVIEW_REQUESTED':
       return 'text-purple-500';
     case 'TASK_REVIEWED_DONE':
-      return 'text-green-500';
+      return 'text-green-700 dark:text-green-500';
     case 'SPRINT_READY_TO_CLOSE':
-      return 'text-green-500';
+      return 'text-green-700 dark:text-green-500';
     case 'TASK_COMMENT':
     case 'MENTION':
       return 'text-purple-500';
     case 'SPRINT_EVENT':
-      return 'text-green-500';
+      return 'text-green-700 dark:text-green-500';
     case 'LEAVE_APPROVED':
-      return 'text-green-500';
+      return 'text-green-700 dark:text-green-500';
     case 'LEAVE_REJECTED':
     case 'ATTENDANCE_ALERT':
       return 'text-red-500';

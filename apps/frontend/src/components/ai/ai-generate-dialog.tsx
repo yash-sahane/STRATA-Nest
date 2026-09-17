@@ -595,7 +595,7 @@ We need a mobile app for our e-commerce business that allows customers to browse
             <div className="flex flex-col items-center justify-center space-y-4">
               <div className="relative">
                 <Loader2 className="h-16 w-16 text-purple-500 animate-spin" />
-                <Sparkles className="h-8 w-8 text-yellow-500 absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2" />
+                <Sparkles className="h-8 w-8 text-yellow-700 dark:text-yellow-500 absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2" />
               </div>
               <div className="text-center space-y-2">
                 <h3 className="text-lg font-semibold">Generating Project Structure...</h3>
@@ -615,7 +615,7 @@ We need a mobile app for our e-commerce business that allows customers to browse
           <div className="space-y-6 py-8">
             <div className="flex flex-col items-center justify-center space-y-4">
               <div className="relative">
-                <Loader2 className="h-16 w-16 text-green-500 animate-spin" />
+                <Loader2 className="h-16 w-16 text-green-700 dark:text-green-500 animate-spin" />
                 <CheckCircle2 className="h-8 w-8 text-green-300 absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2" />
               </div>
               <div className="text-center space-y-2">
@@ -641,7 +641,7 @@ We need a mobile app for our e-commerce business that allows customers to browse
             <Card className="border-purple-200 bg-purple-50/50 dark:bg-purple-950/20">
               <CardHeader>
                 <CardTitle className="text-base flex items-center gap-2">
-                  <CheckCircle2 className="h-5 w-5 text-green-500" />
+                  <CheckCircle2 className="h-5 w-5 text-green-700 dark:text-green-500" />
                   Analysis Complete
                 </CardTitle>
               </CardHeader>

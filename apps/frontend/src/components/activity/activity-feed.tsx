@@ -69,14 +69,14 @@ function crud(
   noun: string,
 ): Record<string, ActivityConfig> {
   return {
-    [`${entity}.created`]: { icon, color: 'text-emerald-500', label: `${noun} Created` },
+    [`${entity}.created`]: { icon, color: 'text-emerald-700 dark:text-emerald-500', label: `${noun} Created` },
     [`${entity}.updated`]: { icon, color: 'text-sky-500', label: `${noun} Updated` },
     [`${entity}.deleted`]: { icon, color: 'text-red-500', label: `${noun} Deleted` },
   };
 }
 
 const ACTIVITY_CONFIG: Record<string, ActivityConfig> = {
-  'workspace.member.added': { icon: UserPlus, color: 'text-emerald-500', label: 'Member Added' },
+  'workspace.member.added': { icon: UserPlus, color: 'text-emerald-700 dark:text-emerald-500', label: 'Member Added' },
   'workspace.member.role_changed': {
     icon: ShieldCheck,
     color: 'text-violet-500',
@@ -90,7 +90,7 @@ const ACTIVITY_CONFIG: Record<string, ActivityConfig> = {
   },
   'workspace.join_request.approved': {
     icon: CheckCircle2,
-    color: 'text-emerald-500',
+    color: 'text-emerald-700 dark:text-emerald-500',
     label: 'Join Request Approved',
   },
   'workspace.join_request.rejected': {
@@ -98,15 +98,15 @@ const ACTIVITY_CONFIG: Record<string, ActivityConfig> = {
     color: 'text-red-500',
     label: 'Join Request Rejected',
   },
-  'leave.approved': { icon: CalendarOff, color: 'text-emerald-500', label: 'Leave Approved' },
+  'leave.approved': { icon: CalendarOff, color: 'text-emerald-700 dark:text-emerald-500', label: 'Leave Approved' },
   'leave.rejected': { icon: CalendarOff, color: 'text-red-500', label: 'Leave Rejected' },
-  'time_entry.approved': { icon: Timer, color: 'text-emerald-500', label: 'Time Approved' },
+  'time_entry.approved': { icon: Timer, color: 'text-emerald-700 dark:text-emerald-500', label: 'Time Approved' },
   'time_entry.rejected': { icon: Timer, color: 'text-red-500', label: 'Time Rejected' },
 
   // Sprint milestones, emitted by SprintsService (start) and
   // SprintCompletionService (completion).
   'sprint.started': { icon: PlayCircle, color: 'text-sky-500', label: 'Sprint Started' },
-  'sprint.completed': { icon: PartyPopper, color: 'text-emerald-500', label: 'Sprint Completed' },
+  'sprint.completed': { icon: PartyPopper, color: 'text-emerald-700 dark:text-emerald-500', label: 'Sprint Completed' },
 
   // Plain CRUD on the planning domain, written by ScopedCrudService for every
   // collection that opts in via `auditEntity`. The `<entity>.<created|updated|

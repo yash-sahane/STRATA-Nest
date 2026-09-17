@@ -335,7 +335,7 @@ function AnalyticsPageContent() {
                         <p className="text-sm text-muted-foreground">Completed Tasks</p>
                         <p className="text-2xl font-bold">{workspaceAnalytics.tasks.completed}</p>
                       </div>
-                      <CheckCircle2 className="h-8 w-8 text-green-500" />
+                      <CheckCircle2 className="h-8 w-8 text-green-700 dark:text-green-500" />
                     </div>
                   </CardContent>
                 </Card>
@@ -375,7 +375,7 @@ function AnalyticsPageContent() {
                         <p className="text-sm text-muted-foreground">In Progress</p>
                         <p className="text-2xl font-bold">{workspaceAnalytics.tasks.inProgress}</p>
                       </div>
-                      <Clock className="h-8 w-8 text-orange-500" />
+                      <Clock className="h-8 w-8 text-orange-700 dark:text-orange-500" />
                     </div>
                   </CardContent>
                 </Card>
