@@ -145,12 +145,31 @@ console.log('\n===== /team');
     before.slice(0, 240).replace(/\n/g, ' | '));
 
   await addRole(p.ws, 'TESTER', 'role.tester@strata.local');
-  const appeared = await waitForText(page, 'Role TESTER', true, 30000);
-  const after = await page.locator('body').innerText().catch(() => '');
+
+  // Confirm the member is REALLY on the roster before asking whether the page noticed.
+  // Under a full-suite run the invite/accept calls share the rate limiter with everything
+  // else and can be held back by tens of seconds; without this the page has nothing to
+  // notice, and "realtime is broken" and "the fixture was slow" produce the same failure.
+  // This check flaked exactly that way once, and passed alone straight afterwards.
+  const onRoster = async () => {
+    const r = await api(p.admin, 'GET', `/workspace_members?workspaceId=${p.ws}`);
+    return JSON.stringify(r.j ?? '').includes('role.tester@strata.local');
+  };
+  let added = false;
+  for (let i = 0; i < 20 && !added; i += 1) {
+    added = await onRoster();
+    if (!added) await page.waitForTimeout(1000);
+  }
+  rec(added, 'team: the tester really was added', 'the fixture never landed — nothing to notice');
+
+  const appeared = added ? await waitForText(page, 'Role TESTER', true, 30000) : false;
   console.log(`   team: tester appeared = ${appeared}`);
-  rec(after.includes('Role TESTER'),
-    'team: a member added elsewhere appears without a refresh',
-    after.slice(0, 400).replace(/\n/g, ' | '));
+  if (added) {
+    const after = await page.locator('body').innerText().catch(() => '');
+    rec(appeared && after.includes('Role TESTER'),
+      'team: a member added elsewhere appears without a refresh',
+      after.slice(0, 400).replace(/\n/g, ' | '));
+  }
   await ctx.close();
 }
 

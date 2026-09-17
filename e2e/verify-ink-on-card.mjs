@@ -29,9 +29,12 @@ const rec = (ok, n, d = '') => { out.push([ok, n]); console.log(`${ok ? 'PASS' :
 // asserted. Keeping them in one list made an assertion that could never pass, and an
 // assertion that can never pass gets ignored.
 const ICON_ONLY = new Set([
-  'text-yellow-500', 'text-green-500', 'text-emerald-500', 'text-sky-500',
-  'text-orange-500', 'text-purple-500', 'text-violet-500', 'text-blue-500',
+  'text-sky-500', 'text-purple-500', 'text-violet-500', 'text-blue-500',
   'text-red-500', 'text-gray-500',
+  // The four that were lifted: written `text-<hue>-700 dark:text-<hue>-500`, so the
+  // mid shade now exists only under the dark variant.
+  'dark:text-yellow-500', 'dark:text-green-500', 'dark:text-emerald-500',
+  'dark:text-orange-500',
 ]);
 
 const LIGHT_INK = [
@@ -46,9 +49,13 @@ const LIGHT_INK = [
   // reason as the other three: no site uses it now, so there is no rule to measure.
   'text-blue-600', 'text-blue-700', 'text-red-700',
   'text-green-700', 'text-yellow-700', 'text-orange-700', 'text-gray-600',
-  // the unpaired mid shades, which apply in light theme too
-  'text-red-500', 'text-green-500', 'text-emerald-500', 'text-orange-500',
-  'text-yellow-500', 'text-purple-500', 'text-blue-500', 'text-sky-500',
+  // The mid shades that are still written BARE, so they apply in light theme too.
+  // orange/yellow/green/emerald-500 are no longer among them: measured at 2.89, 1.91,
+  // 2.22 and 2.47 against the light card, they were paired to `-700 dark:-500`, so the
+  // bare class compiles to nothing and listing it here would trip the inert guard
+  // rather than measure anything. red (3.81), blue (3.76) and purple (4.12) already
+  // cleared the floor and were deliberately left alone.
+  'text-red-500', 'text-purple-500', 'text-blue-500', 'text-sky-500',
   'text-gray-500', 'text-violet-500',
   // `text-sky-700` and `text-violet-700` were dropped from this list: neither appears in
   // the source, so Tailwind compiles no rule for them and the probe's own guard correctly
@@ -63,10 +70,13 @@ const DARK_INK = [
   'dark:text-emerald-400', 'dark:text-orange-400', 'dark:text-blue-400',
   'dark:text-purple-400', 'dark:text-gray-400', 'dark:text-green-300',
   'dark:text-blue-300',
-  // the unpaired mid shades ARE written bare, so on a dark card they apply as-is
-  'text-red-500', 'text-green-500', 'text-emerald-500', 'text-orange-500',
-  'text-yellow-500', 'text-purple-500', 'text-blue-500', 'text-sky-500',
+  // The mid shades still written bare apply on a dark card as-is...
+  'text-red-500', 'text-purple-500', 'text-blue-500', 'text-sky-500',
   'text-gray-500', 'text-violet-500',
+  // ...and the four that were paired reach dark theme through the variant, which is
+  // the only form of them Tailwind compiled.
+  'dark:text-yellow-500', 'dark:text-green-500', 'dark:text-emerald-500',
+  'dark:text-orange-500',
 ];
 
 const browser = await chromium.launch();

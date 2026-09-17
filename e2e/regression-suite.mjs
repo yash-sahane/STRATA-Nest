@@ -57,6 +57,8 @@ const SUITES = [
   ['verify-motion-and-loading.mjs', 'detail-dialog loading state, W badge width, live motion scale'],
   ['verify-dialog-footers.mjs', 'two detail dialogs that hand-rolled their action row'],
   ['verify-ink-on-card.mjs', 'raw-palette text ink clears its contrast floor on the card'],
+  ['verify-strength-meter.mjs', 'the password bar is readable against its track, and agrees with its own words'],
+  ['verify-calendar-legend.mjs', 'every colour the attendance calendar paints has a key, and legible ink'],
   ['verify-priority-vocabulary.mjs', 'the priority picker agrees with the priority it produces'],
   ['verify-lab-parser.mjs', 'the lab() colour parser agrees with what the browser paints'],
   ['verify-indicator-contrast.mjs', 'progress bars are distinguishable from their tracks (non-text contrast)'],

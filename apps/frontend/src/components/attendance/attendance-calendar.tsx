@@ -37,6 +37,23 @@ interface AttendanceRecord {
   workHours?: number;
 }
 
+/**
+ * Every state a day cell can be painted, in the order somebody reads them.
+ *
+ * `UNKNOWN` is deliberately absent: it shares Weekend's grey and means "nothing to report
+ * here" — a future date, or one before the person joined — which is not a state anybody
+ * needs a key for.
+ */
+const LEGEND_STATUSES = [
+  { status: 'PRESENT', label: 'Present' },
+  { status: 'LATE', label: 'Late' },
+  { status: 'ABSENT', label: 'Absent' },
+  { status: 'HALF_DAY', label: 'Half Day' },
+  { status: 'ON_LEAVE', label: 'On Leave' },
+  { status: 'HOLIDAY', label: 'Holiday' },
+  { status: 'WEEKEND', label: 'Weekend' },
+] as const;
+
 export function AttendanceCalendar() {
   const { user } = useAuth();
   const { currentWorkspace } = useCurrentWorkspace();
@@ -281,44 +298,20 @@ export function AttendanceCalendar() {
           </div>
         </div>
 
-        {/* Calendar Legend */}
+        {/* Calendar Legend — built from the same colour and icon maps the CELLS use,
+            rather than a second hand-written copy of them. The copy is how Holiday went
+            missing: `getAttendanceStatusColor` paints a holiday purple and the legend
+            listed six states, so a purple cell appeared in the grid with nothing in the
+            key to say what it meant. Derived, the two cannot drift apart again. */}
         <div className="flex flex-wrap gap-2 text-xs">
-          <Badge
-            variant="outline"
-            className="bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 border-green-200 dark:border-green-700"
-          >
-            <span className="mr-1">✓</span> Present
-          </Badge>
-          <Badge
-            variant="outline"
-            className="bg-orange-100 dark:bg-orange-900 text-orange-800 dark:text-orange-200 border-orange-200 dark:border-orange-700"
-          >
-            <span className="mr-1">⏰</span> Late
-          </Badge>
-          <Badge
-            variant="outline"
-            className="bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200 border-red-200 dark:border-red-700"
-          >
-            <span className="mr-1">✗</span> Absent
-          </Badge>
-          <Badge
-            variant="outline"
-            className="bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200 border-yellow-200 dark:border-yellow-700"
-          >
-            <span className="mr-1">½</span> Half Day
-          </Badge>
-          <Badge
-            variant="outline"
-            className="bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 border-blue-200 dark:border-blue-700"
-          >
-            <span className="mr-1">🏖️</span> On Leave
-          </Badge>
-          <Badge
-            variant="outline"
-            className="bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200 border-gray-200 dark:border-gray-700"
-          >
-            <span className="mr-1">📅</span> Weekend
-          </Badge>
+          {LEGEND_STATUSES.map(({ status, label }) => (
+            <Badge key={status} variant="outline" className={getAttendanceStatusColor(status)}>
+              <span aria-hidden="true" className="mr-1">
+                {getAttendanceStatusIcon(status)}
+              </span>
+              {label}
+            </Badge>
+          ))}
         </div>
 
         {/* Calendar Grid */}
