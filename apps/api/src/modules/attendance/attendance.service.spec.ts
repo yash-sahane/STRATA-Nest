@@ -47,7 +47,11 @@ describe('AttendanceService — per-user scoping', () => {
     // create/checkIn consult the workspace calendar so the row's isHoliday flag
     // describes the day rather than repeating the caller's claim about it.
     const holiday = { findFirst: jest.fn().mockResolvedValue(null) };
-    const prisma = { attendance, holiday } as unknown as PrismaService;
+    // Every day-level decision resolves 'today' in the WORKSPACE's declared timezone,
+    // so the service reads workspace.settings first. No timezone declared here, which
+    // is the common case and keeps these tests on the server's zone.
+    const workspace = { findUnique: jest.fn().mockResolvedValue({ settings: {} }) };
+    const prisma = { attendance, holiday, workspace } as unknown as PrismaService;
     const access = {
       assertPermission: jest.fn().mockResolvedValue(undefined),
       scopeWhere: jest.fn().mockResolvedValue({}),
@@ -253,7 +257,11 @@ describe('AttendanceService.checkIn — duplicate guard', () => {
       ),
     };
     const holiday = { findFirst: jest.fn().mockResolvedValue(closedHoliday) };
-    const prisma = { attendance, holiday } as unknown as PrismaService;
+    // Every day-level decision resolves 'today' in the WORKSPACE's declared timezone,
+    // so the service reads workspace.settings first. No timezone declared here, which
+    // is the common case and keeps these tests on the server's zone.
+    const workspace = { findUnique: jest.fn().mockResolvedValue({ settings: {} }) };
+    const prisma = { attendance, holiday, workspace } as unknown as PrismaService;
     const access = {
       assertPermission: jest.fn().mockResolvedValue(undefined),
       isPlatformAdmin: jest.fn().mockReturnValue(false),
@@ -414,7 +422,11 @@ describe('AttendanceService.checkOut — leave markers are not open check-ins', 
         ),
     };
     const holiday = { findFirst: jest.fn().mockResolvedValue(null) };
-    const prisma = { attendance, holiday } as unknown as PrismaService;
+    // Every day-level decision resolves 'today' in the WORKSPACE's declared timezone,
+    // so the service reads workspace.settings first. No timezone declared here, which
+    // is the common case and keeps these tests on the server's zone.
+    const workspace = { findUnique: jest.fn().mockResolvedValue({ settings: {} }) };
+    const prisma = { attendance, holiday, workspace } as unknown as PrismaService;
     const access = {
       assertPermission: jest.fn().mockResolvedValue(undefined),
       isPlatformAdmin: jest.fn().mockReturnValue(false),
