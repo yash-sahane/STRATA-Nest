@@ -88,6 +88,8 @@ export class FunctionalRequirementsService extends ScopedCrudService<
   ReturnType<typeof functionalRequirementResponse>
 > {
   protected readonly model = 'functionalRequirement';
+  /** Carries a `version` column, so a stale save is refused rather than applied. */
+  protected override readonly versioned = true;
   protected readonly auditEntity = 'functional_requirement';
   protected readonly writePermission: PermissionKey = Permission.RequirementWrite;
   protected readonly spec: ListQuerySpec = {
@@ -283,7 +285,7 @@ export class FunctionalRequirementsService extends ScopedCrudService<
     if (data.progress !== undefined && fields.every((f) => FR_ROLLUP_FIELDS.has(f))) {
       return this.patchRollup(user, id, row, data);
     }
-    return this.update(user, id, data);
+    return this.update(user, id, data, dto.basedOn);
   }
 
   /**

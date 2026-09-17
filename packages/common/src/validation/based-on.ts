@@ -42,20 +42,26 @@ export function BasedOn(): PropertyDecorator {
  * Both sides arrive as the API renders them, so this is mostly a string comparison — but
  * three cases are not:
  *
- *   - a cleared field. `null`, `undefined` and `''` all mean "nothing here" across this
- *     codebase (see `changedFields` on the client, which uses the same rule); treating
- *     them as three different values would report a conflict between a field that was
- *     never set and one that was cleared.
+ *   - a cleared field. `null`, `undefined`, `''`, `[]` and `{}` all mean "nothing here"
+ *     across this codebase (see `changedFields` on the client, which uses the same rule);
+ *     treating them as different values would report a conflict between a requirement
+ *     nobody has assigned and one whose assignees were cleared — and, worse, between a
+ *     stored `[]` and a client that simply had no value for the field at all, which is
+ *     every unassigned record.
  *   - a `Date`, when the comparison runs against a raw row rather than a mapped one.
- *   - a list or object — labels, assignees, attachments. Compared by their JSON, so
- *     order counts, which is correct here: a reordered assignee list IS a change
+ *   - a non-empty list or object — labels, assignees, attachments. Compared by their
+ *     JSON, so order counts, which is correct here: a reordered assignee list IS a change
  *     somebody made and would be overwritten silently otherwise.
  */
 export function sameFieldValue(stored: unknown, believed: unknown): boolean {
   const normalise = (v: unknown): string => {
     if (v === null || v === undefined || v === '') return '';
     if (v instanceof Date) return v.toISOString();
-    if (typeof v === 'object') return JSON.stringify(v);
+    if (Array.isArray(v)) return v.length === 0 ? '' : JSON.stringify(v);
+    if (typeof v === 'object') {
+      const json = JSON.stringify(v);
+      return json === '{}' ? '' : json;
+    }
     return String(v);
   };
   return normalise(stored) === normalise(believed);

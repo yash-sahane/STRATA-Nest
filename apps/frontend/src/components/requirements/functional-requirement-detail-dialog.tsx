@@ -177,6 +177,14 @@ export function FunctionalRequirementDetailDialog({
           sprintId: localSprintId,
           assignedTo: localAssignedTo,
           assignedToNames,
+          // What these fields held when this dialog opened. Reassignment is exactly the
+          // thing two managers do to the same requirement at once, and without this the
+          // later save wins outright with nothing said to either of them. Refused, the
+          // `catch` below leaves the dialog open and dirty, so nothing is retyped.
+          basedOn: {
+            sprintId: requirement.sprintId,
+            assignedTo: requirement.assignedTo,
+          },
         },
         // `?? ''`, not `|| undefined`: '' IS the answer for an FR that has no
         // sprint yet, and `undefined` means "I don't know" — which makes the

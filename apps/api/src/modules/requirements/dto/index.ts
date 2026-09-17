@@ -97,6 +97,8 @@ export class CreateFunctionalRequirementDto {
  * `requirement:write`. So does any body touching a human-authored field.
  */
 export class UpdateFunctionalRequirementDto {
+  /** What the editor believed the fields they are changing held; see BasedOn. */
+  @BasedOn() basedOn?: Record<string, unknown>;
   @IsOptional() @IsString() @MaxLength(100) hierarchyId?: string;
   @StrictString() @TrimmedText() @IsOptional() @IsString() @IsNotEmpty() @MaxLength(500) title?: string;
   @IsOptional() @IsString() epicId?: string;

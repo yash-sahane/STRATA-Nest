@@ -13,8 +13,9 @@ import {
 } from '@/lib/hierarchy-id-generator';
 import { createBulkNotifications } from '@/hooks/use-notification';
 import { deriveEpicMetrics } from '@/hooks/use-epic';
-import type { FunctionalRequirement, FunctionalRequirementStatus, Task } from '@/types';
+import type { EditBasedOn, FunctionalRequirement, FunctionalRequirementStatus, Task } from '@/types';
 import { logger } from '@/lib/logger';
+import { saveFailureToast } from '@/lib/api/mutation-error';
 
 /**
  * Derive an FR's status from its linked tasks. The FR detail dialog labels
@@ -384,7 +385,7 @@ export function useUpdateFunctionalRequirement() {
     mutationFn: async (data: {
       requirementId: string;
       projectId: string;
-      updates: Partial<FunctionalRequirement>;
+      updates: EditBasedOn<Partial<FunctionalRequirement>>;
       /** The FR's sprint BEFORE this update. Optional: read from the server
        *  when the caller does not know it (see below). */
       previousSprintId?: string;
@@ -392,6 +393,8 @@ export function useUpdateFunctionalRequirement() {
       const { requirementId, projectId, updates, previousSprintId } = data;
 
       // Process updates - no need to stringify since new fields are simple strings
+      // `basedOn` addresses the save rather than the record, but it travels in the
+      // same object; it goes to the API and nowhere else.
       const processedUpdates: any = { ...updates };
 
       // The sprint the FR is moving OFF, resolved BEFORE the write. The detail
@@ -637,13 +640,7 @@ export function useUpdateFunctionalRequirement() {
       // single save. Errors are still surfaced below.
     },
     onError: (error: unknown) => {
-      toast({
-        title: 'Error',
-        description:
-          (error instanceof Error ? error.message : String(error)) ||
-          'Failed to update functional requirement',
-        variant: 'destructive',
-      });
+      toast(saveFailureToast(error, 'Failed to update functional requirement'));
     },
   });
 }
