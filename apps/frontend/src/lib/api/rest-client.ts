@@ -115,6 +115,23 @@ const skipsRefreshRetry = (path: string): boolean =>
   NO_REFRESH_RETRY.some((p) => path.startsWith(p));
 
 /**
+ * Something a signed-out user can act on, in place of the API's "Unauthorized".
+ *
+ * A 401 that reaches the error below on an ordinary endpoint has already been through
+ * refresh-and-retry and lost, so the session is genuinely gone. The backend's word for
+ * that is correct protocol-speak and tells the person nothing: measured, a save with no
+ * valid session raised a toast reading exactly `Unauthorized`, while their work sat in a
+ * dialog they had no reason to believe was still holding it.
+ *
+ * The four endpoints on NO_REFRESH_RETRY are left alone — a 401 from `login` means the
+ * credentials were wrong, and "your session has ended" would be a lie.
+ */
+function expiredSessionMessage(status: number, path: string): string | null {
+  if (status !== 401 || skipsRefreshRetry(path)) return null;
+  return 'Your session has ended. Sign in again — your changes are still on this page.';
+}
+
+/**
  * Set once the API has answered a refresh with "that cookie is not valid"
  * (401/403). A visitor who is simply signed out has no refresh cookie at all,
  * so every later 401 fired another refresh that could only 401 too — doubling
@@ -176,7 +193,12 @@ async function doFetch(path: string, opts: Options = {}, isRetry = false): Promi
       flattenMessage(error?.detail) ||
       response.statusText ||
       `Request failed with status ${response.status}`;
-    throw new ApiError(message, response.status, error?.type || 'ApiError', error ?? null);
+    throw new ApiError(
+      expiredSessionMessage(response.status, path) ?? message,
+      response.status,
+      error?.type || 'ApiError',
+      error ?? null,
+    );
   }
   return data;
 }
