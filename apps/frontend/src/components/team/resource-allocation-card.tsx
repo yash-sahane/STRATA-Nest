@@ -4,6 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Progress } from '@/components/ui/progress';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
+import { Skeleton } from '@/components/ui/skeleton';
 import {
   AlertTriangle,
   Calendar as CalendarIcon,
@@ -24,12 +25,37 @@ import {
 interface ResourceAllocationCardProps {
   workloadData: TeamMemberWorkload[];
   averageWorkload: number;
+  /**
+   * The workspace's task list has not arrived yet.
+   *
+   * Without this the card could not tell "nobody has any tasks" from "we do not know
+   * yet", and showed the empty state for both. Two things went wrong with that. It told
+   * anyone on a slow connection "No task assignments yet" about a team that had plenty,
+   * and then — because the empty state is far shorter than the real list plus its legend
+   * — the card GREW when the data landed and shoved the Team Directory down the page.
+   *
+   * Measured with the task list held back 4s: CLS 0.1799 against a "good" bar of 0.1,
+   * and 0.0000 when it answered promptly (e2e/probe-team-cls.mjs).
+   */
+  isLoading?: boolean;
+  /**
+   * How many rows to reserve while loading. The roster has already arrived by the time
+   * this card renders, so the count is known exactly and the placeholder can be the same
+   * height as what replaces it — which is what makes the shift nothing rather than
+   * merely smaller.
+   */
+  placeholderRows?: number;
 }
 
 export function ResourceAllocationCard({
   workloadData,
   averageWorkload,
+  isLoading = false,
+  placeholderRows = 3,
 }: ResourceAllocationCardProps) {
+  // The legend is static — it describes the bands, not the data — so it belongs on screen
+  // from the first paint. Hiding it until the tasks arrive was half the height change.
+  const showLegend = isLoading || workloadData.length > 0;
   return (
     <Card className="overflow-hidden">
       <CardHeader>
@@ -43,14 +69,41 @@ export function ResourceAllocationCard({
           </div>
           <div className="rounded-md border bg-muted/30 px-3 py-2 text-left sm:text-right">
             <div className="text-sm text-muted-foreground">Average Load</div>
-            <div className={cn('text-2xl font-bold', getWorkloadColor(averageWorkload))}>
-              {averageWorkload}%
-            </div>
+            {/* `0%` while the tasks are still coming is a figure, and a wrong one. The
+                placeholder is sized to the number it replaces so this corner does not
+                move either. */}
+            {isLoading ? (
+              <Skeleton className="h-8 w-16" />
+            ) : (
+              <div className={cn('text-2xl font-bold', getWorkloadColor(averageWorkload))}>
+                {averageWorkload}%
+              </div>
+            )}
           </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        {workloadData.length > 0 ? (
+        {isLoading ? (
+          /* The same DOM as a real row, with the text swapped for blocks, so the height
+             matches by construction rather than by a number kept in step by hand. */
+          <div className="divide-y rounded-md border">
+            {Array.from({ length: Math.max(1, placeholderRows) }, (_, i) => (
+              <div key={i} className="space-y-2 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 flex-1">
+                    <Skeleton className="h-8 w-8 rounded-full" />
+                    <div className="flex-1 min-w-0 space-y-1">
+                      <Skeleton className="h-4 w-40" />
+                      <Skeleton className="h-3 w-16" />
+                    </div>
+                  </div>
+                  <Skeleton className="h-5 w-10" />
+                </div>
+                <Skeleton className="h-2 w-full" />
+              </div>
+            ))}
+          </div>
+        ) : workloadData.length > 0 ? (
           <div className="divide-y rounded-md border">
             {workloadData.map((member) => {
               const initials = member.userName
@@ -127,7 +180,7 @@ export function ResourceAllocationCard({
           </div>
         )}
 
-        {workloadData.length > 0 && (
+        {showLegend && (
           <div className="pt-4 border-t space-y-2">
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">Capacity Legend (open tasks):</span>
