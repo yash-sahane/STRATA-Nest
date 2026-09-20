@@ -56,6 +56,7 @@ const SUITES = [
   ['verify-reflow.mjs', '320px and 200% zoom reflow without clipping or overlap (self-testing)'],
   ['verify-layout-shift.mjs', 'content does not jump about while a page loads (self-testing)'],
   ['verify-slow-load-shift.mjs', 'a page stays still when one of its queries answers late (self-testing)'],
+  ['verify-data-volume.mjs', '2500 tasks: the pages still load, and the figures are the real ones'],
   ['verify-timesheet-tags.mjs', 'tags collected and never shown'],
   ['verify-motion-and-loading.mjs', 'detail-dialog loading state, W badge width, live motion scale'],
   ['verify-dialog-footers.mjs', 'two detail dialogs that hand-rolled their action row'],
