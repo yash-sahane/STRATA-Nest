@@ -21,6 +21,7 @@ const SUITES = [
   ['verify-optimistic-locking.mjs', 'the same field is refused, a different one is not (API, 5 collections)'],
   ['verify-board-drag.mjs', 'dragging a card between columns persists, by keyboard'],
   ['verify-rate-limited-ui.mjs', 'a rate-limited page explains itself instead of looking empty'],
+  ['verify-rate-limit-recovery.mjs', 'a rate-limited background refetch recovers instead of going quietly stale'],
   ['integrity-fixes.mjs', 'attendance, approved time entries, leave races, 500s'],
   ['api-validation.mjs', 'cross-workspace parents, time arithmetic, blank/oversized text, files'],
   ['destructive-contrast.mjs', 'destructive text clears AA in both themes'],

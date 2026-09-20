@@ -17,6 +17,14 @@ export class ApiError extends Error {
   code: number;
   type: string;
   /**
+   * `Retry-After`, in milliseconds, when the server sent one.
+   *
+   * Only a 429 and a 503 carry it, and it is the difference between guessing at a backoff
+   * and being told. Undefined when absent or unparseable — a caller that wants to retry
+   * then picks its own delay rather than treating "no header" as "retry immediately".
+   */
+  retryAfterMs?: number;
+  /**
    * The parsed error body (`data.error`, or the whole payload when the envelope
    * is missing). `details.message` is a string for domain errors but an array of
    * strings — or a field->errors map — for ValidationPipe failures, so callers
@@ -24,12 +32,29 @@ export class ApiError extends Error {
    * `null` when the response had no JSON body.
    */
   details: unknown;
-  constructor(message: string, code: number, type = 'ApiError', details: unknown = null) {
+  constructor(
+    message: string,
+    code: number,
+    type = 'ApiError',
+    details: unknown = null,
+    retryAfterMs?: number,
+  ) {
     super(message);
     this.code = code;
     this.type = type;
     this.details = details;
+    this.retryAfterMs = retryAfterMs;
   }
+}
+
+/** `Retry-After` as milliseconds. Seconds per RFC 9110; an HTTP-date is also legal. */
+function retryAfterMs(response: Response): number | undefined {
+  const raw = response.headers.get('retry-after');
+  if (!raw) return undefined;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const at = Date.parse(raw);
+  return Number.isFinite(at) ? Math.max(0, at - Date.now()) : undefined;
 }
 
 /**
@@ -198,6 +223,7 @@ async function doFetch(path: string, opts: Options = {}, isRetry = false): Promi
       response.status,
       error?.type || 'ApiError',
       error ?? null,
+      retryAfterMs(response),
     );
   }
   return data;

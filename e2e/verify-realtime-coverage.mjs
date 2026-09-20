@@ -138,6 +138,18 @@ console.log('\n===== /team');
 {
   const { ctx, page } = await signedInPage(browser, 'role.manager@strata.local', p.ws);
 
+  // Count the frames, the way `livesUpdate` does for the other five collections. Without
+  // this the roster case could only say "the page did not update", which is the symptom
+  // of two different faults: the server never broadcast, or it did and the page ignored
+  // it. Two full-suite runs were spent not knowing which.
+  let frames = 0;
+  page.on('websocket', (s) =>
+    s.on('framereceived', (f) => {
+      const d = typeof f.payload === 'string' ? f.payload : '';
+      if (d.includes('"event"')) frames += 1;
+    }),
+  );
+
   /**
    * A LOADED roster, not merely a rendered one.
    *
@@ -191,12 +203,19 @@ console.log('\n===== /team');
     rec(added, 'team: the tester really was added', 'the fixture never landed — nothing to notice');
 
     const appeared = added ? await waitForText(page, 'Role TESTER', true, 30000) : false;
-    console.log(`   team: tester appeared = ${appeared}`);
+    console.log(`   team: ${frames} ws frames; tester appeared = ${appeared}`);
     if (added) {
       const after = await page.locator('body').innerText().catch(() => '');
+      // Say which fault it is. A broadcast that never happened and one the page ignored
+      // need different fixes, and "the page did not update" describes both.
+      const diagnosis = frames === 0
+        ? 'and NO websocket frame arrived — the server did not broadcast, or the socket '
+          + 'never connected'
+        : `although ${frames} websocket frame(s) DID arrive — the page was told and did not `
+          + 'act on it, or its refetch failed';
       rec(appeared && after.includes('Role TESTER'),
         'team: a member added elsewhere appears without a refresh',
-        after.slice(0, 400).replace(/\n/g, ' | '));
+        `${diagnosis}. Page: ${after.slice(0, 260).replace(/\n/g, ' | ')}`);
     }
   }
   await ctx.close();
