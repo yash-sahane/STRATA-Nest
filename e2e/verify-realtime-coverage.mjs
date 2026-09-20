@@ -195,6 +195,12 @@ console.log('\n===== /team');
     rec(!hadTester, 'team: the tester is not on the roster yet',
       before.slice(0, 240).replace(/\n/g, ' | '));
 
+    // Count only what arrives AFTER the change, the way `livesUpdate` does. Without this
+    // reset the total includes every frame from page load — and `loadRoster` above may
+    // navigate up to three times, each opening a fresh socket. A run reported "2 frames
+    // arrived, so the page was told" on a count that could not distinguish the member
+    // event from a subscription handshake.
+    frames = 0;
     await addRole(p.ws, 'TESTER', 'role.tester@strata.local');
 
     // Confirm the member is REALLY on the roster before asking whether the page noticed.
@@ -233,10 +239,10 @@ console.log('\n===== /team');
       // Say which fault it is. A broadcast that never happened and one the page ignored
       // need different fixes, and "the page did not update" describes both.
       const diagnosis = frames === 0
-        ? 'and NO websocket frame arrived — the server did not broadcast, or the socket '
-          + 'never connected'
-        : `although ${frames} websocket frame(s) DID arrive, with no 429 to explain it — `
-          + 'the page was told and did not act on it';
+        ? 'and NO websocket frame arrived AFTER the change — the server did not broadcast, '
+          + 'or this page was not subscribed by the time it did'
+        : `although ${frames} websocket frame(s) arrived AFTER the change, with no 429 to `
+          + 'explain it — the page was told and did not act on it';
       rec(appeared && after.includes('Role TESTER'),
         'team: a member added elsewhere appears without a refresh',
         `${diagnosis}. Page: ${after.slice(0, 260).replace(/\n/g, ' | ')}`);
