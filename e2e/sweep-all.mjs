@@ -24,12 +24,23 @@ const AUDIT = `(() => {
     if (cs.visibility === 'hidden' || cs.display === 'none') continue;
     const r = el.getBoundingClientRect();
     if (r.width < 2 || r.height < 2) continue;
+    // Text a screen reader would actually reach. Plain textContent includes anything
+    // inside an aria-hidden subtree, so an icon-only button whose glyph is correctly
+    // hidden — <button><span aria-hidden="true">X</span></button> — was scored as NAMED.
+    // That is the commonest shape of an unnamed control, so the check was blind to
+    // precisely what it exists to find; verified by injecting one and watching it pass.
+    const visibleText = (node) => {
+      if (!node) return '';
+      const clone = node.cloneNode(true);
+      clone.querySelectorAll('[aria-hidden="true"]').forEach((n) => n.remove());
+      return clone.textContent || '';
+    };
     const name = (
       el.getAttribute('aria-label') ||
       (el.getAttribute('aria-labelledby') ? 'labelledby' : '') ||
-      (el.id && document.querySelector('label[for="' + CSS.escape(el.id) + '"]')?.textContent) ||
-      el.closest('label')?.textContent ||
-      el.textContent ||
+      (el.id && visibleText(document.querySelector('label[for="' + CSS.escape(el.id) + '"]'))) ||
+      visibleText(el.closest('label')) ||
+      visibleText(el) ||
       el.getAttribute('title') ||
       el.getAttribute('placeholder') ||
       ''
