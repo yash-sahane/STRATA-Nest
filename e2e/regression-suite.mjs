@@ -54,6 +54,7 @@ const SUITES = [
   ['verify-a11y-structure.mjs', 'the rest of WCAG A/AA across 18 routes (self-testing)'],
   ['verify-keyboard-journey.mjs', 'the app is operable without a mouse (focus trap, restore, skip link)'],
   ['verify-reflow.mjs', '320px and 200% zoom reflow without clipping or overlap (self-testing)'],
+  ['verify-scroll-reachability.mjs', 'nothing is cut off the START of a scrolling strip, where no scroll can reach it'],
   ['verify-layout-shift.mjs', 'content does not jump about while a page loads (self-testing)'],
   ['verify-slow-load-shift.mjs', 'a page stays still when one of its queries answers late (self-testing)'],
   ['verify-data-volume.mjs', '2500 tasks: the pages still load, and the figures are the real ones'],

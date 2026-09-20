@@ -12,10 +12,18 @@ const TabsList = React.forwardRef<
     ref={ref}
     className={cn(
       // max-w-full + overflow-x-auto: a strip with more tabs than fit (Settings
-      // has five) otherwise overflowed its container with overflow-x visible,
+      // has six) otherwise overflowed its container with overflow-x visible,
       // so the trailing tabs were painted outside the viewport with nothing
       // able to scroll to them — unreachable on a narrow phone.
-      'inline-flex h-10 max-w-full items-center justify-center overflow-x-auto rounded-md bg-muted p-1 text-muted-foreground',
+      //
+      // `justify-center-safe`, not `justify-center`. Centring content that overflows
+      // splits the overflow across BOTH ends, and `scrollLeft` cannot go below zero — so
+      // whatever hangs off the left is unreachable no matter how you scroll. That is the
+      // same defect the line above fixed, reintroduced at the other end: measured on
+      // /settings at 768px, the first tab was cut by 51px with scrollLeft already 0 and
+      // 55px of scroll available in the wrong direction. Safe alignment centres while
+      // there is room and falls back to flex-start the moment there is not.
+      'inline-flex h-10 max-w-full items-center justify-center-safe overflow-x-auto rounded-md bg-muted p-1 text-muted-foreground',
       className
     )}
     {...props}

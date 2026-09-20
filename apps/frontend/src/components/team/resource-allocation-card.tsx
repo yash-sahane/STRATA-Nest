@@ -90,7 +90,8 @@ export function ResourceAllocationCard({
             {Array.from({ length: Math.max(1, placeholderRows) }, (_, i) => (
               <div key={i} className="space-y-2 p-3">
                 <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-3 flex-1">
+                  {/* `min-w-0` here for the same reason as the real row below. */}
+                  <div className="flex items-center gap-3 flex-1 min-w-0">
                     <Skeleton className="h-8 w-8 rounded-full" />
                     <div className="flex-1 min-w-0 space-y-1">
                       <Skeleton className="h-4 w-40" />
@@ -128,7 +129,14 @@ export function ResourceAllocationCard({
                   className="space-y-2 p-3 transition-colors hover:bg-muted/30"
                 >
                   <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-3 flex-1">
+                    {/* `min-w-0`, or this row cannot shrink. A flex item's automatic
+                        minimum size is its content's, so without it this div refuses to
+                        go narrower than the avatar plus the un-shrinkable status badge,
+                        and the `truncate` on the name inside never gets the chance to
+                        engage. Measured at 320px: the row wanted 297px inside a 212px
+                        column, and the Card's own `overflow-hidden` then cut 74px off the
+                        end — taking the whole workload percentage with it, silently. */}
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
                       <Avatar className="h-8 w-8">
                         <AvatarFallback className="text-xs">{initials}</AvatarFallback>
                       </Avatar>
