@@ -13,6 +13,8 @@ import { chromium, api, provision, addRole, signedInPage, visit, whoami } from '
 
 const out = [];
 const rec = (ok, n, d = '') => { out.push([ok, n]); console.log(`${ok ? 'PASS' : 'FAIL'}  ${n}${ok ? '' : '\n        -> ' + String(d).slice(0, 350)}`); };
+const skipped = [];
+const skip = (n, why) => { skipped.push(n); console.log(`SKIP  ${n}\n        -> ${why}`); };
 
 const browser = await chromium.launch();
 const p = await provision('rtcover');
@@ -150,6 +152,15 @@ console.log('\n===== /team');
     }),
   );
 
+  // Watch for the roster refetch being throttled. The client now retries a 429, honouring
+  // Retry-After — which can legitimately be tens of seconds, i.e. longer than this script
+  // is willing to wait. Recovering slowly is correct behaviour, and reporting it as
+  // "realtime is broken" is how two earlier runs sent me after the wrong thing.
+  let throttled = 0;
+  page.on('response', (r) => {
+    if (r.status() === 429 && /workspace_members|\/tasks/.test(r.url())) throttled += 1;
+  });
+
   /**
    * A LOADED roster, not merely a rendered one.
    *
@@ -202,17 +213,30 @@ console.log('\n===== /team');
     }
     rec(added, 'team: the tester really was added', 'the fixture never landed — nothing to notice');
 
-    const appeared = added ? await waitForText(page, 'Role TESTER', true, 30000) : false;
-    console.log(`   team: ${frames} ws frames; tester appeared = ${appeared}`);
-    if (added) {
+    // 75s, not 30s: the refetch may be backing off behind a Retry-After, and giving up
+    // before the app has finished doing the right thing is not a measurement.
+    const appeared = added ? await waitForText(page, 'Role TESTER', true, 75000) : false;
+    console.log(
+      `   team: ${frames} ws frames; ${throttled} throttled response(s); appeared = ${appeared}`,
+    );
+    if (added && !appeared && throttled > 0) {
+      // Known, external, and not what this script is for. The limiter refused the refetch
+      // the event asked for, and the client is waiting out the window it was given.
+      skip(
+        'team: a member added elsewhere appears without a refresh',
+        `${throttled} response(s) to this page were answered 429 by the shared rate limiter, ` +
+          'so the refetch the event triggered is still backing off. The realtime path was ' +
+          'not exercised in this run — it is not passing, it is unmeasured',
+      );
+    } else if (added) {
       const after = await page.locator('body').innerText().catch(() => '');
       // Say which fault it is. A broadcast that never happened and one the page ignored
       // need different fixes, and "the page did not update" describes both.
       const diagnosis = frames === 0
         ? 'and NO websocket frame arrived — the server did not broadcast, or the socket '
           + 'never connected'
-        : `although ${frames} websocket frame(s) DID arrive — the page was told and did not `
-          + 'act on it, or its refetch failed';
+        : `although ${frames} websocket frame(s) DID arrive, with no 429 to explain it — `
+          + 'the page was told and did not act on it';
       rec(appeared && after.includes('Role TESTER'),
         'team: a member added elsewhere appears without a refresh',
         `${diagnosis}. Page: ${after.slice(0, 260).replace(/\n/g, ' | ')}`);
@@ -224,5 +248,9 @@ console.log('\n===== /team');
 await browser.close();
 await p.cleanup();
 const bad = out.filter(([ok]) => !ok);
-console.log(`\ntotal ${out.length}  passed ${out.length - bad.length}  failed ${bad.length}`);
+console.log(
+  `\ntotal ${out.length}  passed ${out.length - bad.length}  failed ${bad.length}` +
+    `  skipped ${skipped.length}`,
+);
 bad.forEach(([, n]) => console.log('  FAILED: ' + n));
+skipped.forEach((n) => console.log('  SKIPPED: ' + n));
