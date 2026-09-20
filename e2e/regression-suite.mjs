@@ -17,6 +17,7 @@ const SUITES = [
   ['verify-file-roundtrip.mjs', 'an attachment comes back byte for byte, name intact'],
   ['auth-fixes.mjs', 'e-mail case, logout, webhook secret'],
   ['verify-session-expiry.mjs', 'a form survives its own session expiring, and fails loudly when it cannot'],
+  ['verify-offline-save.mjs', 'a save survives the connection dropping, and says the connection is why'],
   ['verify-concurrent-edit.mjs', 'two people editing one record: neither loses work silently'],
   ['verify-optimistic-locking.mjs', 'the same field is refused, a different one is not (API, 5 collections)'],
   ['verify-board-drag.mjs', 'dragging a card between columns persists, by keyboard'],

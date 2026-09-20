@@ -8,12 +8,18 @@
 // /team slow. It read 0.1242 that once and 0 every other time.
 //
 // So this holds the lag still instead of waiting for it. One query is delayed
-// deliberately, and CLS is measured against the same "good" bar.
+// deliberately, on every route whose content depends on a query the page does not wait
+// for, and CLS is measured against the same "good" bar.
 //
 // What it caught on /team: `workloadData` is null until the workspace's task list arrives,
 // and the Resource Allocation card was gated on it — so the card was ABSENT and then
 // appeared, pushing the Team Directory down. 0.1799 against a bar of 0.1. The card now
 // renders in a loading state at the height it will occupy, and fills in where it stands.
+//
+// The other five routes are swept because the SHAPE is the same, not because anything is
+// known to be wrong with them. Grepping for the pattern that broke /team found no other
+// instance, which is weak evidence — the bug is about what renders when, and that is not
+// reliably visible in the source. Holding the query still and looking is.
 //
 // The self-test at the end matters as much as the measurement: a detector that reports 0
 // because it is not looking is indistinguishable from a page that does not move.
@@ -84,29 +90,47 @@ async function measure(route, delayPattern, inject = false) {
   return { total: Number(cls.total), worst: cls.worst };
 }
 
-// /team runs two queries: the roster gates the page behind a full-height loader, and the
-// workspace task list — which the Resource Allocation card needs — is not waited for.
-console.log('\n===== /team, with the workspace task list held back');
-const fast = await measure('/team', null);
-console.log(`   task list answers fast   CLS ${fast.total.toFixed(4)}`);
-rec(
-  fast.total <= GOOD_CLS,
-  '/team is still when every query answers promptly',
-  `CLS ${fast.total.toFixed(4)}${fast.worst ? ` worst on ${fast.worst.node}` : ''}`,
-);
+// The routes whose content depends on a query the page does NOT wait for, delayed by the
+// endpoint that feeds it. /team is the one measured at 0.1799; the rest are here because
+// the shape is the same — a page that paints, then grows when a second query lands — and
+// the only way to know whether they share the bug is to hold the query still and look.
+//
+// `**/tasks**` covers most of them: the task list feeds the workload card, the dashboard
+// counters, the analytics charts and the sprint burndowns, and none of those gate the
+// first paint.
+const ROUTES = [
+  ['/team', '**/tasks**', 'the workspace task list'],
+  ['/dashboard', '**/tasks**', 'the task list behind the counters'],
+  ['/analytics', '**/tasks**', 'the task list behind the charts'],
+  ['/projects', '**/tasks**', 'the task list behind the health badges'],
+  ['/sprints', '**/tasks**', 'the task list behind the sprint figures'],
+  ['/calendar', '**/tasks**', 'the task list behind the month grid'],
+];
 
-const slow = await measure('/team', '**/tasks**');
-console.log(
-  `   task list held ${DELAY_MS}ms    CLS ${slow.total.toFixed(4)}` +
-    (slow.worst ? `   worst ${slow.worst.value} on ${slow.worst.node}` : ''),
-);
-rec(
-  slow.total <= GOOD_CLS,
-  '/team is still when the task list answers late',
-  `CLS ${slow.total.toFixed(4)} against a bar of ${GOOD_CLS}` +
-    (slow.worst ? `, worst ${slow.worst.value} on ${slow.worst.node}` : '') +
-    ' — something that arrives late is taking up space it did not reserve',
-);
+for (const [route, pattern, what] of ROUTES) {
+  console.log(`\n===== ${route}, with ${what} held back`);
+
+  const fast = await measure(route, null);
+  console.log(`   answers fast        CLS ${fast.total.toFixed(4)}`);
+  rec(
+    fast.total <= GOOD_CLS,
+    `${route} is still when every query answers promptly`,
+    `CLS ${fast.total.toFixed(4)}${fast.worst ? ` worst on ${fast.worst.node}` : ''}`,
+  );
+
+  const slow = await measure(route, pattern);
+  console.log(
+    `   held ${DELAY_MS}ms          CLS ${slow.total.toFixed(4)}` +
+      (slow.worst ? `   worst ${slow.worst.value} on ${slow.worst.node}` : ''),
+  );
+  rec(
+    slow.total <= GOOD_CLS,
+    `${route} is still when ${what} answers late`,
+    `CLS ${slow.total.toFixed(4)} against a bar of ${GOOD_CLS}` +
+      (slow.worst ? `, worst ${slow.worst.value} on ${slow.worst.node}` : '') +
+      ' — something arriving late is taking space it did not reserve',
+  );
+}
 
 // ---------------------------------------------------------------- the meter works
 console.log('\n===== self-test: the meter must see a shift it is given');

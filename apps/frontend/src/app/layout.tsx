@@ -4,6 +4,7 @@ import { ThemeProvider } from '@/components/providers/theme-provider';
 import { QueryProvider } from '@/components/providers/query-provider';
 import { AuthProvider } from '@/components/providers/auth-provider';
 import { ConfirmProvider } from '@/components/providers/confirm-provider';
+import { OfflineNotice } from '@/components/providers/offline-notice';
 import { Toaster } from '@/components/ui/sonner';
 import '../styles/globals.css';
 
@@ -44,7 +45,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         >
           <QueryProvider>
             <AuthProvider>
-              <ConfirmProvider>{children}</ConfirmProvider>
+              <ConfirmProvider>
+                {children}
+                {/* Outside the dashboard layout on purpose: signing in with no
+                    connection stalls exactly the same way, and says just as little. */}
+                <OfflineNotice />
+              </ConfirmProvider>
               <Toaster position="top-right" richColors />
             </AuthProvider>
           </QueryProvider>
