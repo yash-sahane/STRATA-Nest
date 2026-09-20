@@ -147,7 +147,16 @@ export function Sidebar({ className }: SidebarProps) {
     >
       {/* Logo */}
       <div className="flex h-16 shrink-0 items-center border-b px-4">
-        <Link href="/dashboard" className="flex items-center gap-2 font-bold">
+        {/* `hover:opacity-80` because this link had NO hover response of any kind —
+            measured by screenshotting it hovered and not, and comparing: zero pixels
+            changed. It is the only way back to the dashboard from the top of the
+            sidebar, and nothing told anyone it was a link. Opacity rather than a colour,
+            because the mark is an image in light theme and an inverted one in dark, and
+            opacity is the one treatment that reads the same on both. */}
+        <Link
+          href="/dashboard"
+          className="flex items-center gap-2 font-bold transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background rounded-md"
+        >
           <div className={cn('flex items-center justify-center', collapsed ? 'h-8 w-8' : 'h-10 w-10')}>
             <img
               src="/logo.svg"
@@ -181,9 +190,20 @@ export function Sidebar({ className }: SidebarProps) {
               const link = (
                 <Link
                   href={item.href}
+                  // The page you are on, said out loud. Nothing in this app used
+                  // `aria-current` anywhere: sighted users got `bg-accent` and everybody
+                  // else got no indication at all of which of the eighteen links they
+                  // were currently looking at.
+                  aria-current={active ? 'page' : undefined}
                   className={cn(
-                    'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors hover:bg-accent',
-                    active ? 'bg-accent text-accent-foreground' : 'text-muted-foreground',
+                    'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+                    // The active item needs its OWN hover: `hover:bg-accent` on top of
+                    // `bg-accent` is the same colour, so hovering the current page's link
+                    // changed not one pixel — measured — while every other link in the
+                    // same list responded.
+                    active
+                      ? 'bg-accent text-accent-foreground hover:bg-accent/70'
+                      : 'text-muted-foreground hover:bg-accent',
                     collapsed && 'justify-center'
                   )}
                 >

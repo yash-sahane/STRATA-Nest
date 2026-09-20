@@ -210,7 +210,10 @@ export function Header() {
               <DropdownMenuItem
                 key={item.href}
                 onClick={() => router.push(item.href)}
-                className={cn('cursor-pointer', isActive && 'bg-accent text-accent-foreground')}
+                // Same as the sidebar: say which page this is, for anyone who cannot see
+                // that it is the highlighted one.
+                aria-current={isActive ? 'page' : undefined}
+                className={cn(isActive && 'bg-accent text-accent-foreground')}
               >
                 <Icon className="mr-2 h-4 w-4" />
                 {item.name}
@@ -442,16 +445,16 @@ export function Header() {
             <DropdownMenuSeparator />
             {/* /profile is a read-only summary; all editing lives in Settings →
                 Profile, so the label says so rather than implying a second editor. */}
-            <DropdownMenuItem onClick={() => router.push('/profile')} className="cursor-pointer">
+            <DropdownMenuItem onClick={() => router.push('/profile')}>
               <User className="mr-2 h-4 w-4" />
               View profile
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => router.push('/settings')} className="cursor-pointer">
+            <DropdownMenuItem onClick={() => router.push('/settings')}>
               <Settings className="mr-2 h-4 w-4" />
               Settings
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={handleLogout} className="cursor-pointer text-destructive-text">
+            <DropdownMenuItem onClick={handleLogout} className="text-destructive-text">
               <LogOut className="mr-2 h-4 w-4" />
               Log out
             </DropdownMenuItem>
