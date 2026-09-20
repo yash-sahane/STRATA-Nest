@@ -20,6 +20,8 @@ import { chromium, api, provision, addRole, signedInPage, visit, whoami } from '
 
 const out = [];
 const rec = (ok, n, d = '') => { out.push([ok, n]); console.log(`${ok ? 'PASS' : 'FAIL'}  ${n}${ok ? '' : '\n        -> ' + String(d).slice(0, 360)}`); };
+const skipped = [];
+const skip = (n, why) => { skipped.push(n); console.log(`SKIP  ${n}\n        -> ${why}`); };
 
 const browser = await chromium.launch();
 const p = await provision('tzday');
@@ -88,6 +90,26 @@ for (const zone of ZONES) {
   });
   console.log(`   browser zone=${browserToday.zone} offset=${browserToday.offsetMinutes}min  today=${browserToday.date}`);
 
+  // The widget withholds Check In at the WEEKEND — correctly; the office is shut. Which
+  // weekend depends on the browser's own calendar, and these three zones straddle the
+  // date line, so one can be on Monday while another is still on Saturday. Asking the
+  // browser is therefore the only answer that matches what the widget decided.
+  //
+  // Skipped loudly rather than asserted away: run on a Sunday, this script reported three
+  // failures against an app behaving exactly as designed. A check that cannot run today
+  // has to say so — one that quietly passes instead is worse than one that is red.
+  const browserDay = await page.evaluate(() => new Date().getDay());
+  if (browserDay === 0 || browserDay === 6) {
+    skip(
+      `${zone.label}: a check-in files under the day the browser is on`,
+      `that browser's calendar reads ${browserDay === 0 ? 'Sunday' : 'Saturday'} ` +
+        `(${browserToday.date}), and no Check In is offered at the weekend — there is no ` +
+        'check-in to file, so nothing here can be measured today',
+    );
+    await ctx.close();
+    continue;
+  }
+
   // Check in through the UI, the way an employee would.
   const checkIn = page.getByRole('button', { name: /check in/i }).first();
   const hasButton = await checkIn.count() > 0;
@@ -147,5 +169,15 @@ for (const zone of ZONES) {
 await browser.close();
 await p.cleanup();
 const bad = out.filter(([ok]) => !ok);
-console.log(`\ntotal ${out.length}  passed ${out.length - bad.length}  failed ${bad.length}`);
+console.log(
+  `\ntotal ${out.length}  passed ${out.length - bad.length}  failed ${bad.length}` +
+    `  skipped ${skipped.length}`,
+);
 bad.forEach(([, n]) => console.log('  FAILED: ' + n));
+skipped.forEach((n) => console.log('  SKIPPED: ' + n));
+if (skipped.length === ZONES.length) {
+  // Worth saying out loud. A weekend everywhere means the only thing this script exists
+  // to measure — where a check-in gets filed — was not exercised at all, and the row of
+  // green above covers only the business-timezone lookup.
+  console.log('\n  Every zone was on a weekend, so no check-in was filed or measured today.');
+}
