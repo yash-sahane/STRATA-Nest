@@ -141,8 +141,17 @@
     --app-warning-text: 38 92% 40%;
     --app-info-text: 217 91% 55%;
     --destructive-text: 0 84.2% 54%;
-    --border: 0 0% 14.9%;
-    --input: 0 0% 14.9%;
+    /* 19%, not 14.9%, because 14.9% is ALSO `--muted` — so a border drawn on a muted
+       surface was the same colour as the surface, which is not a border. Measured at
+       exactly 1.00:1, in twenty places that pair `border` with `bg-muted`. Light theme
+       never had the problem: there the two differ (89.8% against 96.1%) and read 1.156.
+
+       19% was chosen to reproduce that: it measures 1.154 against muted and 1.510
+       against the page, where light theme reads 1.156 and 1.260. The border is a little
+       firmer against the page than its light counterpart, which is the right direction —
+       at 14.9% it was 1.309 and already the fainter of the two. */
+    --border: 0 0% 19%;
+    --input: 0 0% 19%;
     --ring: 0 0% 83.1%;
     /* Same hues as the light ramp above — lifted in lightness only. */
     --chart-1: 221 75% 66%;
