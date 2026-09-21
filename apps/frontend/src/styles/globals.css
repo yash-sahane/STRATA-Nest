@@ -44,6 +44,23 @@
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
   --radius-sm: calc(var(--radius) - 4px);
+
+  /* What a bare `transition-colors` lasts.
+   *
+   * The motion scale below documents `micro = hover/focus`, and a handful of primitives
+   * spell that out as `duration-(--duration-micro)`. Everything else writes
+   * `transition-colors` with no duration at all and gets Tailwind's built-in 150ms —
+   * which is not on the scale. Measured across eighteen routes in both themes: 0.15s on
+   * 1310 of the 1552 transitions, against 0.12s on 130 and 0.32s on 112.
+   *
+   * So 84% of the motion in this app was set by a framework default rather than by the
+   * scale that exists to decide it. That is the same drift the scale was written to stop
+   * — a hard-coded 200ms copied into fourteen components — one level up and harder to
+   * see, because there is no literal anywhere to grep for.
+   *
+   * Pointing the default at the token fixes all of them at once, with no component edits,
+   * and means a bare `transition-colors` now means what the scale says it means. */
+  --default-transition-duration: var(--duration-micro);
 }
 
 @layer base {

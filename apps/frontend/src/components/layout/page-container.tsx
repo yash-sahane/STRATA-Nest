@@ -33,6 +33,15 @@ export function PageContainer({ children, size = 'default', className }: PageCon
         // One page-entrance animation for every route, so content doesn't
         // appear instantly on some pages and animate in on others.
         'animate-in fade-in duration-(--duration-layout)',
+        // The duration utility above also sets a TRANSITION duration, and with no
+        // transition-property of its own this container inherited CSS's defaults:
+        // `all`, eased with plain `ease`. That was not harmless — it is what smoothly
+        // widens the content while the sidebar collapses (measured: 1024 -> 1216px over
+        // ~280ms, CLS 0.0000), so it is worth keeping. But the sidebar glides on
+        // `cubic-bezier(0.4, 0, 0.2, 1)` and this glided on `ease`, so two halves of one
+        // movement started and finished together while taking different paths between.
+        // Named explicitly now, and narrowed to the property that actually moves.
+        'transition-[width] ease-in-out',
         MAX_WIDTH[size],
         className
       )}

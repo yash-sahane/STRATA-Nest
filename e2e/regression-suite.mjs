@@ -61,6 +61,7 @@ const SUITES = [
   ['verify-data-volume.mjs', '2500 tasks: the pages still load, and the figures are the real ones'],
   ['verify-timesheet-tags.mjs', 'tags collected and never shown'],
   ['verify-motion-and-loading.mjs', 'detail-dialog loading state, W badge width, live motion scale'],
+  ['verify-motion-scale.mjs', 'every transition runs at one of the four declared durations (self-testing)'],
   ['verify-dialog-footers.mjs', 'two detail dialogs that hand-rolled their action row'],
   ['verify-ink-on-card.mjs', 'raw-palette text ink clears its contrast floor on the card'],
   ['verify-strength-meter.mjs', 'the password bar is readable against its track, and agrees with its own words'],
