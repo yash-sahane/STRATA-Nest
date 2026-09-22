@@ -161,7 +161,7 @@ export function TopSearches({ onSelect, maxItems = 5 }: TopSearchesProps) {
             <Search className="h-3 w-3 mr-1" />
             {item.query}
             {item.resultCount !== undefined && (
-              <Badge variant="secondary" className="ml-2 h-4 px-1 text-[10px]">
+              <Badge variant="secondary" className="ml-2 h-4 px-1 text-2xs">
                 {item.resultCount}
               </Badge>
             )}

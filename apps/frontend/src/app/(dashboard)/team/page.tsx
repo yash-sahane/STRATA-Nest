@@ -587,7 +587,7 @@ export default function TeamPage() {
                                     {isCurrentUser && (
                                       <Badge
                                         variant="secondary"
-                                        className="h-5 rounded-md px-1.5 text-[11px] font-medium"
+                                        className="h-5 rounded-md px-1.5 text-2xs font-medium"
                                       >
                                         You
                                       </Badge>

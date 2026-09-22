@@ -391,12 +391,12 @@ export function CommandPalette() {
       </CommandList>
 
       <div className="flex items-center justify-center gap-2 p-2 border-t bg-muted/50 text-xs text-muted-foreground">
-        <kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium">
+        <kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-2xs font-medium">
           <span className="text-xs">⌘</span>K
         </kbd>
         <span>to open</span>
         <span>•</span>
-        <kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium">
+        <kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-2xs font-medium">
           ESC
         </kbd>
         <span>to close</span>

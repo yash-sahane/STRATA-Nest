@@ -61,6 +61,18 @@
    * Pointing the default at the token fixes all of them at once, with no component edits,
    * and means a bare `transition-colors` now means what the scale says it means. */
   --default-transition-duration: var(--duration-micro);
+
+  /* The size below `text-xs`, which the app needs and Tailwind does not have.
+   *
+   * Nine places wrote an arbitrary font size: `text-[10px]` eight times, `text-[11px]`
+   * once, and `text-[0.8rem]` once. Eight of those agree with each other and two do not,
+   * which is what an arbitrary value always becomes — there is nothing to keep them in
+   * step and no name to look up.
+   *
+   * 1.5 is stated rather than left out so this reproduces exactly what the eight existing
+   * sites already render: 10px text on a 15px line. */
+  --text-2xs: 0.625rem;
+  --text-2xs--line-height: 1.5;
 }
 
 @layer base {

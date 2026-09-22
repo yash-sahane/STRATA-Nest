@@ -84,7 +84,7 @@ function TaskFRBadge({ functionalRequirementId }: { functionalRequirementId?: st
   return (
     <Badge
       variant="secondary"
-      className="text-[10px] px-1.5 py-0 gap-1 bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300"
+      className="text-2xs px-1.5 py-0 gap-1 bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300"
     >
       <FileText className="h-2.5 w-2.5" />
       {fr.hierarchyId}
@@ -261,7 +261,7 @@ export function SprintBoard({ tasks, frs = [] }: SprintBoardProps) {
                                     {!isTask && (
                                       <Badge
                                         variant="secondary"
-                                        className="text-[10px] bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-200"
+                                        className="text-2xs bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-200"
                                       >
                                         FR
                                       </Badge>
@@ -339,7 +339,7 @@ export function SprintBoard({ tasks, frs = [] }: SprintBoardProps) {
                                         <Badge
                                           key={idx}
                                           variant="outline"
-                                          className="text-[10px] px-1 py-0"
+                                          className="text-2xs px-1 py-0"
                                         >
                                           {label.split(':')[1] || label}
                                         </Badge>
