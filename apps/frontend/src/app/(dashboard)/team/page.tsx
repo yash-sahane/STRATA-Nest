@@ -1,6 +1,7 @@
 ﻿'use client';
 
 import { ErrorState } from '@/components/ui/error-state';
+import { EmptyState } from '@/components/ui/empty-state';
 
 import * as React from 'react';
 import { useAuth } from '@/components/providers/auth-provider';
@@ -366,13 +367,11 @@ export default function TeamPage() {
 
   if (!currentWorkspace) {
     return (
-      <div className="flex items-center justify-center h-[calc(100vh-4rem)]">
-        <div className="text-center space-y-4">
-          <Users className="h-16 w-16 text-muted-foreground/50 mx-auto" />
-          <h2 className="text-2xl font-semibold">No Workspace Found</h2>
-          <p className="text-muted-foreground">Create a workspace to manage team members</p>
-        </div>
-      </div>
+      <EmptyState
+        icon={Users}
+        title="No workspace found"
+        description="Create a workspace to manage team members."
+      />
     );
   }
 

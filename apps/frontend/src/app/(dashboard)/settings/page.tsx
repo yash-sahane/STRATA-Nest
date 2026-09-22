@@ -37,6 +37,7 @@ import { authClient } from '@/lib/api/client';
 import { useUpdateWorkspace } from '@/hooks/use-workspace';
 import { InviteCodePanel, InviteRoleSelect } from '@/components/workspace/invite-member-dialog';
 import type { UserRole } from '@/types';
+import { EmptyState } from '@/components/ui/empty-state';
 
 const SETTINGS_TABS = ['profile', 'workspace', 'notifications', 'security', 'appearance'] as const;
 type SettingsTab = (typeof SETTINGS_TABS)[number];
@@ -296,13 +297,11 @@ function SettingsPageContent() {
 
   if (!currentWorkspace) {
     return (
-      <div className="flex items-center justify-center h-[calc(100vh-4rem)]">
-        <div className="text-center space-y-4">
-          <SettingsIcon className="h-16 w-16 text-muted-foreground/50 mx-auto" />
-          <h2 className="text-2xl font-semibold">No Workspace Found</h2>
-          <p className="text-muted-foreground">Create a workspace to access settings</p>
-        </div>
-      </div>
+      <EmptyState
+        icon={SettingsIcon}
+        title="No workspace found"
+        description="Create a workspace to access settings."
+      />
     );
   }
 

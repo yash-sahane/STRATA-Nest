@@ -195,13 +195,11 @@ function AnalyticsPageContent() {
 
   if (!currentWorkspace) {
     return (
-      <div className="flex items-center justify-center h-[calc(100vh-4rem)]">
-        <div className="text-center space-y-4">
-          <BarChart3 className="h-16 w-16 text-muted-foreground/50 mx-auto" />
-          <h2 className="text-2xl font-semibold">No Workspace Found</h2>
-          <p className="text-muted-foreground">Create a workspace to view analytics</p>
-        </div>
-      </div>
+      <EmptyState
+        icon={BarChart3}
+        title="No workspace found"
+        description="Create a workspace to view analytics."
+      />
     );
   }
 

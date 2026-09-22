@@ -25,6 +25,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Calendar as CalendarIcon, CheckCircle2, ChevronLeft, ChevronRight, GitBranch, Plane, Target } from 'lucide-react';
+import { EmptyState } from '@/components/ui/empty-state';
 import {
   format,
   startOfMonth,
@@ -168,13 +169,11 @@ export default function CalendarPage() {
 
   if (!currentWorkspace) {
     return (
-      <div className="flex items-center justify-center h-[calc(100vh-4rem)]">
-        <div className="text-center space-y-4">
-          <CalendarIcon className="h-16 w-16 text-muted-foreground/50 mx-auto" />
-          <h2 className="text-2xl font-semibold">No Workspace Found</h2>
-          <p className="text-muted-foreground">Create a workspace to view calendar</p>
-        </div>
-      </div>
+      <EmptyState
+        icon={CalendarIcon}
+        title="No workspace found"
+        description="Create a workspace to view the calendar."
+      />
     );
   }
 

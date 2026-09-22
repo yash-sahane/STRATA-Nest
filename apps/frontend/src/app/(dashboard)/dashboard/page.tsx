@@ -30,6 +30,7 @@ import {
 import { formatDate, parseWireDate } from '@/lib/utils';
 import { plural } from '@/lib/plural';
 import type { Task } from '@/types';
+import { EmptyState } from '@/components/ui/empty-state';
 
 const DAY_MS = 1000 * 60 * 60 * 24;
 
@@ -243,12 +244,10 @@ export default function DashboardPage() {
   // Show empty state if no workspace
   if (!currentWorkspace) {
     return (
-      <div className="flex items-center justify-center h-[calc(100vh-4rem)]">
-        <div className="text-center space-y-4">
-          <h2 className="text-2xl font-semibold">No Workspace Found</h2>
-          <p className="text-muted-foreground">Create a workspace to get started</p>
-        </div>
-      </div>
+      <EmptyState
+        title="No workspace found"
+        description="Create a workspace to get started."
+      />
     );
   }
 

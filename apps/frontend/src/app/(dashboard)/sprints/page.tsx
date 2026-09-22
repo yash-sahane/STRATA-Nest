@@ -271,10 +271,10 @@ export default function SprintsPage() {
   // Show message if no workspace
   if (!currentWorkspace) {
     return (
-      <div className="flex flex-col items-center justify-center h-[50vh]">
-        <p className="text-muted-foreground mb-4">No workspace found</p>
-        <p className="text-sm text-muted-foreground">Please create or join a workspace first</p>
-      </div>
+      <EmptyState
+        title="No workspace found"
+        description="Create or join a workspace to plan sprints."
+      />
     );
   }
 
