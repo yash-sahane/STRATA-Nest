@@ -78,6 +78,23 @@ its own `package.json` declares. If an import resolves on your machine but not i
 Docker, the dependency is missing from that package's manifest — add it there rather
 than hoisting.
 
+A clean install is the only real test of this: pnpm does not prune an existing
+`node_modules`, so a package removed from a manifest keeps working on the machine that
+removed it. Check dependency changes from a fresh checkout (`git worktree add`).
+
+### Security audit
+`pnpm audit --audit-level high` is a CI gate. Vulnerable **transitive** packages are moved
+to their patched release with `pnpm.overrides` in the root `package.json`; every entry
+names the vulnerable range and stays inside the major already in use.
+
+Known and deliberately left:
+
+| Advisory | Why it is still there |
+|---|---|
+| `braces` GHSA-vfj7-8cjw-p6xm (high) | No patched release exists. Development tooling only (jest, typescript-eslint, the Nest CLI) — absent from every production dependency closure — so it is listed in `pnpm.auditConfig.ignoreGhsas`. Remove that entry when a fix ships. |
+| `@nestjs/core` GHSA-36xv-jgw5-4q75 (moderate) | Fixed only in Nest 11. Needs the framework's major upgrade. |
+| `file-type` (moderate, 2) | Fixed only in v21, a major. Reached through `@nestjs/common`'s `FileTypeValidator`, which the API does not use. |
+
 ## Configuration
 All env is validated at boot by `@strata/config`. In **production** the app refuses
 to start without strong JWT secrets (≥32 chars), a token-encryption key (≥32), and
