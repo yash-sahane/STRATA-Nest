@@ -132,6 +132,17 @@ console.log('\n===== epic rollup validation');
 // ---- the file url resolves --------------------------------------------------
 console.log('\n===== a file advertises a url that works');
 {
+  // Upload the file this checks. It used to read back whichever file the account already
+  // had — and on a freshly reset database it has none, so the check failed for want of a
+  // fixture and never reached the url it exists to test.
+  const form = new FormData();
+  form.append('file', new Blob(['a file whose url must resolve\n'], { type: 'text/plain' }), 'url-check.txt');
+  form.append('workspaceId', p.ws);
+  form.append('projectId', p.project);
+  const up = await fetch(`${API}/files`, { method: 'POST', headers: { Cookie: cookie }, body: form });
+  const upText = await up.text();
+  rec(up.status === 200 || up.status === 201, 'a file was uploaded to check', `${up.status} ${upText.slice(0, 200)}`);
+
   const listed = await api(mgr, 'GET', '/files?limit=1');
   const first = (listed.j?.items ?? [])[0];
   if (!first) {

@@ -2,7 +2,7 @@
 // anyone into onboarding, the palette actually finds records and its create
 // actions work, the notifications panel is keyboard-operable, and the timesheet
 // stops truncating at 100 rows.
-import { chromium, api, adminJar, provision, signedInPage, visit, BASE } from './kit.mjs';
+import { chromium, api, adminJar, provision, seedNotifications, signedInPage, visit, whoami, BASE } from './kit.mjs';
 
 const out = [];
 const rec = (ok, n, d = '') => { out.push([ok, n]); console.log(`${ok ? 'PASS' : 'FAIL'}  ${n}${ok ? '' : '  -> ' + String(d).slice(0, 300)}`); };
@@ -93,7 +93,14 @@ console.log('\n===== the command palette');
 // ---- 3. the notifications panel can be driven from the keyboard -----------
 console.log('\n===== the notifications panel is keyboard-operable');
 {
-  const { ctx, page } = await signedInPage(browser, 'admin@strata.local');
+  // An empty panel has no controls to tab between, so this needs rows. It used to rely
+  // on notifications the admin account had collected over weeks of use, and failed on a
+  // freshly reset database for want of a fixture rather than because of the panel.
+  const np = await provision('notifkbd');
+  const seeded = await seedNotifications(np.ws, await whoami(admin), 3);
+  rec(seeded === 3, 'the panel was given rows to act on', `${seeded} of 3 created`);
+
+  const { ctx, page } = await signedInPage(browser, 'admin@strata.local', np.ws);
   await visit(page, '/dashboard', 3500);
   const bell = page.getByRole('button', { name: /notifications/i }).first();
   await bell.focus();
@@ -127,6 +134,7 @@ console.log('\n===== the notifications panel is keyboard-operable');
     (document.activeElement?.getAttribute('aria-label') || '').toLowerCase().includes('notification'));
   rec(backOnTrigger, 'and focus returns to the bell', String(backOnTrigger));
   await ctx.close();
+  await np.cleanup();
 }
 
 // ---- 4. the timesheet stops truncating at 100 -----------------------------

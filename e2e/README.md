@@ -5,19 +5,40 @@ unit tests and they do not mock: a check passes only if the thing it describes a
 happens, end to end, in the product.
 
 ```bash
-pnpm --filter @strata/e2e test:e2e
+pnpm stack:up     # the whole stack in containers: migrated, seeded, production build
+pnpm test:e2e
 ```
 
 ## What it needs running
 
+The stack on its usual ports — frontend on 3000, API on 8000 — and the seeded accounts.
+`pnpm stack:up` gives all of it in one step. To run the apps on the host instead:
+
 | | |
 |---|---|
-| Postgres + Redis | `docker start strata-postgres-1 strata-redis-1` |
+| Postgres + Redis | `pnpm db:up`, then `pnpm db:migrate` and `pnpm db:seed` |
 | API | `pnpm --filter @strata/api build && node apps/api/dist/main.js` (port 8000) |
 | Frontend | `pnpm --filter @strata/frontend build && pnpm --filter @strata/frontend start` (port 3000) |
 
 The frontend must be **built**, not in dev mode — several checks measure computed CSS and
 compiled class names, and a dev build resolves those differently.
+
+## What it needs in the database
+
+Nothing beyond what the seed creates: `admin@strata.local` and one `role.<role>@strata.local`
+account per workspace role (see the root README). Every script provisions a private
+workspace and project for itself (`provision()` in `kit.mjs`) and makes any other fixture it
+needs — notifications (`seedNotifications()`), uploaded files — so the suite means the same
+thing on a freshly reset database as on one that has been used for weeks.
+
+That is a rule, not a description. Three scripts once read back "whatever the admin account
+already had" — a project, some notifications, an uploaded file. They passed for months on
+one developer's database and failed the first time it was reset, on their fixtures rather
+than on the application.
+
+`e2e/.sessions.json` caches session cookies between runs. It checks each one against
+`/auth/me` before reusing it, so a reset needs no clean-up: the cookies of a database that
+is gone fail that check and are replaced. Deleting the file is always safe.
 
 ## How a check is written here
 

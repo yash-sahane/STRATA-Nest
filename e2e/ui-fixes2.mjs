@@ -1,12 +1,20 @@
 // Re-check only the two things that were incomplete: the ?action=create URL
 // cleanup, and whether the notifications panel's header buttons are reachable.
-import { chromium, signedInPage, visit, BASE } from './kit.mjs';
+import { chromium, adminJar, provision, seedNotifications, signedInPage, visit, whoami, BASE } from './kit.mjs';
 
 const out = [];
 const rec = (ok, n, d = '') => { out.push([ok, n]); console.log(`${ok ? 'PASS' : 'FAIL'}  ${n}${ok ? '' : '  -> ' + String(d).slice(0, 300)}`); };
 
+// This script used to sign in to whatever workspace the admin landed in and assume it
+// already held a project (a sprint and an epic both belong to one, so with none there
+// is no Create dialog to open) and some notifications. Both were true only of a database
+// that had been used for weeks. It now makes what it needs, so it means the same thing
+// on a freshly reset database as on an old one.
+const p = await provision('uif2');
+const adminId = await whoami(await adminJar());
+
 const browser = await chromium.launch();
-const { ctx, page } = await signedInPage(browser, 'admin@strata.local');
+const { ctx, page } = await signedInPage(browser, 'admin@strata.local', p.ws);
 
 console.log('===== ?action=create opens the dialog and leaves a clean URL');
 for (const [route, label] of [['/tasks', 'Task'], ['/projects', 'Project'], ['/sprints', 'Sprint'], ['/epics', 'Epic']]) {
@@ -27,6 +35,8 @@ for (const [route, label] of [['/tasks', 'Task'], ['/projects', 'Project'], ['/s
 
 console.log('\n===== every control in the notifications panel is reachable');
 {
+  const seeded = await seedNotifications(p.ws, adminId, 3);
+  rec(seeded === 3, 'the panel was given rows to act on', `${seeded} of 3 created`);
   await visit(page, '/dashboard', 4000);
   await page.getByRole('button', { name: /notifications/i }).first().focus();
   await page.keyboard.press('Enter');
@@ -86,6 +96,7 @@ console.log('\n===== every control in the notifications panel is reachable');
 
 await ctx.close();
 await browser.close();
+await p.cleanup();
 const bad = out.filter(([ok]) => !ok);
 console.log(`\n===== total ${out.length}  passed ${out.length - bad.length}  failed ${bad.length}`);
 bad.forEach(([, n]) => console.log('  FAILED: ' + n));

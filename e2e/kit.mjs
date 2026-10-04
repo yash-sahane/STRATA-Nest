@@ -125,6 +125,36 @@ export async function addRole(ws, role, email) {
 }
 
 /**
+ * Give an account notifications to act on. Returns how many were created.
+ *
+ * An empty notifications panel has no controls in it — nothing to tab to, nothing to
+ * delete — so a check that drives the panel needs rows to exist. Two scripts used to
+ * rely on whatever the admin account "happened to be holding", which was true only of a
+ * database that had been clicked around in for weeks. On a freshly reset one the panel
+ * was empty and they failed on their fixture, not on the application.
+ *
+ * The first row has somewhere to go, so it offers "Open: …"; the rest do not, and offer
+ * "Mark as read: …". Both kinds of row action are therefore present.
+ */
+export async function seedNotifications(ws, userId, count = 3) {
+  const admin = await adminJar();
+  let made = 0;
+  for (let i = 0; i < count; i += 1) {
+    const routed = i === 0;
+    const r = await api(admin, 'POST', '/notifications', {
+      workspaceId: ws,
+      userId,
+      type: routed ? 'workspace_member_added' : 'general',
+      title: `Seeded notification ${i + 1}`,
+      message: 'created by the e2e kit so the panel has rows to act on',
+      ...(routed ? { relatedEntityType: 'workspace', relatedEntityId: ws } : {}),
+    });
+    if (r.s === 201) made += 1;
+  }
+  return made;
+}
+
+/**
  * A signed-in page. Cookies are injected rather than typed into the login form
  * — the form is exercised deliberately by the onboarding agent, and every other
  * agent driving it would just burn the login quota.
