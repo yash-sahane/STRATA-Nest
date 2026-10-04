@@ -36,9 +36,17 @@ already had" — a project, some notifications, an uploaded file. They passed fo
 one developer's database and failed the first time it was reset, on their fixtures rather
 than on the application.
 
-`e2e/.sessions.json` caches session cookies between runs. It checks each one against
-`/auth/me` before reusing it, so a reset needs no clean-up: the cookies of a database that
-is gone fail that check and are replaced. Deleting the file is always safe.
+Two files remember things between runs, and neither needs clearing after a reset — each
+checks what it remembers against the live API before relying on it:
+
+| | |
+|---|---|
+| `.sessions.json` | session cookies; each is tried against `/auth/me` and replaced if refused |
+| `.qa-mixedcase-account.json` | the one account `auth-fixes` registers (signup is limited to 3/hour); it logs in to confirm the account still exists and registers a new one if not |
+
+Deleting either is always safe. A cache that is trusted without that check turns a reset
+into failures that look like regressions: `auth-fixes` once reported three login failures
+for an account that had been deleted along with the database.
 
 ## How a check is written here
 

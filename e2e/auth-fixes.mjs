@@ -2,7 +2,7 @@
 // webhookSecret leak. Registration is rate-limited to 3/hour, so this registers
 // exactly one account and reuses it.
 import { api, adminJar, getJar, provision } from './kit.mjs';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 
 const API = 'http://localhost:8000/api/v1';
 const out = [];
@@ -67,6 +67,28 @@ console.log('===== mixed-case e-mail');
     typed = null;
   }
 
+  // A remembered account is only as good as the database it was registered in. This
+  // used to take the file's word for it and print PASS for a registration that had not
+  // happened — and after a database reset the account is simply gone, so the three
+  // login checks below failed with a 400 that had nothing to do with letter case.
+  // So ask the API whether the account still exists before relying on it.
+  if (typed) {
+    const cached = typed;
+    const probe = await loginOrWait(
+      () =>
+        fetch(`${API}/auth/login`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: cached.toLowerCase(), password: 'GoodPass123!' }),
+        }),
+      'checking the remembered account',
+    );
+    if (probe.status !== 200 && probe.status !== 429) {
+      console.log(`   the remembered account "${cached}" is not in this database (login -> ${probe.status}); registering a new one`);
+      await rm(ACCOUNT_FILE, { force: true });
+      typed = null;
+    }
+  }
+
   if (!typed) {
     const suffix = String(process.pid).slice(-4) + Math.floor(process.uptime() * 1000) % 9973;
     typed = `QA.Mixed.${suffix}@QA.Local`;
@@ -91,7 +113,7 @@ console.log('===== mixed-case e-mail');
       typed = null;
     }
   } else {
-    rec(true, 'registration with a mixed-case address succeeds (reusing the account from an earlier run)', typed);
+    rec(true, 'the mixed-case account from an earlier run still exists (registration not repeated)', typed);
   }
 
   if (!typed) {
