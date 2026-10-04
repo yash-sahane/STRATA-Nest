@@ -12,8 +12,14 @@ import { Transform } from 'class-transformer';
  * Written as an explicit character class rather than interpolated into a
  * template literal: `\s` inside a template literal evaluates to the letter `s`,
  * which silently turns this into a rule that trims the letter s off names.
+ *
+ * Written as escapes rather than as the characters themselves: a literal
+ * zero-width character shows up in no editor and no diff, so the class could not
+ * be reviewed. U+200D is listed last because a joiner BETWEEN two other
+ * characters is what an accidental emoji sequence looks like, and the linter
+ * (rightly) reports that shape.
  */
-const EDGE_BLANKS = /^[\s​‌‍⁠﻿]+|[\s​‌‍⁠﻿]+$/g;
+const EDGE_BLANKS = /^[\s\u200B\u200C\u2060\uFEFF\u200D]+|[\s\u200B\u200C\u2060\uFEFF\u200D]+$/g;
 
 /**
  * Trim a string field BEFORE validation runs.

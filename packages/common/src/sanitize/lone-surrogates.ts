@@ -21,6 +21,7 @@ export function stripLoneSurrogates(value: string): string {
  * are removed with it because none of them is text a user meant to type; TAB,
  * LF and CR are deliberately kept, since a textarea legitimately contains them.
  */
+// eslint-disable-next-line no-control-regex -- matching control characters is this pattern's entire job
 const UNSTORABLE_CONTROLS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g;
 
 export function stripUnstorableControls(value: string): string {
