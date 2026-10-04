@@ -166,7 +166,7 @@ Waves 1–2 are **foundational and small** (~8 files) and de-risk ~30 issues. Wa
 
 ## Cross-wave validation gate (run after every wave)
 
-1. `pnpm --filter @strata/frontend type-check`
+1. `pnpm --filter @strata/frontend typecheck`
 2. `pnpm --filter @strata/frontend lint`
 3. Existing Playwright (`apps/frontend/e2e`) + any wave-specific specs
 4. Manual/automated flow test for the wave's surfaces

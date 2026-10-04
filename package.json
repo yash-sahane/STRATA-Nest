@@ -9,20 +9,51 @@
   },
   "scripts": {
     "build": "pnpm -r run build",
-    "dev": "pnpm -r --parallel run dev",
+    "build:packages": "pnpm --filter \"./packages/*\" run build",
+    "dev": "pnpm run build:packages && pnpm -r --parallel run dev",
     "lint": "pnpm -r run lint",
-    "typecheck": "pnpm --filter \"./packages/*\" run build && pnpm -r run typecheck",
-    "test": "pnpm --filter \"./packages/*\" run build && pnpm -r run test",
+    "typecheck": "pnpm run build:packages && pnpm -r run typecheck",
+    "test": "pnpm run build:packages && pnpm -r run test",
     "test:contract": "pnpm --filter @strata/contract-tests run test",
     "test:e2e": "pnpm --filter @strata/e2e run test:e2e",
     "prisma:generate": "pnpm --filter @strata/prisma run generate",
+    "prisma:validate": "pnpm --filter @strata/prisma run validate",
     "prisma:seed": "pnpm --filter @strata/prisma run seed",
+    "db:up": "docker compose -f infra/docker/docker-compose.yml up -d --wait postgres redis",
+    "db:down": "docker compose -f infra/docker/docker-compose.yml down",
+    "db:migrate": "pnpm --filter @strata/prisma run migrate:deploy",
+    "db:status": "pnpm --filter @strata/prisma run migrate:status",
+    "db:seed": "pnpm --filter @strata/prisma run seed",
+    "db:reset": "docker compose -f infra/docker/docker-compose.yml down --volumes && pnpm run db:up && pnpm run db:migrate && pnpm run db:seed",
+    "stack:up": "docker compose -f infra/docker/docker-compose.yml up -d --build --wait",
+    "stack:down": "docker compose -f infra/docker/docker-compose.yml down",
+    "stack:logs": "docker compose -f infra/docker/docker-compose.yml logs -f --tail=100",
+    "stack:ps": "docker compose -f infra/docker/docker-compose.yml ps",
     "format": "prettier --write \"{apps,packages}/**/*.{ts,tsx,json,md}\""
   },
   "devDependencies": {
     "@playwright/mcp": "^0.0.79",
     "@types/node": "^20.14.0",
+    "@typescript-eslint/eslint-plugin": "^6.18.1",
+    "@typescript-eslint/parser": "^6.18.1",
+    "eslint": "^8.56.0",
     "prettier": "^3.3.3",
     "typescript": "^5.5.4"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@nestjs/core",
+      "@prisma/client",
+      "@prisma/engines",
+      "msgpackr-extract",
+      "prisma",
+      "sharp",
+      "unrs-resolver"
+    ],
+    "peerDependencyRules": {
+      "allowedVersions": {
+        "react-day-picker>date-fns": "4"
+      }
+    }
   }
 }
