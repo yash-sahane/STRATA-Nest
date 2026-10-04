@@ -1,28 +1,47 @@
 # syntax=docker/dockerfile:1
 # STRATA Worker image (BullMQ consumers). Never serves HTTP.
+#
+# The build context is the REPOSITORY ROOT, not this folder:
+#   docker build -f infra/docker/Dockerfile.worker -t strata-worker .
+
 FROM node:20-alpine AS base
-# tini = PID 1 init for correct SIGTERM propagation → graceful queue drain.
-RUN corepack enable && apk add --no-cache tini
+# tini      PID 1 init for correct SIGTERM propagation → graceful queue drain.
+# openssl   Prisma chooses its query engine by asking the system which OpenSSL it has.
+#           Without the binary it cannot tell on Alpine, assumes 1.1, and the engine
+#           then fails to load at the first query.
+RUN corepack enable && apk add --no-cache tini openssl
+# corepack reads the pnpm version from package.json's `packageManager`, so the image
+# always uses the version the lockfile was written by. Never ask before downloading it.
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 WORKDIR /repo
 
-FROM base AS deps
-COPY package.json pnpm-workspace.yaml .npmrc tsconfig.base.json ./
-COPY apps/worker/package.json apps/worker/package.json
-COPY packages/config/package.json packages/config/package.json
-COPY packages/shared/package.json packages/shared/package.json
-# @strata/prisma is required by the worker's git processor; its manifest must be
-# present for the workspace install to resolve.
-COPY packages/prisma/package.json packages/prisma/package.json
-RUN pnpm install
+# --- fetch: every package the lockfile names, into pnpm's store ----------------------
+# Depends on the lockfile alone, so this layer is rebuilt when dependencies change and
+# at no other time. All three STRATA Dockerfiles begin with these same instructions, so
+# they share the one cached layer.
+#
+# `pnpm fetch` fills two places: the store (outside /repo) and a node_modules/.pnpm
+# holding EVERY package in the lockfile. The second is deleted at once. Left in place it
+# is inherited by the build stage, which links what it needs and leaves the rest lying
+# there — and the runtime stage then copies all of it: the API image carried Next,
+# React and Playwright, 1 GB of packages it can never load.
+FROM base AS fetch
+ENV CI=true
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm fetch && rm -rf node_modules
 
-FROM deps AS build
+# --- build ----------------------------------------------------------------------------
+FROM fetch AS build
 COPY . .
-RUN pnpm --filter @strata/prisma run generate || echo "prisma generate skipped (no models yet)"
-# Build the worker and its workspace dependencies (shared, config, prisma) in
-# dependency order. The "..." suffix includes the package's dependencies.
+# The worker and the workspace packages it depends on (shared, config, prisma — the git
+# processor writes through Prisma).
+RUN pnpm install --frozen-lockfile --offline --filter "@strata/worker..."
+# Already done by @strata/prisma's `postinstall` during the install above; repeated by
+# name so the image does not silently depend on that hook, and so a failure fails the build.
+RUN pnpm --filter @strata/prisma run generate
 RUN pnpm --filter "@strata/worker..." run build
 
-# --- runtime (non-root) ---
+# --- runtime (non-root) ---------------------------------------------------------------
 FROM base AS runtime
 ENV NODE_ENV=production
 COPY --from=build /repo /repo

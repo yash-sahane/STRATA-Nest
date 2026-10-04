@@ -1,6 +1,34 @@
-# STRATA stack. Run from repo root:
-#   docker compose -f infra/docker/docker-compose.yml up --build
+# STRATA stack. Run from the repo root — or use the scripts in the root package.json:
+#
+#   pnpm stack:up     build the images, start everything, wait until it is healthy
+#   pnpm stack:down   stop it (data kept)
+#   pnpm db:up        only Postgres + Redis, for running the apps with `pnpm dev`
+#   pnpm db:reset     DESTROY the database volume, then migrate and seed a fresh one
+#
+#   docker compose -f infra/docker/docker-compose.yml up -d --build --wait
+#
+# Needs a `.env` at the repo root (`cp .env.example .env`).
+#
+#   http://localhost:3000   frontend
+#   http://localhost:8000   API  (docs at /api/docs outside production)
+#   localhost:5433          Postgres — 5433, not 5432, so it never collides with a
+#                           Postgres installed on the host
 name: strata
+
+# The API image, built once and used by two services: `migrate` and `api`.
+x-api-image: &api-image
+  image: strata-api
+  build:
+    context: ../..
+    dockerfile: infra/docker/Dockerfile.api
+
+# `.env` is written for processes on the host, where Postgres is localhost:5433 and
+# Redis is localhost. Inside the compose network they are reached by service name, so
+# those two values are overridden here; everything else comes from `.env` unchanged.
+x-backend-environment: &backend-environment
+  DATABASE_URL: postgresql://postgres:postgres@postgres:5432/strata?schema=public
+  REDIS_HOST: redis
+  REDIS_PORT: '6379'
 
 services:
   postgres:
@@ -15,9 +43,9 @@ services:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U postgres -d strata']
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
   redis:
     image: redis:7-alpine
@@ -25,42 +53,85 @@ services:
       - '6379:6379'
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
-  api:
-    build:
-      context: ../..
-      dockerfile: infra/docker/Dockerfile.api
+  # One-shot: bring the schema up to date, then seed. Runs to completion before the API
+  # starts, so the API never boots against a database with no tables — which is what a
+  # fresh volume used to give it.
+  #
+  # Both steps are safe to repeat: `migrate deploy` applies only migrations not yet
+  # recorded, and the seed upserts (an existing admin keeps its password).
+  migrate:
+    <<: *api-image
     env_file:
       - ../../.env
-    environment:
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/strata?schema=public
-      REDIS_HOST: redis
-      API_PORT: '8000'
+    environment: *backend-environment
+    working_dir: /repo/packages/prisma
+    command: ['sh', '-c', 'node scripts/prisma.cjs migrate deploy && node dist/seed.js']
+    restart: 'no'
     depends_on:
       postgres:
         condition: service_healthy
+
+  api:
+    <<: *api-image
+    env_file:
+      - ../../.env
+    environment:
+      <<: *backend-environment
+      API_PORT: '8000'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     ports:
       - '8000:8000'
+    volumes:
+      # Uploaded files (STORAGE_DRIVER=local). Without a volume they live in the
+      # container's own filesystem and vanish whenever the container is recreated,
+      # leaving attachment rows that point at nothing.
+      - api_storage:/repo/apps/api/.storage
 
   worker:
+    image: strata-worker
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile.worker
     env_file:
       - ../../.env
-    environment:
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/strata?schema=public
-      REDIS_HOST: redis
+    environment: *backend-environment
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
-      postgres:
+
+  frontend:
+    image: strata-frontend
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.frontend
+      args:
+        # Inlined into the browser bundle at build time, so it is the API's address as
+        # seen from the user's machine. See the note in Dockerfile.frontend.
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    # The AI-generation route reads its provider keys (GEMINI_API_KEY, HF_API_KEY) from
+    # here, exactly as `next dev` reads them from the root .env.
+    env_file:
+      - ../../.env
+    environment:
+      # `.env` says development; `next start` serves a production build.
+      NODE_ENV: production
+      # Server-side calls go straight to the API over the compose network.
+      API_INTERNAL_URL: http://api:8000
+    depends_on:
+      api:
         condition: service_healthy
+    ports:
+      - '3000:3000'
 
   nginx:
     image: nginx:1.27-alpine
@@ -69,7 +140,9 @@ services:
     ports:
       - '80:80'
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
 volumes:
   pgdata:
+  api_storage:

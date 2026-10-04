@@ -1,29 +1,55 @@
 # syntax=docker/dockerfile:1
 # STRATA API image (NestJS HTTP + WS). Multi-stage, pnpm workspace.
+#
+# The build context is the REPOSITORY ROOT, not this folder:
+#   docker build -f infra/docker/Dockerfile.api -t strata-api .
+#
+# The same image also runs the one-shot `migrate` service in docker-compose.yml, which
+# is why packages/prisma (schema, migrations, CLI) ships in it.
+
 FROM node:20-alpine AS base
-# tini = PID 1 init for correct SIGTERM propagation → graceful shutdown.
-RUN corepack enable && apk add --no-cache tini
+# tini      PID 1 init for correct SIGTERM propagation → graceful shutdown.
+# openssl   Prisma chooses its query engine by asking the system which OpenSSL it has.
+#           Without the binary it cannot tell on Alpine, assumes 1.1, and the engine
+#           then fails to load at the first query.
+RUN corepack enable && apk add --no-cache tini openssl
+# corepack reads the pnpm version from package.json's `packageManager`, so the image
+# always uses the version the lockfile was written by. Never ask before downloading it.
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 WORKDIR /repo
 
-# --- deps: install with only manifests for better layer caching ---
-FROM base AS deps
-COPY package.json pnpm-workspace.yaml .npmrc tsconfig.base.json ./
-COPY apps/api/package.json apps/api/package.json
-COPY packages/common/package.json packages/common/package.json
-COPY packages/config/package.json packages/config/package.json
-COPY packages/shared/package.json packages/shared/package.json
-COPY packages/prisma/package.json packages/prisma/package.json
-RUN pnpm install
+# --- fetch: every package the lockfile names, into pnpm's store ----------------------
+# Depends on the lockfile alone, so this layer is rebuilt when dependencies change and
+# at no other time. All three STRATA Dockerfiles begin with these same instructions, so
+# they share the one cached layer.
+#
+# `pnpm fetch` fills two places: the store (outside /repo) and a node_modules/.pnpm
+# holding EVERY package in the lockfile. The second is deleted at once. Left in place it
+# is inherited by the build stage, which links what it needs and leaves the rest lying
+# there — and the runtime stage then copies all of it: the API image carried Next,
+# React and Playwright, 1 GB of packages it can never load.
+FROM base AS fetch
+ENV CI=true
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm fetch && rm -rf node_modules
 
-# --- build ---
-FROM deps AS build
+# --- build ----------------------------------------------------------------------------
+FROM fetch AS build
 COPY . .
-RUN pnpm --filter @strata/prisma run generate || echo "prisma generate skipped (no models yet)"
-# Build the api and its workspace dependencies (shared, config, common, prisma)
-# in dependency order. The "..." suffix includes the package's dependencies.
+# --frozen-lockfile  the lockfile is the specification; a manifest that disagrees with
+#                    it stops the build instead of being silently re-resolved.
+# --offline          everything must come from the store filled above.
+# --filter "…api..." the API and the workspace packages it depends on — not the frontend.
+RUN pnpm install --frozen-lockfile --offline --filter "@strata/api..."
+# @strata/prisma's own `postinstall` has already generated the Prisma client during the
+# install above. It is run again by name so the image does not silently depend on that
+# hook — and with no `|| echo skipped`: an API image without a generated client builds
+# fine and then crashes on boot, so a failure here has to fail the build.
+RUN pnpm --filter @strata/prisma run generate
+# The "..." suffix builds the package's workspace dependencies first, in order.
 RUN pnpm --filter "@strata/api..." run build
 
-# --- runtime (non-root) ---
+# --- runtime (non-root) ---------------------------------------------------------------
 FROM base AS runtime
 ENV NODE_ENV=production
 COPY --from=build /repo /repo
@@ -32,7 +58,10 @@ WORKDIR /repo/apps/api
 RUN mkdir -p .storage && chown -R node:node .storage
 USER node
 EXPOSE 8000
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD wget -qO- http://localhost:8000/api/v1/health || exit 1
+# 127.0.0.1, not localhost: busybox wget tries ::1 first and gives up there.
+# start-period/start-interval make `docker compose up --wait` return as soon as the API
+# answers instead of at the next 10-second tick.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=40s --start-interval=2s --retries=5 \
+  CMD wget -qO- http://127.0.0.1:8000/api/v1/health || exit 1
 ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "dist/main.js"]

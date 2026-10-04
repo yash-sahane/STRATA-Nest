@@ -30,6 +30,19 @@ README* text eol=lf
 # Docker
 Dockerfile text eol=lf
 docker-compose.yml text eol=lf
+# `Dockerfile` above matches a file with exactly that name — not Dockerfile.api,
+# Dockerfile.worker or Dockerfile.frontend, which are the only ones this repo has.
+Dockerfile.* text eol=lf
+.dockerignore text eol=lf
+
+# Files copied into Linux images, or read there. Without these a Windows clone
+# (core.autocrlf=true) checks them out as CRLF, so an image built on a laptop differs
+# from the one CI builds — and a migration's checksum is taken over its bytes.
+*.cjs text eol=lf
+*.mjs text eol=lf
+*.sql text eol=lf
+*.prisma text eol=lf
+*.conf text eol=lf
 
 # Shell scripts
 *.sh text eol=lf

@@ -1,0 +1,47 @@
+# The build context for every STRATA image is the repository root (compose sets
+# `context: ../..`), so without this file Docker ships the whole working tree to the
+# builder on every build — node_modules, .next and .git included.
+
+# Installed and built output. Each image installs and builds its own, for its own
+# platform: a Windows or macOS node_modules copied into an Alpine image carries the
+# wrong native binaries (Prisma's engine, sharp, SWC) and fails at run time.
+**/node_modules
+**/dist
+**/.next
+**/out
+**/coverage
+**/.turbo
+**/*.tsbuildinfo
+
+# Secrets and machine-local configuration. An image gets its configuration at run time
+# (compose `env_file` / `environment`) and never has it baked into a layer.
+**/.env
+**/.env.*
+!.env.example
+*.pem
+
+# Runtime data.
+apps/api/.storage
+
+# Version control, editors, CI and agent tooling.
+.git
+.github
+.vscode
+.idea
+.claude
+.mcp.json
+.playwright-mcp
+.playwright-profile
+graphify-out
+.graphify_*
+
+# Documentation and logs — nothing in an image reads them.
+docs
+**/*.md
+**/*.log
+
+# The end-to-end suite drives the stack from outside and is never part of an image.
+# Its manifest stays: pnpm reads every workspace manifest named in the lockfile.
+e2e/*
+!e2e/package.json
+scripts

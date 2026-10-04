@@ -1,0 +1,65 @@
+# syntax=docker/dockerfile:1
+# STRATA frontend image (Next.js, served by `next start`).
+#
+# The build context is the REPOSITORY ROOT, not this folder:
+#   docker build -f infra/docker/Dockerfile.frontend -t strata-frontend .
+
+FROM node:20-alpine AS base
+# tini      PID 1 init for correct SIGTERM propagation → graceful shutdown.
+# openssl   Not used by the frontend. It is here so this instruction is byte-for-byte
+#           the one in Dockerfile.api and Dockerfile.worker (where Prisma needs it):
+#           identical instructions are what let the three images share the base and
+#           `pnpm fetch` layers instead of downloading every dependency three times.
+RUN corepack enable && apk add --no-cache tini openssl
+# corepack reads the pnpm version from package.json's `packageManager`, so the image
+# always uses the version the lockfile was written by. Never ask before downloading it.
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+WORKDIR /repo
+
+# --- fetch: every package the lockfile names, into pnpm's store ----------------------
+# Depends on the lockfile alone, so this layer is rebuilt when dependencies change and
+# at no other time. All three STRATA Dockerfiles begin with these same instructions, so
+# they share the one cached layer.
+#
+# `pnpm fetch` fills two places: the store (outside /repo) and a node_modules/.pnpm
+# holding EVERY package in the lockfile. The second is deleted at once. Left in place it
+# is inherited by the build stage, which links what it needs and leaves the rest lying
+# there — and the runtime stage then copies all of it: the API image carried Next,
+# React and Playwright, 1 GB of packages it can never load.
+FROM base AS fetch
+ENV CI=true
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm fetch && rm -rf node_modules
+
+# --- build ----------------------------------------------------------------------------
+FROM fetch AS build
+# NEXT_PUBLIC_* values are not read at run time: `next build` inlines them into the
+# JavaScript the BROWSER downloads. So this must be the address the API has from the
+# user's machine — never the compose-internal `http://api:8000`, which only resolves
+# inside the Docker network. Changing it means rebuilding the image.
+ARG NEXT_PUBLIC_API_URL=http://localhost:8000
+ARG NEXT_PUBLIC_WS_URL=
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
+    NEXT_PUBLIC_WS_URL=$NEXT_PUBLIC_WS_URL \
+    NEXT_TELEMETRY_DISABLED=1
+COPY . .
+RUN pnpm install --frozen-lockfile --offline --filter "@strata/frontend..."
+RUN pnpm --filter @strata/frontend run build
+
+# --- runtime (non-root) ---------------------------------------------------------------
+FROM base AS runtime
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1
+# Owned by `node`: `next start` writes its image-optimisation cache under .next/cache.
+COPY --from=build --chown=node:node /repo /repo
+WORKDIR /repo/apps/frontend
+USER node
+EXPOSE 3000
+# /login is public, so it answers 200 without a session. 127.0.0.1, not localhost:
+# busybox wget tries ::1 first and gives up there.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --start-interval=2s --retries=5 \
+  CMD wget -qO /dev/null http://127.0.0.1:3000/login || exit 1
+ENTRYPOINT ["/sbin/tini", "--"]
+# The server-side proxy routes read API_INTERNAL_URL at run time (compose sets it to the
+# in-network address); the browser keeps using NEXT_PUBLIC_API_URL from the build.
+CMD ["node", "node_modules/next/dist/bin/next", "start", "--hostname", "0.0.0.0", "--port", "3000"]
