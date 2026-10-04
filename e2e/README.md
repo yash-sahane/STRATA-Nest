@@ -23,6 +23,10 @@ The stack on its usual ports — frontend on 3000, API on 8000 — and the seede
 The frontend must be **built**, not in dev mode — several checks measure computed CSS and
 compiled class names, and a dev build resolves those differently.
 
+Run it with `RESEND_API_KEY` **empty**. The suite invites, approves and reminds its way
+through a few hundred made-up addresses; with a key set, each of those becomes a real
+request to the mail provider. With no key the worker logs the message instead.
+
 ## What it needs in the database
 
 Nothing beyond what the seed creates: `admin@strata.local` and one `role.<role>@strata.local`
