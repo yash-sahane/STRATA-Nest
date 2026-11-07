@@ -100,10 +100,12 @@ export function RolesPanel({ workspaceId }: { workspaceId: string }) {
     [canManage, heldKeys]
   );
 
-  // Who holds what, by the name the membership stores.
+  // Who holds what, by the name the membership stores. Not somebody only invited
+  // to a role: it is theirs once they accept, and until then they hold nothing.
   const holders = React.useMemo(() => {
     const counts = new Map<string, number>();
     for (const member of members) {
+      if (member.status === 'INVITED') continue;
       counts.set(member.rawRole, (counts.get(member.rawRole) ?? 0) + 1);
     }
     return counts;

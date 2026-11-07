@@ -7,7 +7,7 @@ import { authClient } from '@/lib/api/client';
 import { ApiError } from '@/lib/api/rest-client';
 import { safeReturnPath } from '@/lib/api/return-path';
 import { useAuth } from '@/components/providers/auth-provider';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -205,9 +205,11 @@ function ChangePasswordContent() {
                 request never got an answer". Telling somebody they are signed
                 out when the server is simply down sends them to a login form
                 that cannot work either. */}
-            <CardTitle className="text-2xl">
+            {/* The page's heading, as on /login: CardTitle is an h3, so the page began at
+                level 3 with nothing for "jump to the main heading" to find. */}
+            <h1 className="text-2xl font-semibold leading-none tracking-tight">
               {backendUnreachable ? 'Cannot reach the server' : 'Sign in to change your password'}
-            </CardTitle>
+            </h1>
             <CardDescription>
               {backendUnreachable
                 ? 'Your session could not be checked because the server did not answer. Your sign-in may still be valid — try again in a moment.'
@@ -242,7 +244,7 @@ function ChangePasswordContent() {
           <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
             <Shield className="h-8 w-8 text-primary" />
           </div>
-          <CardTitle className="text-2xl">Change Your Password</CardTitle>
+          <h1 className="text-2xl font-semibold leading-none tracking-tight">Change Your Password</h1>
           <CardDescription>
             {isForced || hasTempPassword
               ? 'You must change your temporary password to continue'

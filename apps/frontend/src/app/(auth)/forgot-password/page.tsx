@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { authClient } from '@/lib/api/client';
 import { ApiError } from '@/lib/api/rest-client';
 import { isThrottled, retryWait } from '@/lib/api/rate-limit';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -90,13 +90,15 @@ export default function ForgotPasswordPage() {
               <KeyRound className="h-8 w-8 text-primary" />
             )}
           </div>
-          <CardTitle className="text-2xl">
+          {/* The page's heading, as on /login: CardTitle is an h3, so the page began at
+              level 3 with nothing for "jump to the main heading" to find. */}
+          <h1 className="text-2xl font-semibold leading-none tracking-tight">
             {!sent
               ? 'Forgot your password?'
               : delivers
                 ? 'Check your email'
                 : 'Email is not set up here'}
-          </CardTitle>
+          </h1>
           <CardDescription>
             {!sent
               ? 'Enter the address you sign in with and we will email you a link to set a new password.'

@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { authClient } from '@/lib/api/client';
 import { PASSWORD_RULES, passwordFailures } from '@/lib/password-policy';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -90,9 +90,11 @@ function ResetPasswordContent() {
               <Lock className="h-8 w-8 text-primary" />
             )}
           </div>
-          <CardTitle className="text-2xl">
+          {/* The page's heading, as on /login: CardTitle is an h3, so the page began at
+              level 3 with nothing for "jump to the main heading" to find. */}
+          <h1 className="text-2xl font-semibold leading-none tracking-tight">
             {linkDead ? 'This link no longer works' : 'Set a new password'}
-          </CardTitle>
+          </h1>
           <CardDescription>
             {linkDead
               ? 'Reset links expire after an hour and can only be used once.'

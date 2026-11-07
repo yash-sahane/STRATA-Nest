@@ -286,9 +286,14 @@ function TeamPageContent() {
 
   // Calculate stats
   const stats = React.useMemo(() => {
-    const totalMembers = teamMembers.length;
-    const activeMembers = teamMembers.filter((member) => member.status === 'ACTIVE').length;
-    const roleBreakdown = teamMembers.reduce(
+    // An invitation nobody has answered grants nothing, so it is not a member yet:
+    // it was counted in the total and in role coverage, and listed under Resource
+    // Allocation as somebody "Available" to take work.
+    const joined = teamMembers.filter((member) => member.status !== 'INVITED');
+    const invited = teamMembers.length - joined.length;
+    const totalMembers = joined.length;
+    const activeMembers = joined.filter((member) => member.status === 'ACTIVE').length;
+    const roleBreakdown = joined.reduce(
       (acc, member) => {
         acc[member.role] = (acc[member.role] || 0) + 1;
         return acc;
@@ -298,7 +303,7 @@ function TeamPageContent() {
     const activeRate = totalMembers > 0 ? Math.round((activeMembers / totalMembers) * 100) : 0;
     const roleCount = Object.keys(roleBreakdown).length;
 
-    return { totalMembers, activeMembers, activeRate, roleBreakdown, roleCount };
+    return { totalMembers, activeMembers, invited, activeRate, roleBreakdown, roleCount };
   }, [teamMembers]);
 
   const summaryCards = React.useMemo(
@@ -306,7 +311,8 @@ function TeamPageContent() {
       {
         title: 'Total Members',
         value: stats.totalMembers,
-        detail: `${stats.activeMembers} active`,
+        detail:
+          `${stats.activeMembers} active` + (stats.invited ? ` · ${stats.invited} invited` : ''),
         icon: Users,
       },
       {
@@ -346,7 +352,12 @@ function TeamPageContent() {
   // Each member's open tasks, against what counts as a full load.
   const workloadData = React.useMemo(() => {
     if (!tasks || !teamMembers) return null;
-    return calculateTeamWorkload(tasks, teamMembers);
+    // Not an unanswered invitation: nobody can be given work in a workspace they
+    // have not joined (the assignee picker offers active members only).
+    return calculateTeamWorkload(
+      tasks,
+      teamMembers.filter((member) => member.status !== 'INVITED')
+    );
   }, [tasks, teamMembers]);
 
   const handleEditMember = (member: TeamMember) => {
@@ -746,28 +757,41 @@ function TeamPageContent() {
                               </Badge>
                             </TableCell>
                             <TableCell>
-                              <div className="flex flex-col gap-1">
-                                <div className="flex items-center gap-2">
-                                  <Badge
-                                    variant="outline"
-                                    className={cn('text-xs', workload.color)}
-                                  >
-                                    {workload.label}
-                                  </Badge>
-                                  <span className="whitespace-nowrap text-sm font-medium">{activeTasks} active</span>
+                              {isInvitation ? (
+                                // No load to show for somebody who has not joined:
+                                // "Available" read as an offer of their time.
+                                <span className="whitespace-nowrap text-sm text-muted-foreground">
+                                  Not a member yet
+                                </span>
+                              ) : (
+                                <div className="flex flex-col gap-1">
+                                  <div className="flex items-center gap-2">
+                                    <Badge
+                                      variant="outline"
+                                      className={cn('text-xs', workload.color)}
+                                    >
+                                      {workload.label}
+                                    </Badge>
+                                    <span className="whitespace-nowrap text-sm font-medium">{activeTasks} active</span>
+                                  </div>
+                                  <div className="flex items-center gap-3 whitespace-nowrap text-xs text-muted-foreground">
+                                    <span>{completedTasks} done</span>
+                                    {overdueTasks > 0 && (
+                                      <span className="text-red-500 font-medium">
+                                        {overdueTasks} overdue
+                                      </span>
+                                    )}
+                                  </div>
                                 </div>
-                                <div className="flex items-center gap-3 whitespace-nowrap text-xs text-muted-foreground">
-                                  <span>{completedTasks} done</span>
-                                  {overdueTasks > 0 && (
-                                    <span className="text-red-500 font-medium">
-                                      {overdueTasks} overdue
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
+                              )}
                             </TableCell>
                             <TableCell className="hidden whitespace-nowrap text-muted-foreground lg:table-cell">
-                              {formatDate(member.createdAt)}
+                              {/* The day they joined, which for an accepted invitation is
+                                  the day they accepted, not the day they were asked —
+                                  and somebody still invited has not joined at all. */}
+                              {isInvitation
+                                ? `Invited ${formatDate(member.createdAt)}`
+                                : formatDate(member.joinedAt ?? member.createdAt)}
                             </TableCell>
                             {canManageMembers && (
                               <TableCell className="text-right">

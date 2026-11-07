@@ -24,6 +24,15 @@ import { isTaskOverdue } from '@/lib/task-dates';
  * before the column existed. Read structurally: the shared `Task` type does not
  * declare `completedAt` yet, but every response carries it.
  */
+/**
+ * The people on the team: the roster less the invitations nobody has answered.
+ * An invitation grants nothing until it is accepted, and counting it made "Team
+ * Members" larger than the team (the Team page counts the same way).
+ */
+function joinedCount(members: ReadonlyArray<{ status?: string }> | undefined): number {
+  return (members ?? []).filter((member) => member.status !== 'INVITED').length;
+}
+
 function completionDate(task: Task): string {
   return (task as Task & { completedAt?: string | null }).completedAt ?? task.updatedAt;
 }
@@ -158,7 +167,8 @@ export function useTeamAnalytics(workspaceId?: string) {
       // null, not 0, when the roster request failed: "this workspace has no
       // members" is a claim, and it is not one this hook can make from an
       // errored query.
-      teamSize: rosterFailed ? null : (members?.length ?? 0),
+      // An unanswered invitation is not on the team yet (it grants nothing).
+      teamSize: rosterFailed ? null : joinedCount(members),
       activeAssignees: teamMembers.size,
       totalTasks: allTasks.length,
       memberPerformance,
@@ -248,7 +258,7 @@ export function useWorkspaceAnalytics(workspaceId?: string) {
         // Roster size, not assignee count — see useTeamAnalytics for the same
         // distinction between team membership and active assignment, and for
         // why a failed roster reports null rather than a confident 0.
-        size: rosterFailed ? null : (members?.length ?? 0),
+        size: rosterFailed ? null : joinedCount(members),
         activeAssignees: teamMembers.size,
       },
       monthlyTrends,

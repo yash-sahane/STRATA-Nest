@@ -110,7 +110,9 @@ export default function OnboardingPage() {
           </div>
           <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl mb-2">Create Your Workspace</h1>
           <p className="text-muted-foreground">
-            Set up your first workspace to start managing projects and teams
+            {/* Not "your first": a platform administrator reaches this page to add
+                another workspace too. */}
+            Set up a workspace to start managing projects and teams
           </p>
         </div>
 

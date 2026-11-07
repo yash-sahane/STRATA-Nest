@@ -17,7 +17,13 @@ import { formatDate } from '@/lib/utils';
 export function RecentNotices() {
   const { user } = useAuth();
   const { data: notices = [] } = useNotifications(user?.id);
-  const latest = notices.slice(0, 3);
+  // Not the invitation notices: a waiting invitation is on this same card with
+  // its Accept and Decline (PendingInvitations), and its notice repeated it below,
+  // telling the reader to answer it "on your Workspaces page" — a page this
+  // screen exists because they cannot reach. A withdrawn one keeps its own notice.
+  const latest = notices
+    .filter((notice) => String(notice.type ?? '').toUpperCase() !== 'WORKSPACE_INVITATION')
+    .slice(0, 3);
   if (latest.length === 0) return null;
   return (
     <section aria-label="Recent notices" className="space-y-2 rounded-md border bg-muted/40 p-3">
