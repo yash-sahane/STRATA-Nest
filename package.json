@@ -25,6 +25,7 @@
     "db:status": "pnpm --filter @strata/prisma run migrate:status",
     "db:seed": "pnpm --filter @strata/prisma run seed",
     "db:reset": "docker compose -f infra/docker/docker-compose.yml down --volumes && pnpm run db:up && pnpm run db:migrate && pnpm run db:seed",
+    "demo:data": "pnpm --filter @strata/e2e run demo-data",
     "stack:up": "docker compose -f infra/docker/docker-compose.yml up -d --build --wait",
     "stack:down": "docker compose -f infra/docker/docker-compose.yml down",
     "stack:logs": "docker compose -f infra/docker/docker-compose.yml logs -f --tail=100",

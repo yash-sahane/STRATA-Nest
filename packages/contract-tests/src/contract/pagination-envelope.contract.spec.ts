@@ -11,7 +11,7 @@ const authed = COOKIE ? it : it.skip;
 
 describe('Contract — pagination envelope', () => {
   authed('list endpoints return { items, total, page, pageSize }', async () => {
-    const { status, body } = await call('/api/v1/projects/?pageSize=1');
+    const { status, body } = await call('/api/v1/projects/?pageSize=1', {}, { authenticated: true });
     expect(status).toBe(200);
     expect(body).toMatchObject({
       items: expect.any(Array),

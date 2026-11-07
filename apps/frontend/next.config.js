@@ -10,13 +10,17 @@ require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env'
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  experimental: {
-    serverActions: {
-      bodySizeLimit: '10mb',
-    },
-  },
   // Silence Turbopack warning — no custom webpack config needed
   turbopack: {},
+  async redirects() {
+    return [
+      // Old deep links to views that are now tabs. The router answers them:
+      // each used to be a page whose only job was to call redirect().
+      { source: '/attendance/team', destination: '/attendance?tab=team', permanent: false },
+      { source: '/analytics/workspace', destination: '/analytics?view=workspace', permanent: false },
+      { source: '/analytics/team', destination: '/analytics?view=team', permanent: false },
+    ];
+  },
 };
 
 module.exports = nextConfig;

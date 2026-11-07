@@ -12,7 +12,7 @@ export const BASE = (
   'http://localhost:8000'
 ).replace(/\/$/, '');
 
-/** Optional auth cookie ("strata_access=...") to exercise authenticated contracts. */
+/** Optional auth cookie ("strata_access=...") for the tests that need a session. */
 export const COOKIE = process.env.CONTRACT_COOKIE || '';
 
 export interface ApiResult {
@@ -21,9 +21,18 @@ export interface ApiResult {
   headers: Headers;
 }
 
-export async function call(path: string, init: RequestInit = {}): Promise<ApiResult> {
+/**
+ * One request. Anonymous unless `authenticated` is set — the unauthenticated
+ * contracts ("me without a session is 401") must stay anonymous whether or not a
+ * cookie was supplied for the others.
+ */
+export async function call(
+  path: string,
+  init: RequestInit = {},
+  { authenticated = false }: { authenticated?: boolean } = {},
+): Promise<ApiResult> {
   const headers = new Headers(init.headers);
-  if (COOKIE) headers.set('Cookie', COOKIE);
+  if (authenticated && COOKIE) headers.set('Cookie', COOKIE);
   const res = await fetch(`${BASE}${path}`, { ...init, headers });
   const text = await res.text();
   let body: unknown = null;

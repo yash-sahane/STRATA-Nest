@@ -82,6 +82,11 @@ services:
     environment:
       <<: *backend-environment
       API_PORT: '8000'
+      # Whose X-Real-IP / X-Forwarded-For the rate limits and sign-in lockouts
+      # believe. nginx is the proxy in this stack (looked up by name — its address
+      # changes when the container is recreated). Port 8000 is also published, and
+      # anything reaching it directly is keyed on its own socket address.
+      TRUSTED_PROXIES: loopback,nginx
     depends_on:
       migrate:
         condition: service_completed_successfully

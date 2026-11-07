@@ -44,7 +44,6 @@
     "ws": "^8.21.0"
   },
   "devDependencies": {
-    "@strata/testing": "workspace:*",
     "@nestjs/cli": "^10.4.0",
     "@nestjs/schematics": "^10.1.4",
     "@nestjs/testing": "^10.4.0",
