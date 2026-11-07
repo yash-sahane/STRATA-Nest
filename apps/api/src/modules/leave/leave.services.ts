@@ -319,23 +319,16 @@ export class LeaveRequestsService extends ScopedCrudService<
     const touchesRange =
       dto.type !== undefined || dto.startDate !== undefined || dto.endDate !== undefined;
     const data: Record<string, unknown> = {};
-    if (touchesRange) {
-      const type = dto.type ?? row.type;
-      const range = await this.resolveRange(
-        row.workspaceId,
-        type,
-        dto.startDate ?? row.startDate.toISOString(),
-        dto.endDate ?? row.endDate.toISOString(),
-      );
-      await this.assertNoOverlap(row.userId, row.workspaceId, range.startDate, range.endDate, id);
-      await this.assertAffordable(
-        row.userId,
-        row.workspaceId,
-        type,
-        range.startDate,
-        range.daysCount,
-        id,
-      );
+    const type = dto.type ?? row.type;
+    const range = touchesRange
+      ? await this.resolveRange(
+          row.workspaceId,
+          type,
+          dto.startDate ?? row.startDate.toISOString(),
+          dto.endDate ?? row.endDate.toISOString(),
+        )
+      : null;
+    if (range) {
       data.type = type;
       data.startDate = range.startDate;
       data.endDate = range.endDate;
@@ -349,10 +342,31 @@ export class LeaveRequestsService extends ScopedCrudService<
     // approval: a request approved for 1 day became an APPROVED request for 5,
     // with 1 debited — and cancelling it later refunded 5. The approval claims
     // on the dates and days it decided against for the same reason.
-    const { count } = await this.prisma.leaveRequest.updateMany({
-      where: { id, status: 'PENDING' },
-      data: data as Prisma.LeaveRequestUpdateManyMutationInput,
-    });
+    const write = (db: Prisma.TransactionClient) =>
+      db.leaveRequest.updateMany({
+        where: { id, status: 'PENDING' },
+        data: data as Prisma.LeaveRequestUpdateManyMutationInput,
+      });
+    // A move is checked and written under the same lock a new request takes
+    // (see create), on its transaction. Checked outside it, an edit and a new
+    // request arriving together each saw the other's dates free, and the same
+    // person ended up booked twice for one day, or spending one balance twice.
+    const { count } = range
+      ? await this.prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`leave:${row.workspaceId}:${row.userId}`})::bigint)`;
+          await this.assertNoOverlap(row.userId, row.workspaceId, range.startDate, range.endDate, id, tx);
+          await this.assertAffordable(
+            row.userId,
+            row.workspaceId,
+            type,
+            range.startDate,
+            range.daysCount,
+            id,
+            tx,
+          );
+          return write(tx);
+        })
+      : await write(this.prisma);
     if (count === 0) {
       throw new ConflictException({
         message:

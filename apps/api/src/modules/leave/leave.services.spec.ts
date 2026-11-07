@@ -291,6 +291,39 @@ describe('LeaveRequestsService write guards', () => {
     ).rejects.toThrow(/insufficient leave balance/i);
   });
 
+  // Checked outside the lock a new request takes, an edit and a new request
+  // arriving together each saw the other's dates free: one person, booked
+  // twice for a day, or one balance spent twice.
+  it('a date edit is checked and written under the person’s lock, on its transaction', async () => {
+    const { svc, prisma, updateMany: outside } = build();
+    const executeRaw = jest.fn().mockResolvedValue(1);
+    const inside = jest.fn().mockResolvedValue({ count: 1 });
+    (prisma.$transaction as jest.Mock).mockImplementation((fn: (tx: unknown) => unknown) =>
+      fn({
+        $executeRaw: executeRaw,
+        leaveRequest: { ...prisma.leaveRequest, updateMany: inside },
+        leaveBalance: prisma.leaveBalance,
+      }),
+    );
+    const y = new Date().getUTCFullYear();
+    await svc.patch(user, 'lr1', { startDate: `${y}-08-10`, endDate: `${y}-08-14` });
+    const [sql, key] = executeRaw.mock.calls[0] as [TemplateStringsArray, string];
+    expect(sql.join('?')).toContain('pg_advisory_xact_lock');
+    // The same key a new request from this person takes.
+    expect(key).toBe(`leave:${ROW.workspaceId}:${ROW.userId}`);
+    expect(inside).toHaveBeenCalledWith({
+      where: { id: 'lr1', status: 'PENDING' },
+      data: expect.objectContaining({ startDate: expect.any(Date), endDate: expect.any(Date) }),
+    });
+    expect(outside).not.toHaveBeenCalled();
+  });
+
+  it('a reason-only edit takes no lock', async () => {
+    const { svc, prisma } = build();
+    await svc.patch(user, 'lr1', { reason: 'typo fixed' });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
   it('refuses a request booked for a year outside the balance window', async () => {
     // `ensureLeaveBalance` provisions a full default allocation on first touch,
     // so validating a far-future request used to MINT a fresh 21-day pot that
