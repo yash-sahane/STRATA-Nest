@@ -36,6 +36,8 @@ function build(
   opts: {
     /** The functional requirements under the epic that are not yet under the target. */
     requirements?: Array<{ id: string; clientRequirementId: string }>;
+    /** The status of the project the epic is in. */
+    projectStatus?: string;
   } = {},
 ) {
   const requirements = opts.requirements ?? [];
@@ -54,6 +56,8 @@ function build(
     },
     // The target client requirement is in the epic's project.
     clientRequirement: { findUnique: jest.fn().mockResolvedValue({ projectId: 'p1' }) },
+    // The epic's project takes changes (see project-archive).
+    project: { findUnique: jest.fn().mockResolvedValue({ status: opts.projectStatus ?? 'ACTIVE' }) },
     functionalRequirement: {
       // The moved rows, re-read for the announcement after the commit.
       findMany: jest.fn().mockResolvedValue(requirements.map((r) => ({ ...r, epicId: 'e1' }))),

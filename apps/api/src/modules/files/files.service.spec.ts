@@ -24,7 +24,11 @@ const row = {
 function build(
   part: UploadPart | undefined,
   overrides: Record<string, unknown> = {},
-  records: { task?: { projectId: string } | null; clientRequirement?: { projectId: string } | null } = {},
+  records: {
+    task?: { projectId: string } | null;
+    clientRequirement?: { projectId: string } | null;
+    project?: { findUnique: jest.Mock };
+  } = {},
 ) {
   const create = jest.fn().mockResolvedValue(row);
   const del = jest.fn().mockResolvedValue(row);
@@ -34,6 +38,8 @@ function build(
     uploadedFile: { create, delete: del },
     task: { findFirst: findTask },
     clientRequirement: { findFirst: findRequirement },
+    // The upload's project takes changes (see project-archive).
+    project: records.project ?? { findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }) },
   } as unknown as PrismaService;
   const assertMember = jest.fn().mockResolvedValue(undefined);
   // Uploading and deleting now take file:write, which the read-only MEMBER role

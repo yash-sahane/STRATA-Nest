@@ -27,6 +27,11 @@ import type { TaskComment } from '@/types';
 interface TaskCommentsProps {
   taskId: string;
   workspaceId?: string;
+  /**
+   * The thread can be read but not added to, edited or taken down: the task's
+   * project is archived, and the server refuses all three.
+   */
+  readOnly?: boolean;
 }
 
 /**
@@ -38,7 +43,7 @@ interface TaskCommentsProps {
  * would be the same gap this component exists to close. Editing is the
  * author's alone; deleting is the author's, or whoever may delete tasks.
  */
-export function TaskComments({ taskId, workspaceId }: TaskCommentsProps) {
+export function TaskComments({ taskId, workspaceId, readOnly = false }: TaskCommentsProps) {
   const { user } = useAuth();
   const confirm = useConfirm();
   const { data: comments, isLoading } = useTaskComments(taskId);
@@ -204,7 +209,7 @@ export function TaskComments({ taskId, workspaceId }: TaskCommentsProps) {
         </div>
       ) : list.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          No comments yet. Start the discussion below.
+          {readOnly ? 'No comments.' : 'No comments yet. Start the discussion below.'}
         </p>
       ) : (
         <ul className="space-y-3">
@@ -253,7 +258,7 @@ export function TaskComments({ taskId, workspaceId }: TaskCommentsProps) {
                     <p className="whitespace-pre-wrap break-words text-sm">{comment.content}</p>
                   )}
 
-                  {(mine || canModerate) && editingId !== comment.id && (
+                  {(mine || canModerate) && editingId !== comment.id && !readOnly && (
                     <div className="mt-1 flex gap-1">
                       {mine && (
                         <Button
@@ -289,6 +294,11 @@ export function TaskComments({ taskId, workspaceId }: TaskCommentsProps) {
         </ul>
       )}
 
+      {readOnly ? (
+        <p className="text-sm text-muted-foreground">
+          Comments are closed: this task&apos;s project is archived.
+        </p>
+      ) : (
       <div className="space-y-2">
         <Textarea
           ref={composerRef}
@@ -312,6 +322,7 @@ export function TaskComments({ taskId, workspaceId }: TaskCommentsProps) {
           </Button>
         </div>
       </div>
+      )}
     </div>
   );
 }

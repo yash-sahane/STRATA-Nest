@@ -51,6 +51,7 @@ import type { EditBasedOn, RequirementPriority, RequirementStatus } from '@/type
 import { basedOnFor, changedFields } from '@/lib/utils/changed-fields';
 import Link from 'next/link';
 import { useHasPermission } from '@/hooks/use-permissions';
+import { useIsProjectArchived } from '@/hooks/use-project';
 import { Permission } from '@/lib/permissions';
 import { useEpics } from '@/hooks/use-epic';
 import { useFunctionalRequirements } from '@/hooks/use-functional-requirement';
@@ -87,9 +88,14 @@ export function ClientRequirementDetailDialog({
   open,
   onOpenChange,
   projectId,
-  canEdit = false,
-  canDelete = false,
+  canEdit: mayEdit = false,
+  canDelete: mayDelete = false,
 }: ClientRequirementDetailDialogProps) {
+  // A requirement of an archived project is read-only, whatever the screen
+  // that opened this allows: the server refuses every change to it.
+  const projectArchived = useIsProjectArchived(projectId);
+  const canEdit = mayEdit && !projectArchived;
+  const canDelete = mayDelete && !projectArchived;
   const {
     data: requirement,
     isError,
@@ -110,7 +116,7 @@ export function ClientRequirementDetailDialog({
     open ? projectId : undefined
   );
   const ledToEpics = projectEpics.filter((epic) => epic.requirementId === requirementId);
-  const canRaiseEpic = useHasPermission(Permission.CREATE_EPIC);
+  const canRaiseEpic = useHasPermission(Permission.CREATE_EPIC) && !projectArchived;
   const ledToRequirements = projectRequirements.filter(
     (fr) => fr.clientRequirementId === requirementId
   );

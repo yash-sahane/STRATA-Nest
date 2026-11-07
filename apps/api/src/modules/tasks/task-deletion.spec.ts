@@ -37,6 +37,8 @@ describe('TaskDeletionService — the edges of a deleted task', () => {
           epicId: '',
         }),
       },
+      // Its project takes changes (see project-archive).
+      project: { findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }) },
       $transaction: (body: (t: unknown) => unknown) => body(tx),
     } as unknown as PrismaService;
     const sideEffects = { emitDeletes: jest.fn(), emitUpdates: jest.fn() };

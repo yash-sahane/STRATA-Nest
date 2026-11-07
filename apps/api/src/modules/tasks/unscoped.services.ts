@@ -16,6 +16,7 @@ import type { CreateTaskCommentDto, UpdateTaskCommentDto } from './dto';
 import { taskCommentResponse } from './mappers';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { tellPeople } from '../notifications/notice';
+import { assertTaskProjectWritable } from '../projects/project-archive';
 
 /**
  * A TaskComment has no workspace column of its own; it is scoped through its
@@ -80,6 +81,9 @@ export class TaskCommentsService {
 
   async create(user: User, dto: CreateTaskCommentDto) {
     await this.assertTaskAccess(user, dto.taskId);
+    // A comment is part of the task, and an archived project's tasks do not
+    // change — see project-archive. So with edits and takedowns below.
+    await assertTaskProjectWritable(this.prisma, dto.taskId);
     const c = await this.prisma.taskComment.create({
       data: {
         id: generateId(),
@@ -128,6 +132,7 @@ export class TaskCommentsService {
   async update(user: User, id: string, dto: UpdateTaskCommentDto) {
     const c = await this.ensureAccess(user, id);
     this.assertAuthor(user, c);
+    await assertTaskProjectWritable(this.prisma, c.taskId);
     const data: Prisma.TaskCommentUpdateInput = {};
     if (dto.content !== undefined) data.content = dto.content;
     if (dto.mentions !== undefined) data.mentions = dto.mentions as Prisma.InputJsonValue;
@@ -154,6 +159,7 @@ export class TaskCommentsService {
         throw new ForbiddenException('You can only delete your own comments.');
       }
     }
+    await assertTaskProjectWritable(this.prisma, c.taskId);
     await this.prisma.taskComment.delete({ where: { id: c.id } });
     if (task) {
       tellPeople(this.events, {

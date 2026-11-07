@@ -13,6 +13,7 @@ import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import type { BulkSaveDto, GeneratedNode, GeneratedTree } from './dto';
 import { FR_COMPLEXITIES, FR_TYPES, REQUIREMENT_PRIORITIES } from '../requirements/dto';
 import { TASK_PRIORITIES } from '../tasks/dto';
+import { assertNotArchived } from '../projects/project-archive';
 import {
   HierarchyIdService,
   MAX_HIERARCHY_ID_ATTEMPTS,
@@ -30,6 +31,16 @@ interface BulkResult {
   epics: EpicResult[];
   tasks: TaskResult[];
 }
+/** The rows a save wrote, as written — what the audit trail is made from. */
+interface BulkRows {
+  clientRequirements: Prisma.ClientRequirementCreateManyInput[];
+  epics: Prisma.EpicCreateManyInput[];
+  functionalRequirements: Prisma.FunctionalRequirementCreateManyInput[];
+  tasks: Prisma.TaskCreateManyInput[];
+}
+
+/** What a generated row's audit entry says it came from (see GenerationService.recordTree). */
+export const AI_GENERATION_SOURCE = 'ai_generation';
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
 
@@ -225,6 +236,9 @@ export class GenerationService {
     if (project.workspaceId !== dto.workspaceId) {
       throw new BadRequestException('Project does not belong to this workspace');
     }
+    // Nothing is filed into an archived project (see project-archive). A replay
+    // of a save made before it was archived is answered above, and writes nothing.
+    assertNotArchived(project);
     const workspace = await this.prisma.workspace.findUnique({ where: { id: dto.workspaceId } });
     if (!workspace) throw new NotFoundException('Workspace not found');
 
@@ -264,6 +278,8 @@ export class GenerationService {
     // The parents the new tasks hang from. Their status and progress are sums
     // over their tasks, so they are summed again once the tree is committed.
     const parents = { functionalRequirementIds: new Set<string>(), epicIds: new Set<string>() };
+    // The rows of the last tree built — the committed one, once the save returns.
+    const written: { rows: BulkRows | null } = { rows: null };
 
     /**
      * The idempotency key is claimed INSIDE the transaction, first. Read before
@@ -299,11 +315,11 @@ export class GenerationService {
        * Until then this batch's rows are not in the table, so the free-id probes
        * consult the batch as well.
        */
-      const rows = {
-        clientRequirements: [] as Prisma.ClientRequirementCreateManyInput[],
-        epics: [] as Prisma.EpicCreateManyInput[],
-        functionalRequirements: [] as Prisma.FunctionalRequirementCreateManyInput[],
-        tasks: [] as Prisma.TaskCreateManyInput[],
+      const rows: BulkRows = {
+        clientRequirements: [],
+        epics: [],
+        functionalRequirements: [],
+        tasks: [],
       };
       const minted = { epic: new Set<string>(), fr: new Set<string>(), task: new Set<string>() };
       const takenIn =
@@ -597,6 +613,7 @@ export class GenerationService {
       }
       if (rows.tasks.length) await tx.task.createMany({ data: rows.tasks });
 
+      written.rows = rows;
       return r;
     };
 
@@ -640,8 +657,53 @@ export class GenerationService {
       this.logger.warn(`roll-up of ${kind} ${id} failed: ${(error as Error).message}`),
     );
     await this.announceTree(result);
+    if (written.rows) await this.recordTree(user, workspaceId, written.rows);
 
     return { success: true, ...result };
+  }
+
+  /**
+   * The audit trail of a saved tree, kept the way the create routes keep it: a
+   * `created` entry for every requirement, epic and task, under the same action
+   * and entity names, so the Activity screen lists a generated plan the way it
+   * lists one typed in. A bulk save used to leave no trace at all — dozens of
+   * rows appeared in a project and the trail said nothing had happened.
+   *
+   * Each entry is marked as generated (`metadata.source`). They are written
+   * after the commit, as a clone's is, and best-effort, as every trail write is
+   * (writeAuditRow): the plan is saved whether or not its trail is. One insert
+   * for the lot, and one frame — every open trail refetches on any frame, so a
+   * frame per entry would only have them refetch dozens of times.
+   */
+  private async recordTree(user: User, workspaceId: string, rows: BulkRows): Promise<void> {
+    const entry = (entity: string, row: { id?: string; title?: string; name?: string }) => {
+      const label = row.title || row.name || '';
+      return {
+        id: generateId(),
+        workspaceId,
+        userId: user.id,
+        action: `${entity}.created`,
+        entityType: entity,
+        entityId: row.id ?? '',
+        changes: {},
+        metadata: { ...(label ? { label } : {}), source: AI_GENERATION_SOURCE },
+      };
+    };
+    const entries = [
+      ...rows.clientRequirements.map((row) => entry('client_requirement', row)),
+      ...rows.epics.map((row) => entry('epic', row)),
+      ...rows.functionalRequirements.map((row) => entry('functional_requirement', row)),
+      ...rows.tasks.map((row) => entry('task', row)),
+    ].filter((e) => e.entityId);
+    if (entries.length === 0) return;
+    try {
+      const saved = await this.prisma.activityLog.createManyAndReturn({ data: entries });
+      // createMany is invisible to the realtime write hook (PrismaService.announceWrite).
+      const last = saved[saved.length - 1];
+      if (last) this.prisma.announceWrite?.('ActivityLog', 'create', last);
+    } catch (error) {
+      this.logger.warn(`audit of the saved tree failed: ${(error as Error).message}`);
+    }
   }
 
   /**

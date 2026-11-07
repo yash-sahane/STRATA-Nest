@@ -48,4 +48,9 @@ export class CloneProjectDto {
   /** Client requirements, epics, functional requirements and tasks. */
   @IsOptional() @IsStrictBoolean() @IsBoolean() includeTasks?: boolean;
   @IsOptional() @IsStrictBoolean() @IsBoolean() includeSprints?: boolean;
+  /**
+   * The day the copy starts (`YYYY-MM-DD`); left out, today in the workspace's
+   * timezone. Every copied date moves with it — see clone-dates.
+   */
+  @IsOptional() @IsDateString() startDate?: string;
 }

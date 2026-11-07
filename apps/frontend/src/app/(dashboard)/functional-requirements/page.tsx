@@ -18,7 +18,9 @@ import { useCreateActionParam } from '@/hooks/use-create-action-param';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useConsumeParam } from '@/hooks/use-tab-param';
 import { useFunctionalRequirementsRealtime } from '@/hooks/use-realtime';
-import { useProjects } from '@/hooks/use-project';
+import { useIsProjectArchived, useProjects } from '@/hooks/use-project';
+import { ArchivedProjectBanner } from '@/components/projects/archived-project-banner';
+import { toast } from 'sonner';
 import {
   useFunctionalRequirement,
   useFunctionalRequirements,
@@ -65,12 +67,15 @@ function FunctionalRequirementsPageContent() {
   const { data: projects = [], isLoading: projectsLoading } = useProjects(currentWorkspace?.id);
   const searchParams = useSearchParams();
 
-  // Permission checks
-  const canCreateFR = useHasPermission(Permission.CREATE_FUNCTIONAL_REQUIREMENT);
-  const canEditFR = useHasPermission(Permission.EDIT_FUNCTIONAL_REQUIREMENT);
-  const canDeleteFR = useHasPermission(Permission.DELETE_FUNCTIONAL_REQUIREMENT);
-
   const [selectedProjectId, setSelectedProjectId] = React.useState<string>('');
+  // An archived project is read-only (the server refuses the change): no
+  // requirement is created, edited or deleted from here while it is open.
+  const projectArchived = useIsProjectArchived(selectedProjectId);
+
+  // Permission checks
+  const canCreateFR = useHasPermission(Permission.CREATE_FUNCTIONAL_REQUIREMENT) && !projectArchived;
+  const canEditFR = useHasPermission(Permission.EDIT_FUNCTIONAL_REQUIREMENT) && !projectArchived;
+  const canDeleteFR = useHasPermission(Permission.DELETE_FUNCTIONAL_REQUIREMENT) && !projectArchived;
   // Realtime for this list.
   useFunctionalRequirementsRealtime(selectedProjectId);
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
@@ -79,6 +84,10 @@ function FunctionalRequirementsPageContent() {
   const [createForEpic, setCreateForEpic] = React.useState('');
   useCreateActionParam(
     (asked) => {
+      if (projectArchived) {
+        toast.info('This project is archived.', { description: 'Unarchive it to add requirements to it.' });
+        return;
+      }
       setCreateForEpic(asked.get('epicId') ?? '');
       setCreateDialogOpen(true);
     },
@@ -377,6 +386,8 @@ function FunctionalRequirementsPageContent() {
 
       {selectedProjectId && (
         <>
+          <ArchivedProjectBanner projectId={selectedProjectId} />
+
           {/* Stats */}
           <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
             <Card>

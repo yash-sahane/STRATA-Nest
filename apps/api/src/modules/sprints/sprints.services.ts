@@ -8,6 +8,7 @@ import { Permission, type PermissionKey } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { ScopedCrudService } from '../workspaces/scoped-crud.base';
 import { assertProjectInWorkspace } from '../workspaces/workspace-refs';
+import { assertProjectWritable } from '../projects/project-archive';
 import type { CreateSprintDto, UpdateSprintDto } from './dto';
 import { sprintResponse } from './mappers';
 
@@ -174,6 +175,7 @@ export class SprintsService extends ScopedCrudService<Sprint, ReturnType<typeof 
     const endDate = parseSprintDate(dto.endDate, 'endDate');
     assertRangeOrdered(startDate, endDate);
     await assertProjectInWorkspace(this.prisma, dto.projectId, dto.workspaceId);
+    await assertProjectWritable(this.prisma, dto.projectId);
     return this.createIn(user, dto.workspaceId, {
       workspaceId: dto.workspaceId,
       projectId: dto.projectId,
@@ -193,20 +195,23 @@ export class SprintsService extends ScopedCrudService<Sprint, ReturnType<typeof 
     if (dto.goal !== undefined) data.goal = dto.goal;
     if (dto.startDate !== undefined) data.startDate = parseSprintDate(dto.startDate, 'startDate');
     if (dto.endDate !== undefined) data.endDate = parseSprintDate(dto.endDate, 'endDate');
+    // The sprint as it stands. Every patch reads it: a sprint of an archived
+    // project takes no changes at all (see project-archive).
+    const stored = await this.findScoped(user, id);
+    await assertProjectWritable(this.prisma, stored.projectId);
     // Validate the MERGED range, not just the DTO. A patch carrying one date
     // short-circuited the guard and could land `endDate` before the sprint's
     // stored `startDate` — the exact negative span the check exists to reject,
     // reachable on PATCH while POST was protected.
     if (data.startDate !== undefined || data.endDate !== undefined) {
-      const row = await this.findScoped(user, id);
       assertRangeOrdered(
-        (data.startDate as Date | undefined) ?? row.startDate,
-        (data.endDate as Date | undefined) ?? row.endDate,
+        (data.startDate as Date | undefined) ?? stored.startDate,
+        (data.endDate as Date | undefined) ?? stored.endDate,
       );
     }
-    // The sprint as it stands, read only for a patch that names a status.
-    const before = dto.status !== undefined ? await this.findScoped(user, id) : null;
-    const closed = (before ?? (await this.findScoped(user, id))).status === 'COMPLETED';
+    // The sprint as it stands, for a patch that names a status.
+    const before = dto.status !== undefined ? stored : null;
+    const closed = stored.status === 'COMPLETED';
     if (closed) {
       const fixed = Object.keys(data).filter((field) => field !== 'name' && field !== 'retrospectiveNotes');
       if (fixed.length > 0 && !(fixed.length === 1 && fixed[0] === 'status' && data.status === 'COMPLETED')) {

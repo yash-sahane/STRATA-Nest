@@ -12,6 +12,7 @@ import type { User } from '@prisma/client';
 import { Permission } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { sprintResponse } from './mappers';
+import { assertProjectWritable } from '../projects/project-archive';
 
 /**
  * Server-side sprint completion: close the sprint and record what it got
@@ -39,6 +40,9 @@ export class SprintCompletionService {
     const sprint = await this.prisma.sprint.findUnique({ where: { id: sprintId } });
     if (!sprint) throw new NotFoundException('Not found.');
     await this.access.assertPermission(user, sprint.workspaceId, Permission.PlanningWrite);
+    // Completing rolls unfinished work out of the sprint: a change to the
+    // project, which an archived one does not take (see project-archive).
+    await assertProjectWritable(this.prisma, sprint.projectId);
     if (sprint.status === 'COMPLETED') throw new BadRequestException('Sprint already completed');
     // Completing records what the sprint got through. One that never started
     // got through nothing: it is edited or deleted, not completed.

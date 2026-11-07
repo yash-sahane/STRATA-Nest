@@ -152,6 +152,7 @@ export default function ProjectsPage() {
         newName: cloneData.name,
         includeTasks: cloneData.includeTasks,
         includeSprints: cloneData.includeSprints,
+        startDate: cloneData.startDate,
       });
     } catch {
       return; // error toast handled inside the mutation

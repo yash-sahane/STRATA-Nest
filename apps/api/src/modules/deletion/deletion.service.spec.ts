@@ -184,6 +184,8 @@ describe('RequirementDeletionService', () => {
     return {
       prisma: {
         functionalRequirement: { findUnique: jest.fn().mockResolvedValue(fr), findMany },
+        // Its project takes changes (see project-archive).
+        project: { findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }) },
         $transaction: (cb: (t: unknown) => unknown) => cb(txMock()),
       } as unknown as PrismaService,
       findMany,

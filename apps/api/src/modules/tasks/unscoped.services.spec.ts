@@ -42,6 +42,8 @@ describe('unscoped.services — parent-workspace membership scoping', () => {
         task: {
           findUnique: jest.fn().mockResolvedValue({ workspaceId: 'ws1', projectId: 'p1', title: 'Fix login', hierarchyId: 'P-T01' }),
         },
+        // The task's project takes changes (see project-archive).
+        project: { findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }) },
         // The service runs the findMany/count pair in one transaction.
         $transaction: jest.fn((ops: Promise<unknown>[]) => Promise.all(ops)),
       } as unknown as PrismaService;
@@ -58,6 +60,8 @@ describe('unscoped.services — parent-workspace membership scoping', () => {
         task: {
           findUnique: jest.fn().mockResolvedValue({ workspaceId: 'ws1', projectId: 'p1', title: 'Fix login', hierarchyId: 'P-T01' }),
         },
+        // The task's project takes changes (see project-archive).
+        project: { findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }) },
       } as unknown as PrismaService;
       const emit = jest.fn();
       const access = accessMock(['u-member', 'u-other', 'u-lead'], ['u-lead']);

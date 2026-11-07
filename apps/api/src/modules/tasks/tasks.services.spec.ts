@@ -292,7 +292,7 @@ describe('TasksService assignees', () => {
 });
 
 /** In-memory task graph for the dependency tests (findFirst/findMany/update). */
-function buildGraph(seed: Record<string, Partial<Task>>) {
+function buildGraph(seed: Record<string, Partial<Task>>, archived: string[] = []) {
   const rows = new Map<string, Task>(
     Object.entries(seed).map(([id, t]) => [id, { ...stored, id, ...t } as Task]),
   );
@@ -313,6 +313,12 @@ function buildGraph(seed: Record<string, Partial<Task>>) {
       ),
       findUnique: jest.fn(({ where }: { where: { id: string } }) =>
         Promise.resolve(rows.get(where.id) ?? null),
+      ),
+    },
+    // Each end's project, by id: `archived` lists the ones that are archived.
+    project: {
+      findUnique: jest.fn(({ where }: { where: { id: string } }) =>
+        Promise.resolve({ status: archived.includes(where.id) ? 'ARCHIVED' : 'ACTIVE' }),
       ),
     },
     // The per-workspace advisory lock the edge is written under.
@@ -976,6 +982,47 @@ describe('TasksService.summary — overdue is by the due DAY, in the workspace z
         { userId: 'u2', totalTasks: 3, activeTasks: 2, completedTasks: 1, overdueTasks: 1 },
       ],
     });
+  });
+
+  it("leaves an archived project's leftovers off everybody's load", async () => {
+    const { svc, queryRaw } = summarised('UTC');
+    await svc.summary(user, 'w1');
+    const [strings] = queryRaw.mock.calls[0] as [TemplateStringsArray, ...unknown[]];
+    expect(strings.join('?')).toMatch(
+      /NOT EXISTS \(\s*SELECT 1 FROM projects_project p\s+WHERE p\.id = t\.project_id AND p\.status = 'ARCHIVED'\s*\)/,
+    );
+  });
+});
+
+describe('TasksService dependency edges — an archived project at one end', () => {
+  it('draws no new edge onto a task of an archived project', async () => {
+    const { svc, rows } = buildGraph({ t1: {}, t2: { projectId: 'p2' } }, ['p2']);
+    await expect(
+      svc.addDependency(user, 't1', { targetTaskId: 't2', type: 'blockedBy' }),
+    ).rejects.toThrow('This project is archived. Unarchive it to make changes.');
+    expect(rows.get('t1')!.blockedBy).toEqual([]);
+    expect(rows.get('t2')!.blocks).toEqual([]);
+  });
+
+  it('still takes an edge off an open task when the far end has been archived', async () => {
+    const { svc, rows } = buildGraph(
+      { t1: { blockedBy: ['t2'] }, t2: { projectId: 'p2', blocks: ['t1'] } },
+      ['p2'],
+    );
+    await svc.removeDependency(user, 't1', 't2', 'blockedBy');
+    expect(rows.get('t1')!.blockedBy).toEqual([]);
+    expect(rows.get('t2')!.blocks).toEqual([]);
+  });
+
+  it('changes nothing on a task of an archived project, from its own side', async () => {
+    const { svc, rows } = buildGraph(
+      { t1: { blockedBy: ['t2'] }, t2: { projectId: 'p2', blocks: ['t1'] } },
+      ['p2'],
+    );
+    await expect(svc.removeDependency(user, 't2', 't1', 'blocks')).rejects.toThrow(
+      'This project is archived. Unarchive it to make changes.',
+    );
+    expect(rows.get('t2')!.blocks).toEqual(['t1']);
   });
 });
 

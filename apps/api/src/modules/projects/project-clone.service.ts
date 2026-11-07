@@ -1,12 +1,18 @@
 import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { generateId } from '@strata/common';
-import { PrismaService, refreshDeliveryRollups } from '@strata/prisma';
+import { todayIn, workScheduleOf } from '@strata/config';
+import {
+  CLIENT_REQUIREMENT_DERIVED_STATUSES,
+  PrismaService,
+  refreshDeliveryRollups,
+} from '@strata/prisma';
 import type { Prisma, User } from '@prisma/client';
 import { Permission } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { writeAuditRow } from '../activity/audit-writer';
 import { tellPeople } from '../notifications/notice';
+import { dayIn, dayMarker, daysBetween, markerDay, shiftInstant, shiftMarker } from './clone-dates';
 import type { CloneProjectDto } from './dto';
 import { projectResponse } from './mappers';
 
@@ -132,7 +138,27 @@ export class ProjectCloneService {
     const taskIds = newIds(tasks);
     const remap = (map: Map<string, string>, id: string | null | undefined) => (id && map.get(id)) || '';
     const by = { createdById: user.id, createdByName: user.name ?? '' };
-    const today = new Date(new Date().toISOString().slice(0, 10));
+
+    // The copy starts on its own day, and the whole plan moves with it — see
+    // clone-dates. "Today" is the workspace's; the UTC date this used to take
+    // was yesterday in India until half past five in the morning.
+    const workspace = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { settings: true },
+    });
+    const { timeZone } = workScheduleOf(workspace?.settings);
+    const startDay = dto.startDate ? dto.startDate.slice(0, 10) : todayIn(timeZone);
+    // What the plan is measured from: the source's start, or — for a project
+    // that never had one — the earliest date anything in the copy carries.
+    const dated = [
+      ...(source.endDate ? [markerDay(source.endDate)] : []),
+      ...sprints.flatMap((s) => [markerDay(s.startDate), markerDay(s.endDate)]),
+      ...epics.flatMap((e) => [e.startDate, e.endDate].filter((d): d is Date => d !== null).map(markerDay)),
+      ...tasks.flatMap((t) => (t.dueDate ? [dayIn(t.dueDate, timeZone)] : [])),
+    ].sort();
+    const anchor = source.startDate ? markerDay(source.startDate) : dated[0];
+    const moved = anchor ? daysBetween(anchor, startDay) : 0;
+    const day = (marker: Date | null): Date | null => (marker ? shiftMarker(marker, moved) : null);
 
     // The code is probed, then written; a project created in between with the
     // same code loses this race at the unique key, and the copy tries the next.
@@ -148,9 +174,11 @@ export class ProjectCloneService {
         shortCode,
         description: source.description || `Copied from ${source.name}`,
         clientName: source.clientName,
+        // A copy is a plan, whatever its source had become — an archived source
+        // included: copying is how its work is picked up again.
         status: 'PLANNING',
-        startDate: source.startDate ?? today,
-        endDate: source.endDate,
+        startDate: dayMarker(startDay),
+        endDate: day(source.endDate),
         ownerId: user.id,
         ...by,
       };
@@ -163,8 +191,8 @@ export class ProjectCloneService {
         goal: s.goal,
         // A copy is a plan: none of its sprints has started, let alone ended.
         status: 'PLANNING',
-        startDate: s.startDate,
-        endDate: s.endDate,
+        startDate: shiftMarker(s.startDate, moved),
+        endDate: shiftMarker(s.endDate, moved),
         ...by,
       }));
       const requirementRows = requirements.map((r) => ({
@@ -175,7 +203,12 @@ export class ProjectCloneService {
         description: r.description,
         clientName: r.clientName || source.clientName,
         priority: r.priority,
-        status: r.status,
+        // Drafting, approving and archiving the request are people's decisions
+        // and carry over. In Progress and Completed are what its work said, and
+        // the copy's work has not started: back to Approved, where the roll-up
+        // takes it from (a requirement with no work under it is never re-summed,
+        // so a copied "Completed" stayed Completed).
+        status: CLIENT_REQUIREMENT_DERIVED_STATUSES.includes(r.status) ? 'APPROVED' : r.status,
         ...by,
       }));
       // Epics and requirements start at To Do / Draft and 0%: their status and
@@ -189,8 +222,8 @@ export class ProjectCloneService {
         name: e.name,
         description: e.description,
         color: e.color,
-        startDate: e.startDate,
-        endDate: e.endDate,
+        startDate: day(e.startDate),
+        endDate: day(e.endDate),
         status: 'TODO',
         progress: 0,
         ...by,
@@ -235,9 +268,12 @@ export class ProjectCloneService {
           priority: t.priority,
           assigneeIds: people.ids as Prisma.InputJsonValue,
           assigneeNames: people.names as Prisma.InputJsonValue,
-          assignedBy: t.assignedBy,
-          assignedByName: t.assignedByName,
-          dueDate: t.dueDate,
+          // Whoever hands work out is whoever files it with people on it (the
+          // create rule) — here, the person making the copy, who is also who
+          // the assignees are told it came from.
+          assignedBy: people.ids.length > 0 ? user.id : '',
+          assignedByName: people.ids.length > 0 ? user.name || user.email : '',
+          dueDate: t.dueDate ? shiftInstant(t.dueDate, moved, timeZone) : null,
           estimatedHours: t.estimatedHours,
           labels: (Array.isArray(t.labels) ? t.labels : []) as Prisma.InputJsonValue,
           position: t.position,
@@ -285,6 +321,8 @@ export class ProjectCloneService {
           functionalRequirements: frRows.length,
           tasks: taskRows.length,
           assignmentsDropped,
+          /** How many days later (or, negative, earlier) every copied date is than its source's. */
+          daysMoved: moved,
         },
       };
     }

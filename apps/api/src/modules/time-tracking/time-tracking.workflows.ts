@@ -15,6 +15,7 @@ import { Permission } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import type { StartTimerDto, StopTimerDto } from './dto';
 import { activeTimerResponse, discardedTimerResponse, timeEntryResponse } from './mappers';
+import { assertProjectWritable } from '../projects/project-archive';
 import {
   FUTURE_SKEW_MS,
   MAX_ENTRY_MINUTES,
@@ -143,6 +144,8 @@ export class TimerService {
       if (dto.projectId && dto.projectId !== task.projectId) {
         throw new BadRequestException('That task is not in that project.');
       }
+      // No new time against an archived project's work (see project-archive).
+      await assertProjectWritable(this.prisma, task.projectId);
       return {
         workspaceId: task.workspaceId,
         projectId: task.projectId,
@@ -158,6 +161,7 @@ export class TimerService {
       });
       if (!project) throw new NotFoundException('That project no longer exists.');
       await this.access.assertPermission(user, project.workspaceId, Permission.HrWrite);
+      await assertProjectWritable(this.prisma, project.id);
       return { workspaceId: project.workspaceId, projectId: project.id, taskId: '', taskTitle: '', taskHierarchyId: '' };
     }
     if (dto.workspaceId) await this.access.assertPermission(user, dto.workspaceId, Permission.HrWrite);
@@ -176,10 +180,17 @@ export class TimerService {
     );
   }
 
+  /**
+   * Running the clock again is starting it again, so a timer whose project was
+   * archived while it was paused cannot be resumed. It can still be stopped —
+   * the time it already holds was worked before the archive — or discarded:
+   * neither is held up by the project, or the timer could never end.
+   */
   async resume(user: User) {
     const t = await this.timer(user.id);
     if (!t) throw new NotFoundException('No active timer');
     if (!t.isPaused) return activeTimerResponse(t);
+    await assertProjectWritable(this.prisma, t.projectId);
     const pausedSecs = t.pausedAt ? Math.round((Date.now() - t.pausedAt.getTime()) / 1000) : 0;
     return activeTimerResponse(
       await this.prisma.activeTimer.update({

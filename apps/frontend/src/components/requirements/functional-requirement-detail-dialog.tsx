@@ -56,6 +56,7 @@ import { ApiError } from '@/lib/api/rest-client';
 import type { FunctionalRequirement, ClientRequirement } from '@/types';
 import { humanizeEnum } from '@/lib/semantic/status';
 import { useHasPermission } from '@/hooks/use-permissions';
+import { useIsProjectArchived } from '@/hooks/use-project';
 import { Permission } from '@/lib/permissions';
 import { toast } from 'sonner';
 
@@ -96,12 +97,18 @@ export function FunctionalRequirementDetailDialog({
   projectId,
   workspaceId,
   clientRequirements,
-  canEdit = false,
-  canDelete = false,
-  onEdit,
+  canEdit: mayEdit = false,
+  canDelete: mayDelete = false,
+  onEdit: editRequirement,
 }: FunctionalRequirementDetailDialogProps) {
-  const canPlanSprints = useHasPermission(Permission.EDIT_SPRINT);
-  const canAddTask = useHasPermission(Permission.CREATE_TASK);
+  // A requirement of an archived project is read-only, whatever the screen
+  // that opened this allows: the server refuses every change to it.
+  const projectArchived = useIsProjectArchived(projectId);
+  const canEdit = mayEdit && !projectArchived;
+  const canDelete = mayDelete && !projectArchived;
+  const onEdit = projectArchived ? undefined : editRequirement;
+  const canPlanSprints = useHasPermission(Permission.EDIT_SPRINT) && !projectArchived;
+  const canAddTask = useHasPermission(Permission.CREATE_TASK) && !projectArchived;
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
   /** Server's 409 message when child requirements block the delete (null = not blocked). */
   const [deleteBlockedBy, setDeleteBlockedBy] = React.useState<string | null>(null);
@@ -605,7 +612,9 @@ export function FunctionalRequirementDetailDialog({
                   Mark as Done
                 </Button>
               )}
-              {canEdit && (
+              {/* Copying OUT of an archived project changes nothing in it — it is
+                  how its requirements are reused — so this stays on the role alone. */}
+              {mayEdit && (
                 <Button
                   variant="outline"
                   onClick={() => setCloneDialogOpen(true)}
@@ -719,7 +728,8 @@ export function FunctionalRequirementDetailDialog({
               </SelectTrigger>
               <SelectContent>
                 {projects
-                  .filter((p) => p.id !== projectId) // Exclude current project
+                  // Not into this project, nor into an archived one: it takes no new work.
+                  .filter((p) => p.id !== projectId && p.status !== 'ARCHIVED')
                   .map((project) => (
                     <SelectItem key={project.id} value={project.id}>
                       {project.shortCode} - {project.name}

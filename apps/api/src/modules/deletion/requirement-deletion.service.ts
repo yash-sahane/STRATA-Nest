@@ -7,6 +7,7 @@ import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { DeletionSideEffectsService, type DeletedEntity } from './deletion-side-effects.service';
 import { collectDelete, collectUpdate, type TxLike } from './deletion.util';
 import { assertDeletable } from './assert-deletable';
+import { assertProjectWritable } from '../projects/project-archive';
 
 /** The roll-up after a delete is bookkeeping: a failure is logged, never the delete's. */
 const rollupLog = new Logger('RequirementRollups');
@@ -73,6 +74,9 @@ export class RequirementDeletionService {
     // not) answered "does this id exist?" for somebody with no membership at
     // all. A stranger now gets 404; a member without the right still gets 403.
     await assertDeletable(this.access, user, cr.workspaceId, Permission.RequirementWrite);
+    // An archived project keeps its work as it was (see project-archive).
+    // Deleting the PROJECT is still allowed; its cascade does not come here.
+    await assertProjectWritable(this.prisma, cr.projectId);
 
     const workspaceId = cr.workspaceId;
     // Every cascade query is scoped to the workspace the permission was checked
@@ -149,6 +153,9 @@ export class RequirementDeletionService {
     // not) answered "does this id exist?" for somebody with no membership at
     // all. A stranger now gets 404; a member without the right still gets 403.
     await assertDeletable(this.access, user, fr.workspaceId, Permission.RequirementWrite);
+    // An archived project keeps its work as it was (see project-archive).
+    // Deleting the PROJECT is still allowed; its cascade does not come here.
+    await assertProjectWritable(this.prisma, fr.projectId);
 
     const workspaceId = fr.workspaceId;
     const descendants = await this.collectDescendants([fr]);

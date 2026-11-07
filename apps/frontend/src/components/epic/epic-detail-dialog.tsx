@@ -39,6 +39,7 @@ import { useFunctionalRequirementsByEpic } from '@/hooks/use-functional-requirem
 import { useClientRequirements } from '@/hooks/use-client-requirement';
 import type { Epic, Task } from '@/types';
 import { useHasPermission } from '@/hooks/use-permissions';
+import { useIsProjectArchived } from '@/hooks/use-project';
 import { Permission } from '@/lib/permissions';
 
 // Cancelling the Edit dialog or the delete confirm used to close this dialog
@@ -61,9 +62,14 @@ export function EpicDetailDialog({
   onOpenChange,
   projectId,
   tasks,
-  canDelete = false,
-  canEdit = false,
+  canDelete: mayDelete = false,
+  canEdit: mayEdit = false,
 }: EpicDetailDialogProps) {
+  // An epic of an archived project is read-only, whatever the screen that
+  // opened this allows: the server refuses every change to it.
+  const projectArchived = useIsProjectArchived(projectId);
+  const canEdit = mayEdit && !projectArchived;
+  const canDelete = mayDelete && !projectArchived;
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
   const [editDialogOpen, setEditDialogOpen] = React.useState(false);
   const deleteEpic = useDeleteEpic();
@@ -76,7 +82,8 @@ export function EpicDetailDialog({
   // The client requirement this epic delivers: the dialog never said.
   const { data: clientRequirements = [] } = useClientRequirements(projectId);
   const delivers = clientRequirements.find((cr) => cr.id === epic.requirementId);
-  const canAddRequirement = useHasPermission(Permission.CREATE_FUNCTIONAL_REQUIREMENT);
+  const canAddRequirement =
+    useHasPermission(Permission.CREATE_FUNCTIONAL_REQUIREMENT) && !projectArchived;
 
   // Progress is TASK-derived, matching the epic card and the persisted rollup in
   // useUpdateTask. This dialog used to prefer an FR-derived number with different

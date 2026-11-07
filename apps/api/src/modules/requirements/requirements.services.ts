@@ -27,6 +27,7 @@ import { clientRequirementResponse, functionalRequirementResponse } from './mapp
 import { RequirementTasks } from './requirement-tasks';
 import { tellPeople } from '../notifications/notice';
 import { mintRequirementHierarchyId } from '../generation/hierarchy-ids';
+import { assertProjectWritable } from '../projects/project-archive';
 
 /** The roll-up after a save is bookkeeping: a failure is logged, never the save's. */
 const rollupLog = new Logger('RequirementRollups');
@@ -71,6 +72,7 @@ export class ClientRequirementsService extends ScopedCrudService<
   async create(user: User, dto: CreateClientRequirementDto) {
     await this.access.assertPermission(user, dto.workspaceId, this.writePermission);
     await assertProjectInWorkspace(this.prisma, dto.projectId, dto.workspaceId);
+    await assertProjectWritable(this.prisma, dto.projectId);
     const created = await this.createIn(user, dto.workspaceId, {
       workspaceId: dto.workspaceId,
       projectId: dto.projectId,
@@ -99,7 +101,11 @@ export class ClientRequirementsService extends ScopedCrudService<
     if (dto.clientName !== undefined) data.clientName = dto.clientName;
     if (dto.priority !== undefined) data.priority = dto.priority;
     if (dto.status !== undefined) data.status = dto.status;
-    const row = dto.status !== undefined ? await this.findScoped(user, id) : null;
+    // Every patch reads the requirement: one of an archived project takes no
+    // changes at all (see project-archive).
+    const stored = await this.findScoped(user, id);
+    await assertProjectWritable(this.prisma, stored.projectId);
+    const row = dto.status !== undefined ? stored : null;
     const statusChanged = row !== null && dto.status !== row.status;
     // In Progress and Completed are what its functional requirements say once
     // it has some (rollups.ts) — not a person's to declare over them.
@@ -291,6 +297,7 @@ export class FunctionalRequirementsService extends ScopedCrudService<
   async create(user: User, dto: CreateFunctionalRequirementDto) {
     await this.access.assertPermission(user, dto.workspaceId, this.writePermission);
     await assertProjectInWorkspace(this.prisma, dto.projectId, dto.workspaceId);
+    await assertProjectWritable(this.prisma, dto.projectId);
     await this.assertLinkInProject('epic', 'Epic', dto.epicId, dto.projectId);
     await this.assertLinkInProject('sprint', 'Sprint', dto.sprintId, dto.projectId);
     await this.assertLinkInProject(
@@ -352,6 +359,9 @@ export class FunctionalRequirementsService extends ScopedCrudService<
   }
   async patch(user: User, id: string, dto: UpdateFunctionalRequirementDto) {
     const row = await this.findScoped(user, id);
+    // A requirement of an archived project takes no changes, and so moves none
+    // of its tasks either (see project-archive).
+    await assertProjectWritable(this.prisma, row.projectId);
     await this.assertLinkInProject('epic', 'Epic', dto.epicId, row.projectId);
     await this.assertLinkInProject('sprint', 'Sprint', dto.sprintId, row.projectId);
     await this.assertLinkInProject(

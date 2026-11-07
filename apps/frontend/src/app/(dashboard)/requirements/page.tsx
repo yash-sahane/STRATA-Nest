@@ -5,7 +5,8 @@ import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useClientRequirementsRealtime } from '@/hooks/use-realtime';
-import { useProjects } from '@/hooks/use-project';
+import { useIsProjectArchived, useProjects } from '@/hooks/use-project';
+import { ArchivedProjectBanner } from '@/components/projects/archived-project-banner';
 import { useFunctionalRequirements } from '@/hooks/use-functional-requirement';
 import { useClientRequirements } from '@/hooks/use-client-requirement';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -72,18 +73,22 @@ function RequirementsPageContent() {
   const searchParams = useSearchParams();
   const crIdFromUrl = searchParams.get('crId');
 
-  const canCreateRequirement = useHasPermission(Permission.CREATE_REQUIREMENT);
+  const [selectedProjectId, setSelectedProjectId] = React.useState<string>('');
+  // An archived project is read-only (the server refuses the change): no new,
+  // edited, generated or deleted requirement is offered while it is open.
+  const projectArchived = useIsProjectArchived(selectedProjectId);
+
+  const canCreateRequirement = useHasPermission(Permission.CREATE_REQUIREMENT) && !projectArchived;
   // A generated plan is saved as requirements AND epics AND tasks, and the API
   // checks all three (requirement:write, planning:write, task:create) before it
   // calls the model. Offered on requirement:write alone, a custom role could run
   // a generation only to be refused at the end.
-  const canCreateEpics = useHasPermission(Permission.CREATE_EPIC);
-  const canCreateTasks = useHasPermission(Permission.CREATE_TASK);
+  const canCreateEpics = useHasPermission(Permission.CREATE_EPIC) && !projectArchived;
+  const canCreateTasks = useHasPermission(Permission.CREATE_TASK) && !projectArchived;
   const canGenerate = canCreateRequirement && canCreateEpics && canCreateTasks;
-  const canEditRequirement = useHasPermission(Permission.EDIT_REQUIREMENT);
-  const canDeleteRequirement = useHasPermission(Permission.DELETE_REQUIREMENT);
+  const canEditRequirement = useHasPermission(Permission.EDIT_REQUIREMENT) && !projectArchived;
+  const canDeleteRequirement = useHasPermission(Permission.DELETE_REQUIREMENT) && !projectArchived;
 
-  const [selectedProjectId, setSelectedProjectId] = React.useState<string>('');
   // Realtime for this list.
   useClientRequirementsRealtime(selectedProjectId);
   const [searchQuery, setSearchQuery] = React.useState('');
@@ -249,6 +254,8 @@ function RequirementsPageContent() {
 
       {selectedProjectId && (
         <>
+          <ArchivedProjectBanner projectId={selectedProjectId} />
+
           {/* Stats */}
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-6">
             <Card>

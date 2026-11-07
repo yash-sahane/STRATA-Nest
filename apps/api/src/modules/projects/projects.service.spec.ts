@@ -32,6 +32,8 @@ const existing = {
 function build(
   clash: { id: string } | null,
   conflictCheck: { writes?: number[]; present?: boolean } = {},
+  /** A sprint still running in the project, which archiving refuses to freeze. */
+  options: { runningSprint?: { name: string } | null } = {},
 ) {
   // A list, so a test can make the first conditional write lose a race and the second
   // win it. Default: every attempt lands.
@@ -90,6 +92,7 @@ function build(
         ),
     },
     activityLog: { create: activityLogCreate },
+    sprint: { findFirst: jest.fn().mockResolvedValue(options.runningSprint ?? null) },
   } as unknown as PrismaService;
   const access = {
     assertPermission: jest.fn().mockResolvedValue(undefined),
@@ -304,5 +307,27 @@ describe('ProjectsService — two people editing one project', () => {
     // `version` is bookkeeping. Listing it would put "changed version" in front of
     // somebody reading the trail to find out what a colleague actually did.
     expect(changed).toEqual(['name']);
+  });
+});
+
+describe('ProjectsService — archiving with a sprint still running', () => {
+  // Archiving freezes the sprint too: it would read "Active" (and later
+  // "Overdue") for good, with no way left to complete it.
+  it('refuses, naming the sprint to complete first', async () => {
+    const { svc, updateMany } = build(null, {}, { runningSprint: { name: 'Sprint 3' } });
+    await expect(svc.update(user, 'p1', { status: 'ARCHIVED' })).rejects.toThrow(
+      'The sprint "Sprint 3" is still running. Complete it before archiving the project.',
+    );
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
+  it('archives a project whose sprints are all finished', async () => {
+    const { svc } = build(null);
+    await expect(svc.update(user, 'p1', { status: 'ARCHIVED' })).resolves.toBeDefined();
+  });
+
+  it('does not look for a running sprint on an edit that is not archiving', async () => {
+    const { svc } = build(null, {}, { runningSprint: { name: 'Sprint 3' } });
+    await expect(svc.update(user, 'p1', { description: 'still going' })).resolves.toBeDefined();
   });
 });

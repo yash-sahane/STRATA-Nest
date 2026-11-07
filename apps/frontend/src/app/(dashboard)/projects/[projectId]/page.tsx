@@ -26,6 +26,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ProjectFilesPanel } from '@/components/files/project-files-panel';
+import { ArchivedProjectBanner } from '@/components/projects/archived-project-banner';
 import {
   ArrowLeft,
   ArrowLeftRight,
@@ -318,6 +319,12 @@ export default function ProjectDetailPage() {
         </nav>
       </div>
 
+      <ArchivedProjectBanner
+        projectId={project.id}
+        archived={project.status === 'ARCHIVED'}
+        workspaceId={project.workspaceId}
+      />
+
       {/* Stats Grid */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card>
@@ -392,11 +399,18 @@ export default function ProjectDetailPage() {
               and the card renders its own frame while the numbers are in flight
               at EXACTLY the height it will have once they arrive — so whatever
               window is left, nothing below it moves. */}
-          <ProjectHealthCard
-            health={projectHealth}
-            projectName={project.name}
-            loading={tasksPending}
-          />
+          {/* Not for an archived project: it scored "100% Excellent" beside 0%
+              complete and recommended giving it dates — an edit the project now
+              refuses. Health is a reading of work in progress, and there is none;
+              the banner above says what the project is. Known from the same
+              response as the page, so leaving it out moves nothing. */}
+          {project.status !== 'ARCHIVED' && (
+            <ProjectHealthCard
+              health={projectHealth}
+              projectName={project.name}
+              loading={tasksPending}
+            />
+          )}
 
           <div className="grid gap-4 md:grid-cols-2">
             {/* Project Information */}

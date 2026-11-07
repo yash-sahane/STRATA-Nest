@@ -20,6 +20,7 @@ import { SprintBoard } from '@/components/sprints/sprint-board';
 import { TaskDetailsDialog } from '@/components/tasks/task-details-dialog';
 import { useTaskReview } from '@/hooks/use-task-review';
 import { useHasPermission } from '@/hooks/use-permissions';
+import { useIsProjectArchived } from '@/hooks/use-project';
 import { Permission } from '@/lib/permissions';
 import { BurndownChart } from '@/components/sprints/burndown-chart';
 
@@ -65,7 +66,9 @@ export default function SprintBoardPage() {
     () => allTasks?.find((task) => task.id === openTaskId) ?? null,
     [allTasks, openTaskId]
   );
-  const canEditTasks = useHasPermission(Permission.EDIT_ANY_TASK);
+  // An archived project's board is read-only (the server refuses every move).
+  const projectArchived = useIsProjectArchived(sprint?.projectId);
+  const canEditTasks = useHasPermission(Permission.EDIT_ANY_TASK) && !projectArchived;
   const review = useTaskReview();
 
   // Filter tasks for this sprint
@@ -262,7 +265,7 @@ export default function SprintBoardPage() {
             onTaskClick={(task) => setOpenTaskId(task.id)}
             // A closed sprint is a record. Dragging a Done card back to To Do
             // put open work inside a sprint that will never roll it out.
-            readOnly={sprint.status === 'COMPLETED'}
+            readOnly={sprint.status === 'COMPLETED' || projectArchived}
             started={sprint.status !== 'PLANNING'}
           />
         </TabsContent>
@@ -305,7 +308,7 @@ export default function SprintBoardPage() {
             : undefined
         }
         canEditDependencies={canEditTasks}
-        onMoveStatus={review.move}
+        onMoveStatus={projectArchived ? undefined : review.move}
         canSignOff={review.canSignOff}
       />
     </div>

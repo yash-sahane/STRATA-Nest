@@ -43,6 +43,8 @@ function prismaWith(levels: unknown[][], extra: Record<string, unknown> = {}) {
   return {
     functionalRequirement: { findMany, ...((extra.functionalRequirement as object) ?? {}) },
     clientRequirement: extra.clientRequirement ?? { findUnique: jest.fn() },
+    // Its project takes changes (see project-archive).
+    project: extra.project ?? { findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }) },
     activityLog: { create: jest.fn().mockResolvedValue({}) },
     $transaction: (cb: (t: unknown) => unknown) => cb(tx()),
   } as unknown as PrismaService;

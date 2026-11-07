@@ -76,7 +76,21 @@ const fixtures = {
 
 type Model = keyof typeof fixtures;
 
-function build(opts: { found?: boolean; failFirstWrite?: unknown; codes?: string[] } = {}) {
+function build(
+  opts: {
+    found?: boolean;
+    failFirstWrite?: unknown;
+    codes?: string[];
+    /** Fields of the source project that differ from `source`. */
+    source?: Record<string, unknown>;
+    /** Source rows of a table, in place of `fixtures`. */
+    rows?: Partial<Record<Model, unknown[]>>;
+    /** The workspace's timezone. */
+    timezone?: string;
+  } = {},
+) {
+  const from = { ...source, ...opts.source };
+  const sourceRows = (model: Model) => opts.rows?.[model] ?? fixtures[model];
   const created: Record<string, unknown[]> = {};
   const createMany = (model: string) =>
     jest.fn(async ({ data }: { data: unknown[] }) => {
@@ -95,11 +109,15 @@ function build(opts: { found?: boolean; failFirstWrite?: unknown; codes?: string
   // Source rows by the source id; the announcement re-reads the copy's own.
   const reader = (model: Model) =>
     jest.fn(async ({ where }: { where: { projectId: string } }) =>
-      where.projectId === source.id ? fixtures[model] : (created[model] ?? []),
+      where.projectId === source.id ? sourceRows(model) : (created[model] ?? []),
     );
   const prisma = {
+    // "Today" and the due dates' wall clock are the workspace's.
+    workspace: {
+      findUnique: jest.fn().mockResolvedValue({ settings: { timezone: opts.timezone ?? 'Asia/Kolkata' } }),
+    },
     project: {
-      findFirst: jest.fn().mockResolvedValue(opts.found === false ? null : source),
+      findFirst: jest.fn().mockResolvedValue(opts.found === false ? null : from),
       findMany: jest.fn().mockResolvedValue((opts.codes ?? ['MOA']).map((shortCode) => ({ shortCode }))),
       // As the database returns it: the row written, with its timestamps.
       findUniqueOrThrow: jest.fn(async () => ({
@@ -262,5 +280,108 @@ describe('ProjectCloneService', () => {
     const { service, created } = build({ codes: ['MOA', 'SHN', 'SHN2'] });
     await service.clone(user, 'src', { name: 'Shiny New' });
     expect((created.project as Record<string, unknown>[])[0].shortCode).toBe('SHN3');
+  });
+
+  it('hands the carried-over assignments out from the person making the copy', async () => {
+    const { service, created } = build();
+    await service.clone(user, 'src', everything);
+    const [task, sub] = created.task as Record<string, unknown>[];
+    expect(task).toMatchObject({ assignedBy: 'u1', assignedByName: 'Ada' });
+    expect(sub).toMatchObject({ assignedBy: 'u1', assignedByName: 'Ada' });
+  });
+
+  it('starts a client requirement over at Approved when its work had moved it on', async () => {
+    const { service, created } = build({
+      rows: {
+        clientRequirement: [
+          { ...fixtures.clientRequirement[0], status: 'COMPLETED' },
+          { id: 'cr2', title: 'Draft', description: '', clientName: '', priority: 'LOW', status: 'DRAFT' },
+        ],
+      },
+    });
+    await service.clone(user, 'src', everything);
+    expect((created.clientRequirement as Record<string, unknown>[]).map((r) => r.status)).toEqual([
+      'APPROVED',
+      'DRAFT',
+    ]);
+  });
+
+  it('copies an archived project into a new one in Planning', async () => {
+    const { service, created } = build({ source: { status: 'ARCHIVED' } });
+    await service.clone(user, 'src', everything);
+    expect((created.project as Record<string, unknown>[])[0]).toMatchObject({ status: 'PLANNING' });
+  });
+});
+
+describe('ProjectCloneService — the copy starts on its own day', () => {
+  afterEach(() => jest.useRealTimers());
+
+  const day = (iso: string) => new Date(`${iso}T00:00:00.000Z`);
+  /** The source as it was planned last January. */
+  const january = {
+    source: { startDate: day('2026-01-05'), endDate: day('2026-03-31') },
+    rows: {
+      sprint: [{ id: 's1', name: 'Sprint 1', goal: '', startDate: day('2026-01-05'), endDate: day('2026-01-18'), status: 'COMPLETED' }],
+      epic: [{ ...fixtures.epic[0], startDate: day('2026-01-10'), endDate: day('2026-02-01') }],
+      // Due on the 13th: India's midnight, as the browser's picker stores it.
+      task: [{ ...fixtures.task[0], dueDate: new Date('2026-01-12T18:30:00.000Z') }, fixtures.task[1]],
+    },
+  };
+  const rowOf = (created: Record<string, unknown[]>, table: string) =>
+    (created[table] as Record<string, unknown>[])[0];
+
+  it("moves every date by the days from the source's start to today in the workspace", async () => {
+    // 06:00 UTC on 7 November is 11:30 in India: today there is the 7th.
+    jest.useFakeTimers().setSystemTime(new Date('2026-11-07T06:00:00.000Z'));
+    const { service, created } = build(january);
+    const result = await service.clone(user, 'src', everything);
+
+    expect(rowOf(created, 'project')).toMatchObject({ startDate: day('2026-11-07'), endDate: day('2027-01-31') });
+    expect(rowOf(created, 'sprint')).toMatchObject({
+      status: 'PLANNING',
+      startDate: day('2026-11-07'),
+      endDate: day('2026-11-20'),
+    });
+    expect(rowOf(created, 'epic')).toMatchObject({ startDate: day('2026-11-12'), endDate: day('2026-12-04') });
+    // Still India's midnight, eight days after the start, as it was.
+    expect(rowOf(created, 'task').dueDate).toEqual(new Date('2026-11-14T18:30:00.000Z'));
+    expect((created.task as Record<string, unknown>[])[1].dueDate).toBeNull();
+    expect(result.copied.daysMoved).toBe(306);
+  });
+
+  it('starts on the day the request names', async () => {
+    const { service, created } = build(january);
+    await service.clone(user, 'src', { ...everything, startDate: '2027-01-04' });
+    expect(rowOf(created, 'project')).toMatchObject({ startDate: day('2027-01-04') });
+    expect(rowOf(created, 'sprint')).toMatchObject({ startDate: day('2027-01-04'), endDate: day('2027-01-17') });
+  });
+
+  it('measures a source that never had a start from its earliest date', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-11-07T06:00:00.000Z'));
+    const { service, created } = build({
+      source: { startDate: null, endDate: null },
+      rows: {
+        sprint: [{ id: 's1', name: 'Sprint 1', goal: '', startDate: day('2026-01-10'), endDate: day('2026-01-20'), status: 'ACTIVE' }],
+        // The 9th in India — a day before the sprint.
+        task: [{ ...fixtures.task[0], dueDate: new Date('2026-01-08T18:30:00.000Z') }],
+      },
+    });
+    await service.clone(user, 'src', everything);
+    expect(rowOf(created, 'project')).toMatchObject({ startDate: day('2026-11-07'), endDate: null });
+    expect(rowOf(created, 'task').dueDate).toEqual(new Date('2026-11-06T18:30:00.000Z'));
+    expect(rowOf(created, 'sprint')).toMatchObject({ startDate: day('2026-11-08') });
+  });
+
+  it("keeps a due date's time of day across a daylight-saving change", async () => {
+    const { service, created } = build({
+      timezone: 'Europe/London',
+      source: { startDate: day('2026-07-01'), endDate: null },
+      // Midnight in London on 2 July is 23:00 UTC on the 1st (summer time).
+      rows: { task: [{ ...fixtures.task[0], dueDate: new Date('2026-07-01T23:00:00.000Z') }] },
+    });
+    await service.clone(user, 'src', { ...everything, startDate: '2026-12-01' });
+    // Midnight in London on 2 December — winter time, so 00:00 UTC — not
+    // 23:00 UTC on the 1st, which is the day before.
+    expect(rowOf(created, 'task').dueDate).toEqual(new Date('2026-12-02T00:00:00.000Z'));
   });
 });

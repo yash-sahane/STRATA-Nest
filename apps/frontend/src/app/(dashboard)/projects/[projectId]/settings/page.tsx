@@ -128,6 +128,10 @@ export default function ProjectSettingsPage() {
   };
   const pending = seeded ? changedFields(valuesOf(seeded), formValues) : {};
   const dirty = Object.keys(pending).length > 0;
+  // An archived project takes one change: its status (the server refuses the
+  // rest — see the API's project-archive). The other fields open up once a
+  // status that un-archives it is chosen, and are saved together with it.
+  const lockedByArchive = seeded?.status === 'ARCHIVED' && status === 'ARCHIVED';
 
   // Seed when the project first arrives, or a different one does. A refetch of
   // the same project re-seeds only while nothing has been changed here, so
@@ -277,6 +281,9 @@ export default function ProjectSettingsPage() {
             <CardDescription>Update your project details</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* A disabled fieldset disables every control in it, the date
+                pickers' triggers and clear buttons included. */}
+            <fieldset disabled={lockedByArchive} className="min-w-0 space-y-4 disabled:opacity-60">
             <div className="space-y-2">
               <Label htmlFor="name">Project Name *</Label>
               <Input
@@ -307,12 +314,13 @@ export default function ProjectSettingsPage() {
                 className="min-h-[100px]"
               />
             </div>
+            </fieldset>
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="status">Status</Label>
                 <Select value={status} onValueChange={(value) => setStatus(value as ProjectStatus)}>
-                  <SelectTrigger id="status">
+                  <SelectTrigger id="status" aria-describedby={seeded?.status === 'ARCHIVED' ? 'archived-note' : undefined}>
                     <SelectValue placeholder="Select status" />
                   </SelectTrigger>
                   <SelectContent>
@@ -324,8 +332,16 @@ export default function ProjectSettingsPage() {
                   </SelectContent>
                 </Select>
               </div>
+              {seeded?.status === 'ARCHIVED' && (
+                <p id="archived-note" className="text-sm text-muted-foreground sm:self-end">
+                  {lockedByArchive
+                    ? 'Archived — read-only: nothing in this project can be changed. Choose another status to unarchive it; the rest of the form opens up with it.'
+                    : 'Saving un-archives the project, with any other changes made here.'}
+                </p>
+              )}
             </div>
 
+            <fieldset disabled={lockedByArchive} className="min-w-0 disabled:opacity-60">
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               {/* The shared DatePicker, not a second hand-rolled copy of it: the
                   inline calendars here were the only ones without `defaultMonth`,
@@ -352,6 +368,7 @@ export default function ProjectSettingsPage() {
                 />
               </div>
             </div>
+            </fieldset>
 
             <div className="flex justify-end pt-4">
               <Button onClick={handleSave} disabled={updateProject.isPending}>

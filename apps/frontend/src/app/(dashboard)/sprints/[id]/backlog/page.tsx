@@ -21,6 +21,7 @@ import { PlusCircle, FileText, MinusCircle } from 'lucide-react';
 import { FRAssignmentCard } from '@/components/sprints/fr-assignment-card';
 import type { FunctionalRequirement } from '@/types';
 import { useHasPermission } from '@/hooks/use-permissions';
+import { useIsProjectArchived } from '@/hooks/use-project';
 import { Permission } from '@/lib/permissions';
 import { plural } from '@/lib/plural';
 import { logger } from '@/lib/logger';
@@ -40,13 +41,10 @@ const isFinished = (fr: Pick<FunctionalRequirement, 'status'>): boolean =>
 export default function SprintBacklogPage() {
   const params = useParams();
   const sprintId = params.id as string;
-  // Planning a requirement into a sprint changes the requirement and the
-  // sprint's plan: the server asks for both.
-  const canEditFR = useHasPermission(Permission.EDIT_FUNCTIONAL_REQUIREMENT);
-  const canPlanSprints = useHasPermission(Permission.EDIT_SPRINT);
-  const canPlan = canEditFR && canPlanSprints;
+  const mayEditFR = useHasPermission(Permission.EDIT_FUNCTIONAL_REQUIREMENT);
+  const mayPlanSprints = useHasPermission(Permission.EDIT_SPRINT);
   const confirm = useConfirm();
-  const canCreateFR = useHasPermission(Permission.CREATE_FUNCTIONAL_REQUIREMENT);
+  const mayCreateFR = useHasPermission(Permission.CREATE_FUNCTIONAL_REQUIREMENT);
 
   const {
     data: sprint,
@@ -55,6 +53,15 @@ export default function SprintBacklogPage() {
     error: sprintLoadError,
     refetch: refetchSprint,
   } = useSprint(sprintId);
+  // Nothing is planned into, or out of, a sprint of an archived project: the
+  // project is read-only, and the server refuses the change.
+  const projectArchived = useIsProjectArchived(sprint?.projectId);
+  // Planning a requirement into a sprint changes the requirement and the
+  // sprint's plan: the server asks for both.
+  const canEditFR = mayEditFR && !projectArchived;
+  const canPlanSprints = mayPlanSprints && !projectArchived;
+  const canPlan = canEditFR && canPlanSprints;
+  const canCreateFR = mayCreateFR && !projectArchived;
   const tasksQuery = useTasks(sprint?.projectId);
   const { data: allTasks, isLoading: tasksLoading } = tasksQuery;
   const allFRsQuery = useFunctionalRequirements(sprint?.projectId);

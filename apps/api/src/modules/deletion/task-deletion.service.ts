@@ -9,6 +9,7 @@ import { DeletionSideEffectsService, type DeletedEntity } from './deletion-side-
 import { collectDelete, collectUpdate, type TxLike } from './deletion.util';
 import { assertDeletable } from './assert-deletable';
 import { tellPeople } from '../notifications/notice';
+import { assertProjectWritable } from '../projects/project-archive';
 
 /** A JSON id column as the ids it holds (the column is `Json`, so it can hold anything). */
 const idList = (value: unknown): string[] =>
@@ -40,6 +41,9 @@ export class TaskDeletionService {
     // not) answered "does this id exist?" for somebody with no membership at
     // all. A stranger now gets 404; a member without the right still gets 403.
     await assertDeletable(this.access, user, task.workspaceId, Permission.TaskWrite);
+    // An archived project keeps its work as it was. Deleting the PROJECT is
+    // still allowed, and its cascade does not come through here.
+    await assertProjectWritable(this.prisma, task.projectId);
     const workspaceId = task.workspaceId;
     const deleted: DeletedEntity[] = [];
     const detached: DeletedEntity[] = [];

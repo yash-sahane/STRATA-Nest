@@ -5,6 +5,7 @@ import { query } from '@/lib/api/client';
 import type { Project, ProjectStatus } from '@/types';
 import { showSaveFailure } from '@/lib/api/mutation-error';
 import { toast } from 'sonner';
+import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 
 export function useProjects(workspaceId?: string) {
   return useQuery({
@@ -23,6 +24,19 @@ export function useProjects(workspaceId?: string) {
     },
     enabled: !!workspaceId,
   });
+}
+
+/**
+ * Whether a project is archived — read-only. The server refuses every change
+ * to an archived project's work (see the API's project-archive); this is how a
+ * screen knows not to offer one. Read off the workspace's project list, which
+ * every project-scoped page has already loaded.
+ */
+export function useIsProjectArchived(projectId?: string | null): boolean {
+  const { currentWorkspace } = useCurrentWorkspace();
+  const { data: projects } = useProjects(currentWorkspace?.id);
+  if (!projectId) return false;
+  return Boolean(projects?.some((project) => project.id === projectId && project.status === 'ARCHIVED'));
 }
 
 export function useProject(projectId?: string) {
@@ -147,6 +161,8 @@ export interface CloneSummary {
   tasks: number;
   /** Assignments left off because the person has left the workspace. */
   assignmentsDropped: number;
+  /** How many days later (negative: earlier) every copied date is than its source's. */
+  daysMoved?: number;
 }
 
 const counted = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -181,11 +197,14 @@ export function useCloneProject() {
       newName: string;
       includeTasks: boolean;
       includeSprints: boolean;
+      /** `yyyy-MM-dd`; left out, the copy starts today in the workspace's timezone. */
+      startDate?: string;
     }) => {
       const response = await restClient.post(`/api/v1/projects/${data.sourceProjectId}/clone/`, {
         name: data.newName,
         includeTasks: data.includeTasks,
         includeSprints: data.includeSprints,
+        ...(data.startDate ? { startDate: data.startDate } : {}),
       });
       return response as unknown as Project & { copied?: CloneSummary };
     },
@@ -193,7 +212,11 @@ export function useCloneProject() {
       queryClient.invalidateQueries({ queryKey: ['projects'] });
       const what = describeCopy(newProject.copied);
       const dropped = newProject.copied?.assignmentsDropped ?? 0;
+      const moved = newProject.copied?.daysMoved ?? 0;
       toast.success('Project cloned', { description: `${newProject.name} was created${what ? ` with ${what}` : ''}.` +
+          (moved
+            ? ` Its dates are ${counted(Math.abs(moved), 'day')} ${moved > 0 ? 'later' : 'earlier'} than the original's.`
+            : '') +
           (dropped
             ? ` ${counted(dropped, 'assignment')} to people who have left the workspace ${dropped === 1 ? 'was' : 'were'} left off.`
             : '') });

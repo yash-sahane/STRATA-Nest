@@ -27,6 +27,7 @@ import {
 import type { CreateProjectDto, UpdateProjectDto } from './dto';
 import { projectResponse } from './mappers';
 import { freeProjectCode, isShortCodeConflict } from './project-clone.service';
+import { ARCHIVED_PROJECT_STATUS, projectArchivedError } from './project-archive';
 
 /**
  * A project that ends before it starts makes every timeline, burndown and
@@ -39,6 +40,24 @@ function assertRangeOrdered(startDate: Date | null, endDate: Date | null): void 
   if (startDate && endDate && endDate.getTime() < startDate.getTime()) {
     throw new BadRequestException('endDate must be on or after startDate');
   }
+}
+
+/**
+ * An archived project takes one change: its status. Un-archiving is that change,
+ * and a save that un-archives may carry the rest of the form with it — the
+ * settings page sends every field on Save, so it is let through whole rather
+ * than refused for repeating values it does not change. A save that leaves the
+ * project archived may not change anything else; a field sent back exactly as
+ * it is stored is not a change.
+ */
+function assertEditableWhileArchived(existing: Project, data: Prisma.ProjectUpdateInput): void {
+  if (existing.status !== ARCHIVED_PROJECT_STATUS) return;
+  if (data.status !== undefined && data.status !== ARCHIVED_PROJECT_STATUS) return;
+  const stored = existing as unknown as Record<string, unknown>;
+  const changing = Object.entries(data).filter(
+    ([field, value]) => field !== 'status' && !sameFieldValue(stored[field], value),
+  );
+  if (changing.length > 0) throw projectArchivedError();
 }
 
 const SPEC: ListQuerySpec = {
@@ -169,9 +188,6 @@ export class ProjectsService {
   async update(user: User, id: string, dto: UpdateProjectDto) {
     const existing = await this.findScoped(user, id);
     await this.access.assertPermission(user, existing.workspaceId, Permission.ProjectUpdate);
-    if (dto.shortCode !== undefined && dto.shortCode !== existing.shortCode) {
-      await this.assertShortCodeFree(existing.workspaceId, dto.shortCode, existing.id);
-    }
     const data: Prisma.ProjectUpdateInput = {};
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.shortCode !== undefined) data.shortCode = dto.shortCode;
@@ -188,9 +204,35 @@ export class ProjectsService {
     assertRangeOrdered(startDate, endDate);
     if (dto.startDate !== undefined) data.startDate = startDate;
     if (dto.endDate !== undefined) data.endDate = endDate;
+    assertEditableWhileArchived(existing, data);
+    if (data.status === ARCHIVED_PROJECT_STATUS && existing.status !== ARCHIVED_PROJECT_STATUS) {
+      await this.assertNoRunningSprint(existing.id);
+    }
+    if (dto.shortCode !== undefined && dto.shortCode !== existing.shortCode) {
+      await this.assertShortCodeFree(existing.workspaceId, dto.shortCode, existing.id);
+    }
     const updated = await this.writeUpdate(existing, id, data, dto.basedOn);
     await this.audit(user, updated.workspaceId, 'updated', id, updated, Object.keys(data));
     return projectResponse(updated);
+  }
+
+  /**
+   * A project is not archived with a sprint still running in it. Archiving
+   * freezes everything, the sprint included: it went on reading "Active" — and,
+   * once past its end date, "Overdue" — for good, on the sprint list and the
+   * dashboard, with no way left to complete it. Completing it first records how
+   * it ended; then the project can be put away.
+   */
+  private async assertNoRunningSprint(projectId: string): Promise<void> {
+    const running = await this.prisma.sprint.findFirst({
+      where: { projectId, status: 'ACTIVE' },
+      select: { name: true },
+    });
+    if (running) {
+      throw new BadRequestException(
+        `The sprint "${running.name}" is still running. Complete it before archiving the project.`,
+      );
+    }
   }
 
   /**

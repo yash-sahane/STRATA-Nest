@@ -21,6 +21,7 @@ import { Permission, type PermissionKey } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { CHANGED_WHILE_EDITING_TYPE, ScopedCrudService } from '../workspaces/scoped-crud.base';
 import { assertLinkInProject, assertProjectInWorkspace } from '../workspaces/workspace-refs';
+import { assertProjectWritable } from '../projects/project-archive';
 import type {
   CreateTimeEntryDto,
   UpdateTimeEntryDto,
@@ -389,6 +390,10 @@ export class TimeEntriesService extends ScopedCrudService<
     const projectId = dto.projectId || task?.projectId || '';
     await assertProjectInWorkspace(this.prisma, projectId, dto.workspaceId);
     await assertLinkInProject(this.prisma, 'task', 'Task', dto.taskId, projectId);
+    // No new time against an archived project or its tasks (see project-archive).
+    // Entries already logged stay correctable, and decidable: they are people's
+    // records of hours worked, not part of the project.
+    await assertProjectWritable(this.prisma, projectId);
     const named = await namesOfWork(this.prisma, dto.taskId, projectId);
     const row = await this.serialized(user.id, dto.workspaceId, async (db) => {
       await assertNoOverlap(db, {

@@ -31,6 +31,7 @@ import { useCreateProject } from '@/hooks/use-project';
 import { useAuth } from '@/components/providers/auth-provider';
 import { DatePicker } from '@/components/ui/date-picker';
 import { format, startOfDay } from 'date-fns';
+import { businessToday } from '@/lib/task-dates';
 
 /**
  * Real validation, matching the rest of the dialogs.
@@ -97,7 +98,9 @@ export function CreateProjectDialog({
       clientName: '',
       // Midnight, not the current instant: the calendar's day cells are local
       // midnight, so an unnormalized "now" made today unselectable as an end date.
-      startDate: startOfDay(new Date()),
+      // And the workspace's today, not the viewer's: a project starts on an
+      // office day (see businessToday).
+      startDate: businessToday(),
       endDate: null,
     }),
     []

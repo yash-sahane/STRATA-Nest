@@ -13,6 +13,8 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
+import { DatePicker } from '@/components/ui/date-picker';
+import { format } from 'date-fns';
 import { Copy, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Project } from '@/types';
@@ -36,6 +38,11 @@ export interface CloneProjectData {
   name: string;
   includeTasks: boolean;
   includeSprints: boolean;
+  /**
+   * The day the copy starts (`yyyy-MM-dd`), which every copied date moves with.
+   * Left out, the server takes today in the workspace's timezone.
+   */
+  startDate?: string;
 }
 
 interface CloneOptionProps {
@@ -98,6 +105,9 @@ export function CloneProjectDialog({
   const [name, setName] = React.useState('');
   const [includeTasks, setIncludeTasks] = React.useState(true);
   const [includeSprints, setIncludeSprints] = React.useState(false);
+  // Unset is "today", as the server reckons it in the workspace's timezone —
+  // the browser's own today could be a different day.
+  const [startDate, setStartDate] = React.useState<Date | undefined>(undefined);
 
   // Reset the form each time it opens on a project.
   React.useEffect(() => {
@@ -105,6 +115,7 @@ export function CloneProjectDialog({
       setName(`${project.name} (Copy)`);
       setIncludeTasks(canCopyWork);
       setIncludeSprints(false);
+      setStartDate(undefined);
     }
   }, [open, project, canCopyWork]);
 
@@ -115,6 +126,8 @@ export function CloneProjectDialog({
       name: name.trim(),
       includeTasks: includeTasks && canCopyWork,
       includeSprints: includeSprints && canCopySprints,
+      // The day picked, as a calendar day: a date column has no time of day.
+      startDate: startDate ? format(startDate, 'yyyy-MM-dd') : undefined,
     });
   };
 
@@ -148,6 +161,21 @@ export function CloneProjectDialog({
               />
             </div>
 
+            <div className="space-y-2">
+              <Label htmlFor="clone-start">Starts On</Label>
+              <DatePicker
+                id="clone-start"
+                date={startDate}
+                onSelect={setStartDate}
+                placeholder="Today"
+                buttonClassName="w-full"
+              />
+              <p className="text-xs text-muted-foreground">
+                Every copied date moves with the start: sprints, epics and due dates keep their
+                distance from it, as they had in {project.name}.
+              </p>
+            </div>
+
             <fieldset className="space-y-3">
               <legend className="mb-3 text-sm font-medium">What to Include</legend>
               <CloneOption
@@ -164,11 +192,11 @@ export function CloneProjectDialog({
                 }
               />
               {/* Not "dates will be cleared": a sprint's start and end are NOT
-                  NULL, so they are copied. */}
+                  NULL, so they are copied — moved to the copy's start. */}
               <CloneOption
                 id="clone-sprints"
                 title="Sprints"
-                description="Sprint names, goals and dates (each starts again in Planning)"
+                description="Sprint names, goals and dates, moved to the copy's start (each starts again in Planning)"
                 checked={includeSprints}
                 onCheckedChange={setIncludeSprints}
                 disabled={isLoading}
@@ -179,9 +207,9 @@ export function CloneProjectDialog({
             <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 dark:border-blue-800 dark:bg-blue-950/30">
               <p className="text-xs text-foreground">
                 <strong>Note:</strong> The copy starts in Planning, and its tasks keep their
-                assignees, due dates and estimates. Progress, logged time, comments, files and
-                dependencies stay with the original. Work assigned to someone who has left the
-                workspace is copied unassigned.
+                assignees and estimates, with their due dates moved like every other date.
+                Progress, logged time, comments, files and dependencies stay with the original.
+                Work assigned to someone who has left the workspace is copied unassigned.
               </p>
             </div>
           </div>

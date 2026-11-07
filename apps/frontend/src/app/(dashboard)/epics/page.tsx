@@ -5,7 +5,9 @@ import { useSearchParams } from 'next/navigation';
 import { useCreateActionParam } from '@/hooks/use-create-action-param';
 import { useEpicsRealtime } from '@/hooks/use-realtime';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
-import { useProjects } from '@/hooks/use-project';
+import { useIsProjectArchived, useProjects } from '@/hooks/use-project';
+import { ArchivedProjectBanner } from '@/components/projects/archived-project-banner';
+import { toast } from 'sonner';
 import { deriveEpicMetrics, useEpics } from '@/hooks/use-epic';
 import { useTasks } from '@/hooks/use-task';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -36,12 +38,15 @@ function EpicsPageContent() {
   const projectIdFromUrl = searchParams.get('projectId');
   const epicIdFromUrl = searchParams.get('epicId');
 
-  // Permission checks
-  const canCreateEpic = useHasPermission(Permission.CREATE_EPIC);
-  const canDeleteEpic = useHasPermission(Permission.DELETE_EPIC);
-  const canEditEpic = useHasPermission(Permission.EDIT_EPIC);
-
   const [selectedProjectId, setSelectedProjectId] = React.useState<string>('');
+  // An archived project is read-only (the server refuses the change): no epic
+  // is created, edited or deleted from here while it is the one open.
+  const projectArchived = useIsProjectArchived(selectedProjectId);
+
+  // Permission checks
+  const canCreateEpic = useHasPermission(Permission.CREATE_EPIC) && !projectArchived;
+  const canDeleteEpic = useHasPermission(Permission.DELETE_EPIC) && !projectArchived;
+  const canEditEpic = useHasPermission(Permission.EDIT_EPIC) && !projectArchived;
   // Realtime: an epic deleted by a teammate used to stay on this page until a refresh.
   useEpicsRealtime(selectedProjectId);
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
@@ -58,6 +63,10 @@ function EpicsPageContent() {
   const [createFor, setCreateFor] = React.useState('');
   useCreateActionParam(
     (asked) => {
+      if (projectArchived) {
+        toast.info('This project is archived.', { description: 'Unarchive it to add epics to it.' });
+        return;
+      }
       setCreateFor(asked.get('requirementId') ?? '');
       setCreateDialogOpen(true);
     },
@@ -167,6 +176,8 @@ function EpicsPageContent() {
 
       {selectedProjectId && (
         <>
+          <ArchivedProjectBanner projectId={selectedProjectId} />
+
           {/* Stats */}
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
             <Card>

@@ -4,7 +4,9 @@ import { getSprintStatusConfig } from '@/lib/semantic/status';
 import * as React from 'react';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
-import { useProjects } from '@/hooks/use-project';
+import { useIsProjectArchived, useProjects } from '@/hooks/use-project';
+import { ArchivedProjectBanner } from '@/components/projects/archived-project-banner';
+import { toast } from 'sonner';
 import { useSprints, useCreateSprint, useStartSprint, useCompleteSprint, useUpdateSprint, useDeleteSprint } from '@/hooks/use-sprint';
 import { useTasks } from '@/hooks/use-task';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -39,14 +41,23 @@ export default function SprintsPage() {
   const { currentWorkspace, isLoading: workspacesLoading } = useCurrentWorkspace();
 
   const [selectedProjectId, setSelectedProjectId] = React.useState<string>('');
+  // An archived project is read-only (the server refuses the change), so its
+  // sprints are not created, edited, started, completed or deleted from here.
+  const projectArchived = useIsProjectArchived(selectedProjectId);
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
   // The command palette's "New Sprint" navigates here with ?action=create.
-  useCreateActionParam(() => setCreateDialogOpen(true), !!selectedProjectId);
+  useCreateActionParam(() => {
+    if (projectArchived) {
+      toast.info('This project is archived.', { description: 'Unarchive it to plan sprints in it.' });
+      return;
+    }
+    setCreateDialogOpen(true);
+  }, !!selectedProjectId);
   const [editingSprint, setEditingSprint] = React.useState<Sprint | null>(null);
 
-  const canCreateSprint = useHasPermission(Permission.CREATE_SPRINT);
-  const canEditSprint = useHasPermission(Permission.EDIT_SPRINT);
-  const canDeleteSprint = useHasPermission(Permission.DELETE_SPRINT);
+  const canCreateSprint = useHasPermission(Permission.CREATE_SPRINT) && !projectArchived;
+  const canEditSprint = useHasPermission(Permission.EDIT_SPRINT) && !projectArchived;
+  const canDeleteSprint = useHasPermission(Permission.DELETE_SPRINT) && !projectArchived;
 
   const { data: projects, isLoading: projectsLoading } = useProjects(currentWorkspace?.id);
   const {
@@ -303,6 +314,8 @@ export default function SprintsPage() {
           </>
         }
       />
+
+      <ArchivedProjectBanner projectId={selectedProjectId} />
 
       {/* Sprint Cards */}
       {sprintsLoading ? (

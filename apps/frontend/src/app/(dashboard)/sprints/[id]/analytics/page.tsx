@@ -39,10 +39,11 @@ import {
   endOfDay,
   format as formatDateFns,
   parseISO,
-  startOfDay,
 } from 'date-fns';
+import { businessToday } from '@/lib/task-dates';
 import { Textarea } from '@/components/ui/textarea';
 import { useHasPermission } from '@/hooks/use-permissions';
+import { useIsProjectArchived } from '@/hooks/use-project';
 import { Permission } from '@/lib/permissions';
 import { basedOnFor } from '@/lib/utils/changed-fields';
 import { useSprintsRealtime, useTasksRealtime } from '@/hooks/use-realtime';
@@ -75,8 +76,10 @@ export default function SprintAnalyticsPage() {
     error: sprintLoadError,
     refetch: refetchSprint,
   } = useSprint(sprintId);
-  // Whoever may edit the sprint may write its retrospective.
-  const canEditSprint = useHasPermission(Permission.EDIT_SPRINT);
+  // Whoever may edit the sprint may write its retrospective — unless its
+  // project is archived, and read-only.
+  const projectArchived = useIsProjectArchived(sprint?.projectId);
+  const canEditSprint = useHasPermission(Permission.EDIT_SPRINT) && !projectArchived;
   useSprintsRealtime(sprint?.projectId);
   useTasksRealtime(sprint?.projectId);
   const {
@@ -141,7 +144,9 @@ export default function SprintAnalyticsPage() {
     const startDate = parseISO(sprint.startDate);
     const endDate = parseISO(sprint.endDate);
     const days = eachDayOfInterval({ start: startDate, end: endDate });
-    const today = startOfDay(new Date());
+    // The workspace's day, as the board's due labels count it: a viewer east of
+    // the office crossed midnight first and burned down a day early.
+    const today = businessToday();
 
     const totalPoints = metrics.total; // use total tasks for burndown
     const idealBurnRate = totalPoints / days.length;

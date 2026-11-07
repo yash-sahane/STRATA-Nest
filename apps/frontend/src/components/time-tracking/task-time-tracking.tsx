@@ -42,12 +42,19 @@ interface TaskTimeTrackingProps {
   task: Task;
   userId: string;
   workspaceId: string;
+  /**
+   * No new time on this task: its project is archived, and the server refuses
+   * a timer started, resumed or logged by hand against it. A timer already
+   * running can still be paused and stopped — that time was worked before.
+   */
+  readOnly?: boolean;
 }
 
 export function TaskTimeTracking({
   task,
   userId,
   workspaceId,
+  readOnly = false,
 }: TaskTimeTrackingProps) {
   // Everybody's time on the task, not only the viewer's own entries — see
   // useTaskTimeSummary. The card's heading is "Total Logged", and until now it
@@ -392,7 +399,12 @@ export function TaskTimeTracking({
                     size="sm"
                     className="flex-1"
                     onClick={handleToggleTimer}
-                    disabled={toggleTimerMutation.isPending}
+                    disabled={toggleTimerMutation.isPending || (isPaused && readOnly)}
+                    title={
+                      isPaused && readOnly
+                        ? "This task's project is archived: the timer can be stopped, not resumed"
+                        : undefined
+                    }
                   >
                     {isPaused ? (
                       <>
@@ -433,6 +445,10 @@ export function TaskTimeTracking({
                 </div>
               )}
             </div>
+          ) : readOnly ? (
+            <p className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
+              No time can be logged against this task: its project is archived.
+            </p>
           ) : activeTimer ? (
             // Said where it is and what can be done about it: this read "Timer is
             // running for another task" and offered nothing — not which task,
@@ -489,16 +505,18 @@ export function TaskTimeTracking({
             </Button>
           )}
 
-          <ManualTimeEntryDialog
-            userId={userId}
-            taskId={task.id}
-            trigger={
-              <Button variant="ghost" size="sm" className="w-full">
-                <Clock className="h-4 w-4 mr-2" />
-                Log Time Manually
-              </Button>
-            }
-          />
+          {!readOnly && (
+            <ManualTimeEntryDialog
+              userId={userId}
+              taskId={task.id}
+              trigger={
+                <Button variant="ghost" size="sm" className="w-full">
+                  <Clock className="h-4 w-4 mr-2" />
+                  Log Time Manually
+                </Button>
+              }
+            />
+          )}
         </div>
       </CardContent>
     </Card>

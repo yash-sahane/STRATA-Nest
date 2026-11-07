@@ -22,7 +22,8 @@ import {
 } from '@/hooks/use-task';
 import { isLabel, labelText } from '@/components/tasks/task-display';
 import { isEditConflict } from '@/lib/api/mutation-error';
-import { useProjects } from '@/hooks/use-project';
+import { useIsProjectArchived, useProjects } from '@/hooks/use-project';
+import { ArchivedProjectBanner } from '@/components/projects/archived-project-banner';
 import { useTaskReview } from '@/hooks/use-task-review';
 import { isAssignedTo } from '@/lib/my-tasks';
 import { useAuth } from '@/components/providers/auth-provider';
@@ -98,15 +99,20 @@ function TasksPageContent() {
   // flight, so the DONE gate never refuses on an unresolved answer. The server
   // (TasksService.patchStatus) is the enforcement point either way.
   const doneGate = useHasPermissionResolved(Permission.COMPLETE_TASK);
-  const canMarkDone = doneGate.isLoading ? undefined : doneGate.allowed;
   // Every permission below resolves from the same membership request.
   const permissionsLoading = doneGate.isLoading;
-  const canEditAnyTask = useHasPermission(Permission.EDIT_ANY_TASK);
-  const canDeleteTask = useHasPermission(Permission.DELETE_TASK);
+  const mayEditAnyTask = useHasPermission(Permission.EDIT_ANY_TASK);
+  const mayDeleteTask = useHasPermission(Permission.DELETE_TASK);
   const createGate = useHasPermissionResolved(Permission.CREATE_TASK);
-  const canCreateTask = createGate.allowed;
 
   const [selectedProjectId, setSelectedProjectId] = React.useState<string>(projectIdFromUrl || '');
+  // An archived project is read-only — the server refuses any change to its
+  // tasks — so nothing on this page offers one while it is the one open.
+  const projectArchived = useIsProjectArchived(selectedProjectId);
+  const canMarkDone = doneGate.isLoading ? undefined : doneGate.allowed && !projectArchived;
+  const canEditAnyTask = mayEditAnyTask && !projectArchived;
+  const canDeleteTask = mayDeleteTask && !projectArchived;
+  const canCreateTask = createGate.allowed && !projectArchived;
   /** The id a link asked for that this workspace has no such project for. */
   const [missingProjectId, setMissingProjectId] = React.useState<string | null>(null);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = React.useState(false);
@@ -121,6 +127,10 @@ function TasksPageContent() {
         toast.info('You cannot create tasks in this workspace.', {
           description: 'Your role here can work on tasks but not add them.',
         });
+        return;
+      }
+      if (projectArchived) {
+        toast.info('This project is archived.', { description: 'Unarchive it to add tasks to it.' });
         return;
       }
       setCreateForFr(asked.get('frId') ?? '');
@@ -1280,6 +1290,8 @@ function TasksPageContent() {
         </p>
       )}
 
+      <ArchivedProjectBanner projectId={selectedProjectId} />
+
       {/* Task Board */}
       {selectedProjectId ? (
         isLoadingTasks ? (
@@ -1361,7 +1373,7 @@ function TasksPageContent() {
         onEdit={canEditAnyTask ? handleTaskEdit : undefined}
         onDelete={canDeleteTask ? handleTaskDelete : undefined}
         canEditDependencies={canEditAnyTask}
-        onMoveStatus={review.move ? handleMoveStatus : undefined}
+        onMoveStatus={review.move && !projectArchived ? handleMoveStatus : undefined}
         canSignOff={review.canSignOff}
       />
 

@@ -31,6 +31,7 @@ import {
 } from '@/hooks/use-task';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
+import { useIsProjectArchived } from '@/hooks/use-project';
 import { useTeamMembers } from '@/hooks/use-team';
 import { useSprints } from '@/hooks/use-sprint';
 import { useEpics } from '@/hooks/use-epic';
@@ -61,12 +62,20 @@ export function TaskDetailsDialog({
   task,
   open,
   onOpenChange,
-  onEdit,
-  onDelete,
-  canEditDependencies = false,
-  onMoveStatus,
+  onEdit: editTask,
+  onDelete: deleteTask,
+  canEditDependencies: mayEditDependencies = false,
+  onMoveStatus: moveStatus,
   canSignOff = false,
 }: TaskDetailsDialogProps) {
+  // Whatever the screen that opened it allows, a task of an archived project is
+  // read-only — the server refuses every change to it — so nothing here offers
+  // one: no edit, delete, review move, dependency, comment or new time.
+  const projectArchived = useIsProjectArchived(task?.projectId);
+  const onEdit = projectArchived ? undefined : editTask;
+  const onDelete = projectArchived ? undefined : deleteTask;
+  const onMoveStatus = projectArchived ? undefined : moveStatus;
+  const canEditDependencies = mayEditDependencies && !projectArchived;
   // "Send back" asks what needs another look; the answer is posted on the task.
   const [sendingBack, setSendingBack] = React.useState(false);
   const [note, setNote] = React.useState('');
@@ -420,7 +429,7 @@ export function TaskDetailsDialog({
           {/* Comments — the discussion thread. Any workspace member may post;
               editing and deleting are limited to the comment's author. */}
           <Separator />
-          <TaskComments taskId={task.id} workspaceId={currentWorkspace?.id} />
+          <TaskComments taskId={task.id} workspaceId={currentWorkspace?.id} readOnly={projectArchived} />
 
           {/* Commits whose message names this task. Draws nothing — heading
               included — unless there are some. */}
@@ -434,6 +443,7 @@ export function TaskDetailsDialog({
                 task={task}
                 userId={user.id}
                 workspaceId={currentWorkspace.id}
+                readOnly={projectArchived}
               />
             </>
           )}

@@ -49,11 +49,20 @@ function buildPrisma(prior: unknown = null, project: Record<string, unknown> = {
     epic: committed(),
     functionalRequirement: committed(),
     task: committed(),
+    // The audit trail of the saved tree, written in one insert after the commit.
+    activityLog: {
+      createManyAndReturn: jest.fn(({ data }: { data: unknown[] }) => Promise.resolve(data)),
+    },
     announceWrite: jest.fn(),
     $transaction: jest.fn((cb: (t: typeof tx) => unknown) => cb(tx)),
   } as unknown as PrismaService;
   return { prisma, tx };
 }
+
+/** The audit entries one save wrote. */
+const trail = (prisma: PrismaService) =>
+  (prisma as unknown as { activityLog: { createManyAndReturn: jest.Mock } }).activityLog
+    .createManyAndReturn;
 
 const access = { assertPermission: jest.fn().mockResolvedValue(undefined) };
 
@@ -134,6 +143,8 @@ describe('GenerationService.bulkSave', () => {
       'Epic.create',
       'FunctionalRequirement.create',
       'Task.create',
+      // One frame for the whole trail: every open Activity screen refetches once.
+      'ActivityLog.create',
     ]);
     expect(announceWrite).toHaveBeenCalledWith('Task', 'create', expect.objectContaining({ id: res.tasks[0].id }));
   });
@@ -188,6 +199,57 @@ describe('GenerationService.bulkSave', () => {
 
     await expect(svc.bulkSave(user, dto)).rejects.toThrow(/does not belong to this workspace/i);
     expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('files nothing into an archived project', async () => {
+    const { prisma } = buildPrisma(null, { status: 'ARCHIVED' });
+    const svc = new GenerationService(prisma, access as never, new HierarchyIdService());
+
+    await expect(svc.bulkSave(user, dto)).rejects.toThrow(
+      'This project is archived. Unarchive it to make changes.',
+    );
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(trail(prisma)).not.toHaveBeenCalled();
+  });
+
+  it('leaves a trail of what it saved, as the create routes do, marked as generated', async () => {
+    const { prisma } = buildPrisma();
+    const svc = new GenerationService(prisma, access as never, new HierarchyIdService());
+
+    const res = (await svc.bulkSave(user, dto)) as {
+      clientRequirements: { id: string }[];
+      epics: { id: string }[];
+      functionalRequirements: { id: string }[];
+      tasks: { id: string }[];
+    };
+
+    expect(trail(prisma)).toHaveBeenCalledTimes(1);
+    const [{ data }] = trail(prisma).mock.calls[0] as [{ data: Array<Record<string, unknown>> }];
+    expect(data).toEqual([
+      expect.objectContaining({
+        workspaceId: 'w1',
+        userId: 'u1',
+        action: 'client_requirement.created',
+        entityType: 'client_requirement',
+        entityId: res.clientRequirements[0].id,
+        metadata: { label: 'User Auth', source: 'ai_generation' },
+      }),
+      expect.objectContaining({ action: 'epic.created', entityId: res.epics[0].id, metadata: { label: 'Login Flow', source: 'ai_generation' } }),
+      expect.objectContaining({
+        action: 'functional_requirement.created',
+        entityId: res.functionalRequirements[0].id,
+        metadata: { label: 'API Endpoint', source: 'ai_generation' },
+      }),
+      expect.objectContaining({ action: 'task.created', entityId: res.tasks[0].id, metadata: { label: 'Write tests', source: 'ai_generation' } }),
+    ]);
+  });
+
+  it('is saved even when its trail cannot be written', async () => {
+    const { prisma } = buildPrisma();
+    trail(prisma).mockRejectedValueOnce(new Error('trail down'));
+    const svc = new GenerationService(prisma, access as never, new HierarchyIdService());
+
+    await expect(svc.bulkSave(user, dto)).resolves.toMatchObject({ success: true });
   });
 
   it('stamps authorship from the authenticated caller, never from the body', async () => {

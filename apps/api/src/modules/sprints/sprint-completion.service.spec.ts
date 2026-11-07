@@ -31,6 +31,7 @@ function build(
   status: string,
   counts: { total: number; done: number } = { total: 0, done: 0 },
   writtenStatus = status,
+  projectStatus = 'ACTIVE',
 ) {
   let saved: Record<string, unknown> = { ...stored, status: writtenStatus };
   const update = jest.fn(
@@ -47,6 +48,8 @@ function build(
       findUniqueOrThrow: jest.fn(() => Promise.resolve(saved)),
     },
     announceWrite: jest.fn(),
+    // The sprint's project (see project-archive).
+    project: { findUnique: jest.fn().mockResolvedValue({ status: projectStatus }) },
     task: {
       count: jest.fn(({ where }: { where: { status?: string } }) =>
         Promise.resolve(where.status === 'DONE' ? counts.done : counts.total),

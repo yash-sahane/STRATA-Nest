@@ -7,6 +7,7 @@ import type { Task } from '@/types';
 import { legendLabel } from '@/lib/chart-legend';
 import type { SprintFigures } from '@/lib/sprint-figures';
 import { format, eachDayOfInterval, startOfDay, endOfDay, parseISO } from 'date-fns';
+import { businessToday } from '@/lib/task-dates';
 
 // Design tokens, not raw hex: the previous slate/blue literals ignored dark mode
 // and disagreed with the palette every other chart surface uses.
@@ -76,7 +77,8 @@ export function BurndownChart({
     // shifts every bucket; parseISO keeps it on the local calendar day.
     const start = startOfDay(parseISO(sprintStartDate));
     const end = endOfDay(parseISO(sprintEndDate));
-    const today = startOfDay(new Date());
+    // The workspace's day, like the board's due labels (see businessToday).
+    const today = businessToday();
 
     // Get all days in sprint
     const sprintDays = eachDayOfInterval({ start, end });

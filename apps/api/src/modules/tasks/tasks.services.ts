@@ -28,6 +28,7 @@ import type {
 import { taskResponse } from './mappers';
 import { tellPeople } from '../notifications/notice';
 import { mintTaskHierarchyId } from '../generation/hierarchy-ids';
+import { assertProjectWritable } from '../projects/project-archive';
 
 @Injectable()
 export class TasksService extends ScopedCrudService<Task, ReturnType<typeof taskResponse>> {
@@ -260,6 +261,7 @@ export class TasksService extends ScopedCrudService<Task, ReturnType<typeof task
     // read — and `GET /tasks?projectId=…`, the exact query the board sends,
     // then handed that task to the other workspace's members.
     await assertProjectInWorkspace(this.prisma, dto.projectId, dto.workspaceId);
+    await assertProjectWritable(this.prisma, dto.projectId);
     await assertLinkInProject(this.prisma, 'sprint', 'Sprint', dto.sprintId, dto.projectId);
     await assertLinkInProject(this.prisma, 'epic', 'Epic', dto.epicId, dto.projectId);
     await assertLinkInProject(
@@ -405,6 +407,9 @@ export class TasksService extends ScopedCrudService<Task, ReturnType<typeof task
       dto.placeBefore !== undefined
         ? await this.findScoped(user, id)
         : null;
+    // Nothing in an archived project changes (see project-archive), a reorder or
+    // a title edit included.
+    await this.assertWritable(user, id, current);
     if (current) {
       /**
        * The checks `create` runs, by the other door. PATCH skipped every one of
@@ -523,6 +528,28 @@ export class TasksService extends ScopedCrudService<Task, ReturnType<typeof task
       });
     }
     return result;
+  }
+
+  /**
+   * Refuse a patch to a task of an archived project.
+   *
+   * The light patches (a reorder, a title edit) read no row of their own, and
+   * a drag is the commonest write there is, so their task's project is looked
+   * up by id rather than by a second scoped read. A refusal is only ever given
+   * to somebody who can see the task: a stranger is still told "not found",
+   * never which of the ids they guess are archived.
+   */
+  private async assertWritable(user: User, id: string, current: Task | null): Promise<void> {
+    if (current) return assertProjectWritable(this.prisma, current.projectId);
+    const task = await this.prisma.task.findUnique({ where: { id }, select: { projectId: true } });
+    // No such task: the update answers "not found" itself.
+    if (!task) return;
+    try {
+      await assertProjectWritable(this.prisma, task.projectId);
+    } catch (refusal) {
+      await this.findScoped(user, id);
+      throw refusal;
+    }
   }
 
   /**
@@ -693,6 +720,10 @@ export class TasksService extends ScopedCrudService<Task, ReturnType<typeof task
    * task due on the 13th is 18:30 UTC on the 12th, and it was counted overdue
    * all through the day it was due. `due_date` holds UTC wall-clock time (a
    * timestamp without zone), hence the first AT TIME ZONE.
+   *
+   * An archived project's tasks are not counted: the project is finished and
+   * read-only, so its leftovers are nobody's work any more — counted, every
+   * unfinished one stayed on its assignee's load, and overdue, for good.
    */
   async summary(user: User, workspaceId: string) {
     if (!workspaceId) throw new BadRequestException('workspaceId is required.');
@@ -718,6 +749,10 @@ export class TasksService extends ScopedCrudService<Task, ReturnType<typeof task
         CROSS JOIN LATERAL jsonb_array_elements_text(t.assignee_ids) AS a(user_id)
        WHERE t.workspace_id = ${workspaceId}
          AND jsonb_typeof(t.assignee_ids) = 'array'
+         AND NOT EXISTS (
+               SELECT 1 FROM projects_project p
+                WHERE p.id = t.project_id AND p.status = 'ARCHIVED'
+             )
        GROUP BY a.user_id`;
     return {
       byAssignee: rows.map((row) => {
@@ -782,6 +817,14 @@ export class TasksService extends ScopedCrudService<Task, ReturnType<typeof task
     }
     // A dependency edge changes two existing tasks, so it is an update.
     await this.access.assertPermission(user, task.workspaceId, this.updatePermission);
+    // Both halves are written, so both ends have to be in projects that take
+    // changes — except that an edge may always be taken OFF a task that can be
+    // changed: the far end may sit in a project archived since, and an edge
+    // nobody could remove would pin the open task to finished work for good.
+    await assertProjectWritable(this.prisma, task.projectId);
+    if (mode === 'add' && target && target.projectId !== task.projectId) {
+      await assertProjectWritable(this.prisma, target.projectId);
+    }
     const lockKey = `deps:${task.workspaceId}`;
     if (!target) return this.dropDanglingEdge(task, targetTaskId, type, lockKey);
 

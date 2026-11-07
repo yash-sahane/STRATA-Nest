@@ -7,6 +7,7 @@ import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { DeletionSideEffectsService, type DeletedEntity } from './deletion-side-effects.service';
 import { collectUpdate, type TxLike } from './deletion.util';
 import { assertDeletable } from './assert-deletable';
+import { assertProjectWritable } from '../projects/project-archive';
 
 /**
  * EpicDeletionService — Epic delete with UNLINK semantics: linked tasks and
@@ -29,6 +30,9 @@ export class EpicDeletionService {
     // not) answered "does this id exist?" for somebody with no membership at
     // all. A stranger now gets 404; a member without the right still gets 403.
     await assertDeletable(this.access, user, epic.workspaceId, Permission.PlanningWrite);
+    // An archived project keeps its work as it was (see project-archive).
+    // Deleting the PROJECT is still allowed; its cascade does not come here.
+    await assertProjectWritable(this.prisma, epic.projectId);
     const workspaceId = epic.workspaceId;
     const deleted: DeletedEntity[] = [];
     const detached: DeletedEntity[] = [];

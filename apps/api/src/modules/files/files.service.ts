@@ -15,6 +15,7 @@ import { StorageService } from '../storage/storage.service';
 import type { CreateFileDto } from './dto';
 import { uploadedFileResponse } from './mappers';
 import { assertProjectInWorkspace } from '../workspaces/workspace-refs';
+import { assertProjectWritable } from '../projects/project-archive';
 
 /** Longest filename kept, including the extension. */
 const MAX_FILENAME = 200;
@@ -180,6 +181,9 @@ export class FilesService {
     // the stored size no longer matched the served bytes.
     const id = generateId();
     const { projectId, taskId, clientRequirementId } = await this.placement(dto, workspaceId);
+    // Nothing is added to an archived project, its tasks' attachments included
+    // (see project-archive).
+    await assertProjectWritable(this.prisma, projectId);
     // A 300-character filename came back as a bare 500: the name is stored in a
     // bounded column and also becomes part of the storage key, and the operating
     // system has its own path limit. Truncate rather than refuse — the file is
@@ -259,6 +263,7 @@ export class FilesService {
   async remove(user: User, id: string): Promise<void> {
     const row = await this.findScoped(user, id);
     await this.assertMayDelete(user, row);
+    await assertProjectWritable(this.prisma, row.projectId);
     try {
       await this.storage.remove(row.filePath);
     } catch (err) {

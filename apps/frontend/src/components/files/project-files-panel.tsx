@@ -10,6 +10,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useConfirm } from '@/components/providers/confirm-provider';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useHasPermissionIn } from '@/hooks/use-permissions';
+import { useIsProjectArchived } from '@/hooks/use-project';
 import { Permission } from '@/lib/permissions';
 import { formatDate } from '@/lib/utils';
 import {
@@ -105,7 +106,10 @@ function useFileList(scope: FileScope) {
   // props defaulting to `true` that no caller passed, so a read-only member was
   // shown Upload, and everyone was shown Delete on files that were not theirs.
   const { user } = useAuth();
-  const canUpload = useHasPermissionIn(workspaceId, Permission.UPLOAD_FILE).allowed;
+  // Nothing is added to or taken from an archived project (the server refuses it).
+  const projectArchived = useIsProjectArchived(projectId);
+  const canUpload =
+    useHasPermissionIn(workspaceId, Permission.UPLOAD_FILE).allowed && !projectArchived;
   const canManageProject = useHasPermissionIn(workspaceId, Permission.EDIT_PROJECT).allowed;
   // Deleting takes file:write, and somebody else's file takes project:update too.
   const canDeleteFile = (file: UploadedFile) =>

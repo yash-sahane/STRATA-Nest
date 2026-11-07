@@ -12,6 +12,8 @@ import { NoAccess } from '@/components/ui/no-access';
 import { ApiError } from '@/lib/api/rest-client';
 import { useConfirm } from '@/components/providers/confirm-provider';
 import { useHasPermission } from '@/hooks/use-permissions';
+import { useIsProjectArchived } from '@/hooks/use-project';
+import { ArchivedProjectBanner } from '@/components/projects/archived-project-banner';
 import { useCompleteSprint, useSprints, useStartSprint } from '@/hooks/use-sprint';
 import { useTasks } from '@/hooks/use-task';
 import { Permission } from '@/lib/permissions';
@@ -89,7 +91,10 @@ export function SprintUnavailable({ error, onRetry }: { error: unknown; onRetry:
  */
 export function SprintHeader({ sprint, current, description }: SprintHeaderProps) {
   const confirm = useConfirm();
-  const canEditSprint = useHasPermission(Permission.EDIT_SPRINT);
+  // A sprint of an archived project is neither started nor completed (the
+  // server refuses both): its project is read-only.
+  const projectArchived = useIsProjectArchived(sprint.projectId);
+  const canEditSprint = useHasPermission(Permission.EDIT_SPRINT) && !projectArchived;
   const { data: sprints = [] } = useSprints(sprint.projectId);
   const { data: tasks = [] } = useTasks(sprint.projectId);
   const startSprint = useStartSprint();
@@ -163,6 +168,9 @@ export function SprintHeader({ sprint, current, description }: SprintHeaderProps
           </div>
         }
       />
+
+      {/* Once, here, for the board, planning and analytics of the sprint alike. */}
+      <ArchivedProjectBanner projectId={sprint.projectId} />
 
       {sprint.goal && (
         <p className="text-sm">

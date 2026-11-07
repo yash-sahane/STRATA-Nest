@@ -13,6 +13,7 @@ import { assertLinkInProject, assertProjectInWorkspace } from '../workspaces/wor
 import type { CreateEpicDto, UpdateEpicDto } from './dto';
 import { epicResponse } from './mappers';
 import { mintEpicHierarchyId } from '../generation/hierarchy-ids';
+import { assertProjectWritable } from '../projects/project-archive';
 
 @Injectable()
 export class EpicsService extends ScopedCrudService<Epic, ReturnType<typeof epicResponse>> {
@@ -48,6 +49,7 @@ export class EpicsService extends ScopedCrudService<Epic, ReturnType<typeof epic
     // while being scoped to this one, and left that workspace permanently
     // undeletable — its cascade hit a row it had no right to touch.
     await assertProjectInWorkspace(this.prisma, dto.projectId, dto.workspaceId);
+    await assertProjectWritable(this.prisma, dto.projectId);
     await assertLinkInProject(
       this.prisma, 'clientRequirement', 'Client requirement', dto.requirementId, dto.projectId,
     );
@@ -95,10 +97,14 @@ export class EpicsService extends ScopedCrudService<Epic, ReturnType<typeof epic
     const data: Record<string, unknown> = {};
     if (dto.hierarchyId !== undefined) data.hierarchyId = dto.hierarchyId;
     if (dto.name !== undefined) data.name = dto.name;
-    // The epic as it stands, read only for a patch that moves it or dates it.
+    // The epic as it stands. Every patch reads it: an epic of an archived
+    // project takes no changes at all (see project-archive).
+    const row = await this.findScoped(user, id);
+    await assertProjectWritable(this.prisma, row.projectId);
+    // Set only for a patch that moves the epic to another client requirement.
     let stored: Epic | null = null;
     if (dto.requirementId !== undefined) {
-      stored = await this.findScoped(user, id);
+      stored = row;
       // The check create makes: an epic serves a client requirement of its own
       // project, not one from anywhere.
       if (dto.requirementId) {
@@ -113,14 +119,12 @@ export class EpicsService extends ScopedCrudService<Epic, ReturnType<typeof epic
     if (dto.startDate !== undefined) data.startDate = toDate(dto.startDate, 'Start date');
     if (dto.endDate !== undefined) data.endDate = toDate(dto.endDate, 'End date');
     // Validate against the pair the row will END UP with, so moving one end
-    // alone cannot produce a range the create path would have refused. Reads
-    // the stored epic only when a date is actually being changed.
+    // alone cannot produce a range the create path would have refused.
     //
     // "Cleared" (null) is not "untouched" (absent): `?? row.startDate` put a
     // start date the caller had just removed back into the check, so clearing
     // the start while pulling the end in was refused over a date that was going.
     if (data.startDate !== undefined || data.endDate !== undefined) {
-      const row = stored ?? (await this.findScoped(user, id));
       assertDateRangeOrdered(
         data.startDate !== undefined ? (data.startDate as Date | null) : row.startDate,
         data.endDate !== undefined ? (data.endDate as Date | null) : row.endDate,
