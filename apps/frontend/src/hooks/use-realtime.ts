@@ -109,7 +109,13 @@ export function useCollectionSubscription(
  * per-project, so an event carries no project scope to filter on.
  */
 export function useTasksRealtime(projectId?: string) {
-  useCollectionSubscription(COLLECTIONS.TASKS, ['tasks', 'workspace-tasks', 'task'], !!projectId);
+  // 'member-task-counts' too: the assignee picker on this board ranks people
+  // by their open tasks, and an assignment made here moved those numbers.
+  useCollectionSubscription(
+    COLLECTIONS.TASKS,
+    ['tasks', 'workspace-tasks', 'task', 'member-task-counts'],
+    !!projectId
+  );
 }
 
 /**
@@ -154,7 +160,15 @@ export function useTaskCommentsRealtime(taskId?: string) {
 export function useLeaveRequestsRealtime(workspaceId?: string) {
   useCollectionSubscription(
     COLLECTIONS.LEAVE_REQUESTS,
-    ['leaveRequests', 'teamLeaveRequests', 'leaveBalance'],
+    // Every query a decided or cancelled request changes the answer to.
+    ['leaveRequests', 'teamLeaveRequests', 'leaveBalance', 'leaveCommitments', 'teamLeaveBalances'],
+    !!workspaceId
+  );
+  // And the balances themselves: an approver adjusting somebody's allowance
+  // writes leave_balances, which nothing on the Leave page heard.
+  useCollectionSubscription(
+    COLLECTIONS.LEAVE_BALANCES,
+    ['leaveBalance', 'teamLeaveBalances'],
     !!workspaceId
   );
 }
@@ -248,6 +262,47 @@ export function useActivityLogsRealtime(workspaceId?: string) {
 }
 
 /**
+ * The caller's own running timer — started, paused or stopped in another tab
+ * or on another device. Root: use-time-entry keys it on ['active-timer', id].
+ */
+export function useActiveTimerRealtime(userId?: string) {
+  useCollectionSubscription(COLLECTIONS.ACTIVE_TIMERS, ['active-timer'], !!userId);
+}
+
+/**
+ * What the caller may DO, kept current.
+ *
+ * Everything the interface offers is decided from two cached answers: the
+ * caller's own memberships (which role, where) and the definitions of any
+ * custom roles they hold. Both were fetched once and trusted for five minutes.
+ * So when a manager changed somebody's role, or edited what a role may do, the
+ * person it concerned went on seeing the old set of buttons — pressing ones the
+ * API now refused, missing ones it would now allow — until the cache happened
+ * to expire or they reloaded.
+ *
+ * Mounted once for the whole dashboard (see the layout), not per page: a role
+ * can change while its holder is looking at anything.
+ */
+export function useMyAccessRealtime(enabled = true) {
+  // The workspace list and the directory too: a membership switched off or
+  // removed left the switcher naming a workspace whose pages now refused the
+  // person, and one added elsewhere did not appear until a reload. And the
+  // inbox, where the notice saying why is.
+  useCollectionSubscription(
+    COLLECTIONS.WORKSPACE_MEMBERS,
+    ['my-access', 'workspaces', 'workspace-directory', 'notifications'],
+    enabled
+  );
+  useCollectionSubscription(
+    COLLECTIONS.WORKSPACE_ROLES,
+    // A rename moves every holder to the new name in one write the role's own
+    // frame does not describe; reading the memberships again keeps their role.
+    ['my-access', 'workspace-roles', 'team-members'],
+    enabled
+  );
+}
+
+/**
  * Workspace membership.
  * Roots: use-team keys on ['team-members', wsId], ['team-member', id] and
  * ['member-task-counts', wsId] — the last one feeds both workload panels on
@@ -259,4 +314,22 @@ export function useWorkspaceMembersRealtime(workspaceId?: string) {
     ['team-members', 'team-member', 'member-task-counts'],
     !!workspaceId
   );
+}
+
+/**
+ * Every task in the workspace, as the Team page counts them: its workload
+ * panels and per-member counts. Roots: ['workspace-tasks', wsId] and
+ * ['member-task-counts', wsId].
+ */
+export function useWorkspaceTasksRealtime(workspaceId?: string) {
+  useCollectionSubscription(
+    COLLECTIONS.TASKS,
+    ['workspace-tasks', 'member-task-counts'],
+    !!workspaceId
+  );
+}
+
+/** The join-request queue. Roots: ['join-requests', wsId, status]. */
+export function useJoinRequestsRealtime(workspaceId?: string) {
+  useCollectionSubscription(COLLECTIONS.JOIN_REQUESTS, ['join-requests'], !!workspaceId);
 }

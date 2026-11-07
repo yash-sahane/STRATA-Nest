@@ -1,14 +1,14 @@
 import { authClient } from './auth-client';
-import { resolveSlug } from './collection-slugs';
 import { restClient } from './rest-client';
-import { id, query, translateQueries, type QueryInput, type QueryOp } from './query';
+import { query, translateQueries, type QueryInput, type QueryOp } from './query';
 import type { ApiModels } from './types';
 
+/** A collection's slug is its URL segment (COLLECTIONS in ./config names them). */
 function basePath(collectionId: string): string {
-  return `/api/v1/${resolveSlug(collectionId)}/`;
+  return `/api/v1/${collectionId}/`;
 }
 
-async function fetchList<T = any>(
+async function fetchList<T = ApiModels.Resource>(
   collectionId: string,
   queries: QueryInput[] = [],
 ): Promise<ApiModels.ResourceList<T>> {
@@ -19,7 +19,7 @@ async function fetchList<T = any>(
   // in-flight request was aborted with no replacement issued — the notification
   // badge simply never loaded. If this is revisited, verify the request still
   // completes rather than assuming a cancelled fetch is always superseded.
-  return restClient.get(basePath(collectionId), { params });
+  return restClient.get<ApiModels.ResourceList<T>>(basePath(collectionId), { params });
 }
 
 export const resources = {
@@ -35,7 +35,7 @@ export const resources = {
    * `page` ops are ignored (pagination is controlled here); `MAX_PAGES` bounds
    * the work so a runaway collection can't hang the client.
    */
-  async listAll<T = any>(
+  async listAll<T = ApiModels.Resource>(
     collectionId: string,
     queries: QueryInput[] = [],
   ): Promise<ApiModels.ResourceList<T>> {
@@ -72,39 +72,27 @@ export const resources = {
     return { total, page: 1, pageSize: items.length, items };
   },
 
-  async get<T = any>(collectionId: string, resourceId: string): Promise<T> {
-    return restClient.get(`${basePath(collectionId)}${resourceId}/`);
+  async get<T = ApiModels.Resource>(collectionId: string, resourceId: string): Promise<T> {
+    return restClient.get<T>(`${basePath(collectionId)}${resourceId}/`);
   },
 
   /**
-   * The server owns id generation for every collection.
-   *
-   * `resourceId` is accepted and IGNORED. It used to be spread into the body as
-   * `{ id, ...data }` behind a `resourceId !== 'unique()'` guard that never
-   * fired — `id.unique()` is bound to `nativeId()`, which returns a random
-   * 20-character string, never the literal `'unique()'` — so every call POSTed
-   * an `id` field. No Create DTO declares one and main.ts runs
-   * `ValidationPipe({ whitelist: true })`, so it was stripped in silence. That is
-   * harmless only because every caller reads the id back off the response; the
-   * shape READ as though the client controlled the primary key, which is a trap
-   * for the next optimistic-cache or two-step create. The parameter is kept so
-   * the 14 existing call sites still compile.
+   * Create a record. The server mints its id, and the caller reads it back off
+   * the response.
    */
-  async create<T = any>(
+  async create<T = ApiModels.Resource>(
     collectionId: string,
-    _resourceId?: string,
     data: Record<string, unknown> = {},
-    _permissions?: unknown[],
   ): Promise<T> {
-    return restClient.post(basePath(collectionId), data);
+    return restClient.post<T>(basePath(collectionId), data);
   },
 
-  async update<T = any>(
+  async update<T = ApiModels.Resource>(
     collectionId: string,
     resourceId: string,
     data: Record<string, unknown>,
   ): Promise<T> {
-    return restClient.patch(`${basePath(collectionId)}${resourceId}/`, data);
+    return restClient.patch<T>(`${basePath(collectionId)}${resourceId}/`, data);
   },
 
   async remove(collectionId: string, resourceId: string): Promise<void> {
@@ -112,5 +100,5 @@ export const resources = {
   },
 };
 
-export { authClient, id, query };
+export { authClient, query };
 export type { ApiModels, QueryInput, QueryOp };

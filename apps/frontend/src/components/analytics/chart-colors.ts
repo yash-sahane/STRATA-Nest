@@ -21,20 +21,27 @@ export const STATUS_COLORS: Record<string, string> = {
   DONE: 'hsl(var(--app-success-text))',
 };
 
-/** Task priority colors. */
+/**
+ * The status and priority maps follow the badges (lib/semantic): a value has one
+ * colour everywhere. The one exception is a pie's neighbouring slices — To Do and
+ * Backlog share the neutral badge, so To Do takes a series colour to stay apart.
+ */
+
+/** Task priority colors (Low neutral, Medium info, High warning, Critical destructive). */
 export const PRIORITY_COLORS: Record<string, string> = {
-  LOW: 'hsl(var(--app-success-text))',
+  LOW: 'hsl(var(--muted-foreground))',
   MEDIUM: 'hsl(var(--app-info-text))',
   HIGH: 'hsl(var(--app-warning-text))',
   CRITICAL: 'hsl(var(--destructive-text))',
 };
 
-/** Project status colors. */
+/** Project status colors (Active success, Completed info — as their badges). */
 export const PROJECT_STATUS_COLORS: Record<string, string> = {
   PLANNING: 'hsl(var(--muted-foreground))',
-  ACTIVE: 'hsl(var(--app-info-text))',
-  COMPLETED: 'hsl(var(--app-success-text))',
+  ACTIVE: 'hsl(var(--app-success-text))',
+  COMPLETED: 'hsl(var(--app-info-text))',
   ON_HOLD: 'hsl(var(--app-warning-text))',
+  ARCHIVED: 'hsl(var(--muted-foreground))',
 };
 
 /** General-purpose series colors for line/bar charts without semantic keys. */

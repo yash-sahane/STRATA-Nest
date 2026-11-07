@@ -1,6 +1,6 @@
 ﻿import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { resources } from '@/lib/api/client';
-import { query, id } from '@/lib/api/client';
+import { query } from '@/lib/api/client';
 import { ApiError, restClient } from '@/lib/api/rest-client';
 import type {
   ClientRequirement,
@@ -8,10 +8,8 @@ import type {
   RequirementStatus,
   EditBasedOn,
 } from '@/types';
-import { toast } from '@/hooks/use-toast';
-import { createBulkNotifications } from '@/hooks/use-notification';
-import { logger } from '@/lib/logger';
-import { saveFailureToast } from '@/lib/api/mutation-error';
+import { showSaveFailure } from '@/lib/api/mutation-error';
+import { toast } from 'sonner';
 
 export function useClientRequirements(projectId?: string) {
   return useQuery({
@@ -21,16 +19,7 @@ export function useClientRequirements(projectId?: string) {
 
       const response = await resources.listAll('client_requirements', [query.equal('projectId', projectId), query.orderDesc('createdAt')]
       );
-
-      // Normalize attachments: the API returns a native array, but a legacy row
-      // could still hold anything. Never JSON.parse inside a queryFn — one bad
-      // row would fail the whole list query with no way to recover.
-      const requirements = response.items.map((doc) => ({
-        ...doc,
-        attachments: Array.isArray(doc.attachments) ? doc.attachments : [],
-      })) as unknown as ClientRequirement[];
-
-      return requirements;
+      return response.items as unknown as ClientRequirement[];
     },
     enabled: !!projectId,
   });
@@ -44,13 +33,7 @@ export function useClientRequirement(requirementId?: string) {
 
       const response = await resources.get('client_requirements', requirementId
       );
-
-      const requirement = {
-        ...response,
-        attachments: Array.isArray(response.attachments) ? response.attachments : [],
-      } as unknown as ClientRequirement;
-
-      return requirement;
+      return response as unknown as ClientRequirement;
     },
     enabled: !!requirementId,
   });
@@ -78,12 +61,11 @@ export function useCreateClientRequirement() {
         clientName: data.clientName,
         priority: data.priority,
         status: 'DRAFT' as RequirementStatus,
-        attachments: [],
         createdBy: data.createdBy,
         createdByName: data.createdByName || '',
       };
 
-      const response = await resources.create('client_requirements', id.unique(),
+      const response = await resources.create('client_requirements',
         requirementData
       );
 
@@ -92,61 +74,12 @@ export function useCreateClientRequirement() {
     onSuccess: async (createdReq, variables) => {
       queryClient.invalidateQueries({ queryKey: ['client-requirements', variables.projectId] });
 
-      // ? Send REQUIREMENT_CREATED notification to workspace members
-      try {
-        // Get project name for notification
-        let projectName = 'Project';
-        try {
-          const project = await resources.get('projects', variables.projectId
-          );
-          projectName = project.name || 'Project';
-        } catch (error) {
-          logger.error('Failed to get project name for notification', { error });
-        }
-
-        // Get workspace members to notify
-        // listAll: every member is notified, so a 100-row first page would
-        // silently skip the rest of a larger workspace.
-        const membersResponse = await resources.listAll('workspace_members', [query.equal('workspaceId', variables.workspaceId)]
-        );
-
-        const memberIds = membersResponse.items
-          .map((m: any) => m.userId)
-          .filter((id: string) => id !== variables.createdBy); // Don't notify creator
-
-        if (memberIds.length > 0) {
-          await createBulkNotifications({
-            workspaceId: variables.workspaceId,
-            userIds: memberIds,
-            type: 'REQUIREMENT_CREATED',
-            data: {
-              requirementId: createdReq.id,
-              requirementTitle: createdReq.title,
-              projectId: variables.projectId,
-              projectName,
-              creatorName: variables.createdByName || 'Team Member',
-              clientName: variables.clientName,
-              entityType: 'REQUIREMENT',
-            },
-          });
-        }
-      } catch (error) {
-        logger.error('Failed to send requirement creation notifications', { error });
-      }
-
-      toast({
-        title: 'Success',
-        description: 'Client requirement created successfully!',
-      });
+      // The workspace is told by the API as part of the write itself
+      // (WorkNotificationSubscriber) — not by this browser afterwards.
+      toast.success('Client requirement created');
     },
     onError: (error: Error) => {
-      toast({
-        title: 'Error',
-        description:
-          (error instanceof Error ? error.message : String(error)) ||
-          'Failed to create client requirement',
-        variant: 'destructive',
-      });
+      toast.error('Failed to create client requirement', { description: error instanceof Error ? error.message : String(error) });
     },
   });
 }
@@ -177,13 +110,10 @@ export function useUpdateClientRequirement() {
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['client-requirement', variables.requirementId] });
       queryClient.invalidateQueries({ queryKey: ['client-requirements', variables.projectId] });
-      toast({
-        title: 'Success',
-        description: 'Client requirement updated successfully!',
-      });
+      toast.success('Client requirement updated');
     },
     onError: (error: Error) => {
-      toast(saveFailureToast(error, 'Failed to update client requirement'));
+      showSaveFailure(error, 'Failed to update client requirement');
     },
   });
 }
@@ -210,10 +140,7 @@ export function useDeleteClientRequirement() {
       // the epic-/sprint-scoped FR lists do not share ['...', projectId].
       queryClient.invalidateQueries({ queryKey: ['functional-requirements'] });
       queryClient.invalidateQueries({ queryKey: ['tasks', data.projectId] });
-      toast({
-        title: 'Success',
-        description: 'Client requirement deleted successfully!',
-      });
+      toast.success('Client requirement deleted');
     },
     onError: (error: Error) => {
       // A 409 is a DESIGNED step of this flow, not a failure: the dialog
@@ -222,13 +149,7 @@ export function useDeleteClientRequirement() {
       // server's raw "retry with cascade=true" developer instruction at the
       // same moment the polished prompt (with that sentence stripped) rendered.
       if (error instanceof ApiError && error.code === 409) return;
-      toast({
-        title: 'Error',
-        description:
-          (error instanceof Error ? error.message : String(error)) ||
-          'Failed to delete client requirement',
-        variant: 'destructive',
-      });
+      toast.error('Failed to delete client requirement', { description: error instanceof Error ? error.message : String(error) });
     },
   });
 }

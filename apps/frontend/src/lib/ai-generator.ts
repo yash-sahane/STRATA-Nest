@@ -2,6 +2,29 @@
 // See: /src/app/api/ai-generate/route.ts
 
 import { logger } from '@/lib/logger';
+import { fetchWithSession } from '@/lib/api/rest-client';
+
+/**
+ * What saving a generated plan takes, in API permission keys: bulk-save's own
+ * checks (GenerationService.bulkSave) — requirements, epics (planning:write) and
+ * tasks (task:create), and the plan always holds all three.
+ *
+ * The generate route checked requirement:write alone, so a custom role that may
+ * write requirements but not plan epics spent the operator's model quota on a
+ * generation and was then refused the save. The route, the PDF route and the
+ * dialog all ask for every key, before anything is spent.
+ */
+export const GENERATION_PERMISSIONS = ['requirement:write', 'planning:write', 'task:create'] as const;
+
+/** How much of a document goes to the model — the rest is not read. */
+export const MAX_DOCUMENT_CHARS = 8_000;
+
+/**
+ * The largest PDF /api/parse-pdf will take. Only the first MAX_DOCUMENT_CHARS of
+ * its text are used, which a few pages of a text PDF already hold; past this the
+ * parse (CPU-bound, the whole file in memory) costs far more than it can yield.
+ */
+export const MAX_PDF_BYTES = 10 * 1024 * 1024;
 
 export interface GeneratedClientRequirement {
   title: string;
@@ -27,7 +50,9 @@ export interface GeneratedEpic {
   color: string;
   startDate?: string;
   endDate?: string;
-  functionalRequirementIds: string[]; // References to FRs
+  functionalRequirementIds: string[]; // References to FRs (their index)
+  /** The client requirement this epic delivers (its index). */
+  clientRequirementId?: string;
 }
 
 export interface GeneratedTask {
@@ -36,6 +61,8 @@ export interface GeneratedTask {
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
   estimatedHours: number;
   epicId?: string; // Reference to Epic
+  /** The functional requirement this task implements (its index). */
+  functionalRequirementId?: string;
   labels: string[];
 }
 
@@ -77,7 +104,9 @@ const AI_REQUEST_TIMEOUT_MS = 100_000;
 async function callAI(prompt: string, maxRetries = 3, workspaceId?: string): Promise<string> {
   let response: Response;
   try {
-    response = await fetch('/api/ai-generate', {
+    // fetchWithSession: the route answers 401 once the session cookie it checks
+    // has lapsed, and a bare fetch never renewed it — every retry failed the same.
+    response = await fetchWithSession('/api/ai-generate', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -152,7 +181,8 @@ JSON Schema:
     "name": "string",
     "description": "string",
     "color": "#hex",
-    "functionalRequirementIds": []
+    "clientRequirementId": "index of the client requirement it delivers, as a string",
+    "functionalRequirementIds": ["index of each functional requirement in it, as a string"]
   }],
   "tasks": [{
     "title": "string",
@@ -160,6 +190,7 @@ JSON Schema:
     "priority": "LOW|MEDIUM|HIGH|CRITICAL",
     "estimatedHours": number (2-16),
     "epicId": "epic index as string",
+    "functionalRequirementId": "index of the functional requirement it implements, as a string",
     "labels": ["string"]
   }],
   "timeline": {
@@ -172,7 +203,19 @@ Rules:
 - Output ONLY valid JSON, no markdown
 - Be concise but comprehensive
 - Use realistic estimates
-- Link tasks to epics using index (0, 1, 2...)`;
+- Link by index (0, 1, 2...): every epic to the client requirement it delivers and the
+  functional requirements it holds; every task to the functional requirement it implements
+  and to that requirement's epic`;
+
+const TRUNCATION_NOTE = '\n...[document truncated for processing]';
+
+/**
+ * The longest prompt /api/ai-generate accepts: the one built below from the
+ * longest document it will send. The route is otherwise a pipe from any signed-in
+ * member with the permissions to the operator's paid model, at whatever size.
+ */
+export const MAX_PROMPT_CHARS =
+  UNIFIED_GENERATION_PROMPT.length + MAX_DOCUMENT_CHARS + TRUNCATION_NOTE.length + 64;
 
 /**
  * Generate complete project hierarchy in a SINGLE AI call
@@ -180,16 +223,18 @@ Rules:
  */
 export async function generateProjectHierarchyUnified(
   documentText: string,
-  // The route checks requirement:write in THIS workspace before spending the
-  // operator's model quota, so the caller has to say which one it is authoring
-  // into.
+  // The route checks GENERATION_PERMISSIONS in THIS workspace before spending
+  // the operator's model quota, so the caller has to say which one it is
+  // authoring into.
   workspaceId?: string
 ): Promise<GeneratedHierarchy> {
   try {
-    // Truncate very long input text to save tokens (keep first 8000 chars)
+    // Only the first MAX_DOCUMENT_CHARS are sent, to bound the tokens. The dialog
+    // says so as soon as a document is over the limit — this used to drop the
+    // rest silently while the dialog reported every character as "loaded".
     const truncatedDoc =
-      documentText.length > 8000
-        ? documentText.substring(0, 8000) + '\n...[document truncated for processing]'
+      documentText.length > MAX_DOCUMENT_CHARS
+        ? documentText.substring(0, MAX_DOCUMENT_CHARS) + TRUNCATION_NOTE
         : documentText;
 
     const prompt = `${UNIFIED_GENERATION_PROMPT}\n\nDocument:\n${truncatedDoc}`;

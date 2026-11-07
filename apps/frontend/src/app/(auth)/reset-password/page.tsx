@@ -136,7 +136,7 @@ function ResetPasswordContent() {
                       setShowPasswords({ ...showPasswords, next: !showPasswords.next })
                     }
                     aria-label={showPasswords.next ? 'Hide new password' : 'Show new password'}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    className="absolute right-1 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     {showPasswords.next ? (
                       <EyeOff className="h-4 w-4" />
@@ -166,7 +166,7 @@ function ResetPasswordContent() {
                       setShowPasswords({ ...showPasswords, confirm: !showPasswords.confirm })
                     }
                     aria-label={showPasswords.confirm ? 'Hide password confirmation' : 'Show password confirmation'}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    className="absolute right-1 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     {showPasswords.confirm ? (
                       <EyeOff className="h-4 w-4" />

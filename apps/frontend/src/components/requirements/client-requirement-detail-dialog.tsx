@@ -1,6 +1,9 @@
 'use client';
 
-import { getRequirementStatusConfig } from '@/lib/semantic/status';
+import {
+  getFunctionalRequirementStatusConfig,
+  getRequirementStatusConfig,
+} from '@/lib/semantic/status';
 import { getPriorityConfig } from '@/lib/semantic/priority';
 
 import * as React from 'react';
@@ -17,6 +20,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Separator } from '@/components/ui/separator';
+import { AttachmentsSection } from '@/components/files/project-files-panel';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   Select,
@@ -45,6 +49,11 @@ import {
 import { ApiError } from '@/lib/api/rest-client';
 import type { EditBasedOn, RequirementPriority, RequirementStatus } from '@/types';
 import { basedOnFor, changedFields } from '@/lib/utils/changed-fields';
+import Link from 'next/link';
+import { useHasPermission } from '@/hooks/use-permissions';
+import { Permission } from '@/lib/permissions';
+import { useEpics } from '@/hooks/use-epic';
+import { useFunctionalRequirements } from '@/hooks/use-functional-requirement';
 
 /** Server copy ends with developer instructions; the UI offers the button instead. */
 const stripCascadeHint = (message: string) =>
@@ -89,6 +98,26 @@ export function ClientRequirementDetailDialog({
   } = useClientRequirement(requirementId || undefined);
   const updateRequirement = useUpdateClientRequirement();
   const deleteRequirement = useDeleteClientRequirement();
+  /**
+   * What this requirement led to: the epics raised from it, and the functional
+   * requirements under them. The whole chain hangs from here — client
+   * requirement, epic, functional requirement, task — and this dialog showed
+   * none of it: a requirement read the same whether nothing had been done about
+   * it or the whole of it had been delivered.
+   */
+  const { data: projectEpics = [] } = useEpics(open ? projectId : undefined);
+  const { data: projectRequirements = [] } = useFunctionalRequirements(
+    open ? projectId : undefined
+  );
+  const ledToEpics = projectEpics.filter((epic) => epic.requirementId === requirementId);
+  const canRaiseEpic = useHasPermission(Permission.CREATE_EPIC);
+  const ledToRequirements = projectRequirements.filter(
+    (fr) => fr.clientRequirementId === requirementId
+  );
+  const delivered = ledToRequirements.filter((fr) => fr.status === 'DEPLOYED').length;
+  // With functional requirements under it, In Progress and Completed are what
+  // they say (the server's roll-up), not something to pick.
+  const followsWork = ledToRequirements.length > 0;
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
   /** Server's 409 message when linked functional requirements block the delete. */
   const [deleteBlockedBy, setDeleteBlockedBy] = React.useState<string | null>(null);
@@ -102,6 +131,24 @@ export function ClientRequirementDetailDialog({
   /** The requirement whose values are currently seeded into the fields above,
    *  cleared on close so the next open always re-seeds. */
   const lastLoadedId = React.useRef<string | null>(null);
+  /**
+   * What the fields above were seeded with — the values this person is looking
+   * at and editing from.
+   *
+   * The save used to diff against, and take its `basedOn` from, the LIVE
+   * record. That record is refetched in the background whenever anybody saves,
+   * while the fields stop following it at the first keystroke. So by the time a
+   * colleague's edit to the same field had arrived, the "baseline" already
+   * contained it: the API was told this save was based on their value, found
+   * nothing to object to, and replaced it without a word — the one case the
+   * check exists for.
+   */
+  const [seeded, setSeeded] = React.useState<{
+    title: string;
+    description: string;
+    status: RequirementStatus;
+    priority: RequirementPriority;
+  } | null>(null);
 
   React.useEffect(() => {
     // Closing DISCARDS. This component is mounted for the life of the page (the
@@ -129,6 +176,12 @@ export function ClientRequirementDetailDialog({
       setDescription(requirement.description);
       setStatus(requirement.status);
       setPriority(requirement.priority);
+      setSeeded({
+        title: requirement.title,
+        description: requirement.description,
+        status: requirement.status,
+        priority: requirement.priority,
+      });
 
       if (isNewRequirement) {
         setHasChanges(false);
@@ -204,8 +257,9 @@ export function ClientRequirementDetailDialog({
       // Only what changed — see changedFields. This dialog holds every field in local
       // state seeded when it opened, so saving after someone else edited a different
       // field used to write the stale value back over theirs, silently.
+      const baseline = (seeded ?? requirement) as unknown as Record<string, unknown>;
       const updates = changedFields(
-        requirement as unknown as Record<string, unknown>,
+        baseline,
         {
           title: title.trim(),
           description: description.trim(),
@@ -222,7 +276,7 @@ export function ClientRequirementDetailDialog({
           // the later save would otherwise win outright and say nothing.
           updates: {
             ...updates,
-            basedOn: basedOnFor(requirement as unknown as Record<string, unknown>, updates),
+            basedOn: basedOnFor(baseline, updates),
           } as EditBasedOn<{
             title?: string; description?: string;
             status?: RequirementStatus; priority?: RequirementPriority;
@@ -366,11 +420,27 @@ export function ClientRequirementDetailDialog({
                     <SelectItem value="DRAFT">Draft</SelectItem>
                     <SelectItem value="SUBMITTED">Submitted</SelectItem>
                     <SelectItem value="APPROVED">Approved</SelectItem>
-                    <SelectItem value="IN_PROGRESS">In Progress</SelectItem>
-                    <SelectItem value="COMPLETED">Completed</SelectItem>
+                    <SelectItem
+                      value="IN_PROGRESS"
+                      disabled={followsWork && requirement?.status !== 'IN_PROGRESS'}
+                    >
+                      In Progress
+                    </SelectItem>
+                    <SelectItem
+                      value="COMPLETED"
+                      disabled={followsWork && requirement?.status !== 'COMPLETED'}
+                    >
+                      Completed
+                    </SelectItem>
                     <SelectItem value="ARCHIVED">Archived</SelectItem>
                   </SelectContent>
                 </Select>
+                {followsWork && (
+                  <p className="text-xs text-muted-foreground">
+                    Once approved, it moves to In Progress and Completed with its functional
+                    requirements.
+                  </p>
+                )}
               </div>
 
               <div className="space-y-2">
@@ -418,6 +488,90 @@ export function ClientRequirementDetailDialog({
                 <p>{formatDate(requirement.updatedAt)}</p>
               </div>
             </div>
+          </div>
+
+          <Separator className="my-4" />
+
+          <AttachmentsSection
+            workspaceId={requirement.workspaceId}
+            projectId={projectId}
+            clientRequirementId={requirement.id}
+          />
+
+          <Separator className="my-4" />
+
+          {/* What came of it. */}
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <h3 className="text-sm font-medium">What came of it</h3>
+              {canRaiseEpic && (
+                <Button asChild variant="outline" size="sm" className="order-last sm:order-none">
+                  <Link href={`/epics?projectId=${projectId}&action=create&requirementId=${requirementId}`}>
+                    Raise an epic
+                  </Link>
+                </Button>
+              )}
+              <p className="text-xs text-muted-foreground">
+                {ledToEpics.length === 0 && ledToRequirements.length === 0
+                  ? 'Nothing yet'
+                  : `${ledToEpics.length} ${ledToEpics.length === 1 ? 'epic' : 'epics'} · ${ledToRequirements.length} functional ${ledToRequirements.length === 1 ? 'requirement' : 'requirements'}, ${delivered} done`}
+              </p>
+            </div>
+            {ledToEpics.length === 0 && ledToRequirements.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No epic has been raised from this requirement yet. An epic is the feature that
+                delivers it; the functional requirements under it will be listed here.
+              </p>
+            ) : (
+              <ul className="space-y-2">
+                {ledToEpics.map((epic) => {
+                  const under = ledToRequirements.filter((fr) => fr.epicId === epic.id);
+                  return (
+                    <li key={epic.id} className="rounded-md border p-3">
+                      <Link
+                        href={`/epics?projectId=${projectId}&epicId=${epic.id}`}
+                        className="text-sm font-medium hover:underline"
+                      >
+                        {epic.hierarchyId} · {epic.name}
+                      </Link>
+                      {under.length > 0 && (
+                        <ul className="mt-2 space-y-1">
+                          {under.map((fr) => (
+                            <li key={fr.id} className="flex items-center justify-between gap-2 text-sm">
+                              <Link
+                                href={`/functional-requirements?projectId=${projectId}&frId=${fr.id}`}
+                                className="min-w-0 truncate text-muted-foreground hover:underline"
+                              >
+                                {fr.hierarchyId} · {fr.title}
+                              </Link>
+                              <Badge variant="outline" className="shrink-0">
+                                {getFunctionalRequirementStatusConfig(fr.status).label}
+                              </Badge>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </li>
+                  );
+                })}
+                {/* Filed under this requirement but under no epic of it. */}
+                {ledToRequirements
+                  .filter((fr) => !ledToEpics.some((epic) => epic.id === fr.epicId))
+                  .map((fr) => (
+                    <li key={fr.id} className="flex items-center justify-between gap-2 rounded-md border p-3 text-sm">
+                      <Link
+                        href={`/functional-requirements?projectId=${projectId}&frId=${fr.id}`}
+                        className="min-w-0 truncate hover:underline"
+                      >
+                        {fr.hierarchyId} · {fr.title}
+                      </Link>
+                      <Badge variant="outline" className="shrink-0">
+                        {getFunctionalRequirementStatusConfig(fr.status).label}
+                      </Badge>
+                    </li>
+                  ))}
+              </ul>
+            )}
           </div>
 
           <DialogFooter className="sm:justify-between">

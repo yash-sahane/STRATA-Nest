@@ -1,7 +1,13 @@
 ﻿'use client';
 
-import { getFunctionalRequirementStatusConfig, getRequirementStatusConfig } from '@/lib/semantic/status';
-import { getComplexityConfig } from '@/lib/semantic/complexity';
+import {
+  getFunctionalRequirementStatusConfig,
+  getRequirementStatusConfig,
+  getSprintStatusConfig,
+  getTaskStatusConfig,
+} from '@/lib/semantic/status';
+import Link from 'next/link';
+import { ComplexityBadge } from '@/components/requirements/complexity-badge';
 import { getPriorityConfig } from '@/lib/semantic/priority';
 
 import * as React from 'react';
@@ -34,24 +40,24 @@ import {
 } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
 import { Progress } from '@/components/ui/progress';
-import { Trash2, Link as LinkIcon, Calendar, Copy, Save } from 'lucide-react';
+import { CheckCircle2, Trash2, Link as LinkIcon, Calendar, Copy, Pencil, Save } from 'lucide-react';
 import { formatDate } from '@/lib/utils';
-import { useToast } from '@/hooks/use-toast';
 import {
   useUpdateFunctionalRequirement,
   useDeleteFunctionalRequirement,
   useCloneFunctionalRequirement,
 } from '@/hooks/use-functional-requirement';
-import { useTeamMembers } from '@/hooks/use-team';
 import { useSprints } from '@/hooks/use-sprint';
+import { useEpics } from '@/hooks/use-epic';
 import { useProjects } from '@/hooks/use-project';
-import { useTasksByFunctionalRequirement, useUpdateTask } from '@/hooks/use-task';
+import { useTasksByFunctionalRequirement } from '@/hooks/use-task';
 import { TeamMemberSelector } from '@/components/tasks/team-member-selector';
-import { createBulkNotifications } from '@/hooks/use-notification';
-import { useAuth } from '@/components/providers/auth-provider';
 import { ApiError } from '@/lib/api/rest-client';
 import type { FunctionalRequirement, ClientRequirement } from '@/types';
-import { logger } from '@/lib/logger';
+import { humanizeEnum } from '@/lib/semantic/status';
+import { useHasPermission } from '@/hooks/use-permissions';
+import { Permission } from '@/lib/permissions';
+import { toast } from 'sonner';
 
 /** Server copy ends with developer instructions; the UI offers the button instead. */
 const stripCascadeHint = (message: string) =>
@@ -79,6 +85,8 @@ interface FunctionalRequirementDetailDialogProps {
   clientRequirements: ClientRequirement[];
   canEdit?: boolean; // Permission to edit requirements
   canDelete?: boolean; // Permission to delete requirements
+  /** Open the full edit form for this requirement. */
+  onEdit?: () => void;
 }
 
 export function FunctionalRequirementDetailDialog({
@@ -90,7 +98,10 @@ export function FunctionalRequirementDetailDialog({
   clientRequirements,
   canEdit = false,
   canDelete = false,
+  onEdit,
 }: FunctionalRequirementDetailDialogProps) {
+  const canPlanSprints = useHasPermission(Permission.EDIT_SPRINT);
+  const canAddTask = useHasPermission(Permission.CREATE_TASK);
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
   /** Server's 409 message when child requirements block the delete (null = not blocked). */
   const [deleteBlockedBy, setDeleteBlockedBy] = React.useState<string | null>(null);
@@ -100,43 +111,60 @@ export function FunctionalRequirementDetailDialog({
   // Local state for editable fields
   const [localSprintId, setLocalSprintId] = React.useState<string>(requirement.sprintId || '');
   const [localAssignedTo, setLocalAssignedTo] = React.useState<string[]>(
-    requirement.assignedTo || []
+    requirement.assigneeIds || []
   );
   const [hasChanges, setHasChanges] = React.useState(false);
+  /**
+   * What the two fields held when this dialog was seeded: the values this
+   * person is looking at and choosing from.
+   *
+   * Both the "unsaved changes" test and the save's `basedOn` used to read the
+   * LIVE record, which is refetched whenever anybody saves. If a colleague
+   * moved the requirement to another sprint while this dialog was open, the
+   * dialog still showed the old sprint, lit up Save Changes on its own — and
+   * pressing it sent the old sprint back with a `basedOn` of the colleague's
+   * new one. The API had nothing to object to, and undid their change.
+   */
+  const [opened, setOpened] = React.useState<{ sprintId: string; assigneeIds: string[] }>({
+    sprintId: requirement.sprintId || '',
+    assigneeIds: requirement.assigneeIds || [],
+  });
 
   const updateRequirement = useUpdateFunctionalRequirement();
   const deleteRequirement = useDeleteFunctionalRequirement();
   const cloneRequirement = useCloneFunctionalRequirement();
-  const updateTask = useUpdateTask();
-  const { toast } = useToast();
-  const { user } = useAuth();
 
   // Load workspace members, sprints, and linked tasks
-  const { data: members = [] } = useTeamMembers(workspaceId);
   const { data: sprints = [] } = useSprints(projectId);
   const { data: projects = [] } = useProjects(workspaceId);
   const { data: linkedTasks = [] } = useTasksByFunctionalRequirement(requirement.id);
+  // The epic it belongs to: the dialog named the client requirement but not this.
+  const { data: epics = [] } = useEpics(projectId);
+  const epic = epics.find((e) => e.id === requirement.epicId);
 
-  // Re-seed only when a different FR is opened. Keying on `requirement.assignedTo`
+  // Re-seed only when a different FR is opened. Keying on `requirement.assigneeIds`
   // re-ran on every background refetch (new array identity) and threw away
   // in-progress selections.
   React.useEffect(() => {
     if (!open) return;
     setLocalSprintId(requirement.sprintId || '');
-    setLocalAssignedTo(requirement.assignedTo || []);
+    setLocalAssignedTo(requirement.assigneeIds || []);
+    setOpened({
+      sprintId: requirement.sprintId || '',
+      assigneeIds: requirement.assigneeIds || [],
+    });
     setHasChanges(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requirement.id, open]);
 
   // Track changes. Both operands are copied before sorting: `.sort()` is
   // in-place, so sorting them directly mutated React state and the query cache.
+  const sprintChanged = localSprintId !== opened.sprintId;
+  const assigneesChanged =
+    JSON.stringify([...localAssignedTo].sort()) !== JSON.stringify([...opened.assigneeIds].sort());
   React.useEffect(() => {
-    const sprintChanged = localSprintId !== (requirement.sprintId || '');
-    const assigneesChanged =
-      JSON.stringify([...localAssignedTo].sort()) !==
-      JSON.stringify([...(requirement.assignedTo || [])].sort());
     setHasChanges(sprintChanged || assigneesChanged);
-  }, [localSprintId, localAssignedTo, requirement.sprintId, requirement.assignedTo]);
+  }, [sprintChanged, assigneesChanged]);
 
   const handleSprintChange = (sprintId: string) => {
     setLocalSprintId(sprintId === 'none' ? '' : sprintId);
@@ -147,121 +175,44 @@ export function FunctionalRequirementDetailDialog({
   };
 
   const handleSave = async () => {
-    // Build assignedToNames from selected user IDs
-    const assignedToNames = localAssignedTo.map((userId) => {
-      const member = members.find((m) => m.userId === userId);
-      return member?.name || member?.email || 'Unknown';
-    });
-
-    // Check if assignees changed. Copy before sorting — `assignedToNames` above
-    // is index-aligned with `localAssignedTo`, and an in-place sort here would
-    // pair every id with somebody else's name in the payload sent below.
-    const previousAssignees = requirement.assignedTo || [];
-    const assigneesChanged =
-      JSON.stringify([...localAssignedTo].sort()) !== JSON.stringify([...previousAssignees].sort());
-    const newAssignees = localAssignedTo.filter((id) => !previousAssignees.includes(id));
-
-    // Get project name for notifications
-    const currentProject = projects.find((p) => p.id === projectId);
-    const projectName = currentProject?.name || 'Project';
-
-    let reassignedTasks = 0;
-
     try {
       await updateRequirement.mutateAsync({
         requirementId: requirement.id,
         projectId,
         updates: {
-          // Send the raw value: '' detaches the FR from its sprint. `undefined`
-          // is dropped by JSON.stringify, so the old sprint was never cleared.
-          sprintId: localSprintId,
-          assignedTo: localAssignedTo,
-          assignedToNames,
-          // What these fields held when this dialog opened. Reassignment is exactly the
+          // Only the field that was changed. Sending both wrote this dialog's
+          // copy of the untouched one back over whatever it had become since.
+          //
+          // The raw value for the sprint: '' detaches the FR from its sprint.
+          // `undefined` is dropped by JSON.stringify, so the old sprint was
+          // never cleared.
+          ...(sprintChanged ? { sprintId: localSprintId } : {}),
+          ...(assigneesChanged ? { assigneeIds: localAssignedTo } : {}),
+          // What those fields held when this dialog opened. Reassignment is exactly the
           // thing two managers do to the same requirement at once, and without this the
           // later save wins outright with nothing said to either of them. Refused, the
           // `catch` below leaves the dialog open and dirty, so nothing is retyped.
           basedOn: {
-            sprintId: requirement.sprintId,
-            assignedTo: requirement.assignedTo,
+            ...(sprintChanged ? { sprintId: opened.sprintId } : {}),
+            ...(assigneesChanged ? { assigneeIds: opened.assigneeIds } : {}),
           },
         },
-        // `?? ''`, not `|| undefined`: '' IS the answer for an FR that has no
-        // sprint yet, and `undefined` means "I don't know" — which makes the
-        // hook re-read the FR before writing. That was every save of an
-        // unscheduled FR paying for a GET whose answer this dialog already had.
-        previousSprintId: requirement.sprintId ?? '',
       });
     } catch {
       // The mutation's onError already toasted; keep the dialog open and dirty.
       return;
     }
 
-    // ✅ AUTO-ASSIGN: Update linked tasks with the same assignees
-    if (assigneesChanged && linkedTasks.length > 0) {
-      try {
-        // Update all linked tasks with the new assignees. useUpdateTask already
-        // emits the TASK_ASSIGNED notifications for the newly added members, so
-        // this handler must NOT emit them a second time.
-        await Promise.all(
-          linkedTasks.map((task) =>
-            updateTask.mutateAsync({
-              taskId: task.id,
-              projectId,
-              // One combined toast is emitted below for the whole save; without
-              // this the fan-out stacked one "Task updated" toast per task.
-              silent: true,
-              updates: {
-                assignedTo: localAssignedTo,
-                assignedToNames,
-                assigneeIds: localAssignedTo,
-                assignedBy: user?.id,
-                assignedByName: user?.name || user?.email || 'Team Member',
-              },
-            })
-          )
-        );
-        reassignedTasks = linkedTasks.length;
-      } catch (error) {
-        logger.error('Failed to update linked tasks', { error });
-        toast({
-          title: 'Warning',
-          description: 'FR updated but failed to update some linked tasks.',
-          variant: 'destructive',
-        });
-      }
-    }
+    // What this means for the tasks under the requirement is the API's to
+    // carry out, as part of the save: they move with it into or out of the
+    // sprint, and the ones that had the requirement's people follow a change
+    // to them. This dialog used to write its assignee list over every linked
+    // task itself, one request each, which flattened whatever each task had
+    // been given.
+    toast.success('Saved', { description: 'Functional requirement updated.' });
 
-    // ✅ Send FR assignment notifications to new assignees
-    if (newAssignees.length > 0) {
-      try {
-        await createBulkNotifications({
-          workspaceId,
-          userIds: newAssignees,
-          type: 'FR_ASSIGNED',
-          data: {
-            frId: requirement.id,
-            frTitle: requirement.title,
-            frHierarchyId: requirement.hierarchyId,
-            projectId,
-            projectName,
-            assignerName: user?.name || user?.email || 'Team Member',
-            entityType: 'FR',
-          },
-        });
-      } catch (error) {
-        logger.error('Failed to send FR assignment notifications', { error });
-      }
-    }
-
-    // One toast for the whole save — the hooks are deliberately silent.
-    toast({
-      title: 'Saved',
-      description: reassignedTasks
-        ? `Functional requirement updated — ${reassignedTasks} linked task(s) reassigned.`
-        : 'Functional requirement updated successfully.',
-    });
-
+    // What was just saved is what the next edit starts from.
+    setOpened({ sprintId: localSprintId, assigneeIds: localAssignedTo });
     setHasChanges(false);
   };
 
@@ -289,11 +240,7 @@ export function FunctionalRequirementDetailDialog({
 
   const handleClone = async () => {
     if (!selectedProject) {
-      toast({
-        title: 'Error',
-        description: 'Please select a target project',
-        variant: 'destructive',
-      });
+      toast.error('Choose the project to copy it into');
       return;
     }
 
@@ -316,7 +263,6 @@ export function FunctionalRequirementDetailDialog({
     setSelectedProject('');
   };
 
-  const complexity = getComplexityConfig(requirement.complexity);
   const linkedClientReq = clientRequirements.find(
     (cr) => cr.id === requirement.clientRequirementId
   );
@@ -332,6 +278,13 @@ export function FunctionalRequirementDetailDialog({
 
   // Get assigned sprint name (for display)
   const selectedSprint = sprints.find((s) => s.id === localSprintId);
+  // The sprint the requirement is SAVED in. Once that sprint has closed it is
+  // the record of what the sprint delivered, and the server refuses to take the
+  // requirement out of it — so an enabled select only led to a refused save.
+  // (Unfinished requirements leave a sprint when it closes; the ones still in
+  // it are the delivered ones.)
+  const savedSprint = sprints.find((s) => s.id === opened.sprintId);
+  const heldByClosedSprint = savedSprint?.status === 'COMPLETED';
 
   return (
     <>
@@ -347,7 +300,6 @@ export function FunctionalRequirementDetailDialog({
                   <Badge variant="outline" className="font-mono">
                     {requirement.hierarchyId}
                   </Badge>
-                  {requirement.reusable && <Badge variant="secondary">Reusable</Badge>}
                 </div>
                 <DialogTitle className="text-2xl">{requirement.title}</DialogTitle>
                 {requirement.description && (
@@ -403,7 +355,7 @@ export function FunctionalRequirementDetailDialog({
               <div>
                 <label className="text-sm font-medium text-muted-foreground">Complexity</label>
                 <div className="mt-1">
-                  <Badge variant={complexity.badgeVariant}>{complexity.label}</Badge>
+                  <ComplexityBadge complexity={requirement.complexity} />
                 </div>
               </div>
               {/* The create form REQUIRES a type and nothing ever showed it back, so
@@ -414,7 +366,7 @@ export function FunctionalRequirementDetailDialog({
                   <label className="text-sm font-medium text-muted-foreground">Type</label>
                   <div className="mt-1">
                     <Badge variant="outline">
-                      {String(requirement.type).replace(/_/g, ' ').toLowerCase()}
+                      {humanizeEnum(requirement.type)}
                     </Badge>
                   </div>
                 </div>
@@ -429,8 +381,17 @@ export function FunctionalRequirementDetailDialog({
                 <Calendar className="h-4 w-4" />
                 Assign to Sprint
               </label>
-              <Select value={localSprintId || 'none'} onValueChange={handleSprintChange}>
-                <SelectTrigger>
+              {/* Changeable by somebody who may save it: a read-only viewer
+                  could pick a sprint, watch Close turn into Cancel, and find no
+                  Save. Planning into a sprint also takes planning:write. */}
+              <Select
+                value={localSprintId || 'none'}
+                onValueChange={handleSprintChange}
+                disabled={!canEdit || !canPlanSprints || heldByClosedSprint}
+              >
+                <SelectTrigger
+                  aria-describedby={heldByClosedSprint ? 'fr-sprint-closed-note' : undefined}
+                >
                   <SelectValue placeholder="No sprint assigned" />
                 </SelectTrigger>
                 <SelectContent>
@@ -441,13 +402,31 @@ export function FunctionalRequirementDetailDialog({
                       value={sprint.id}
                       disabled={sprint.status === 'COMPLETED'}
                     >
-                      {sprint.name} ({sprint.status}){sprint.status === 'COMPLETED' && ' - Closed'}
+                      {sprint.name} · {getSprintStatusConfig(sprint.status).label}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              {selectedSprint && (
-                <p className="text-sm text-muted-foreground">Selected: {selectedSprint.name}</p>
+              {selectedSprint && !sprintChanged && (
+                <Link
+                  href={`/sprints/${selectedSprint.id}/board`}
+                  className="inline-block text-sm underline-offset-4 hover:underline"
+                >
+                  Open the {selectedSprint.name} board
+                </Link>
+              )}
+              {heldByClosedSprint && savedSprint ? (
+                <p id="fr-sprint-closed-note" className="text-xs text-muted-foreground">
+                  {savedSprint.name} is completed and keeps the record of what it delivered, so
+                  this requirement stays in it. Plan any further work on it as tasks in an open
+                  sprint.
+                </p>
+              ) : (
+                (!canEdit || !canPlanSprints) && (
+                  <p className="text-xs text-muted-foreground">
+                    Planning requirements into sprints is for whoever plans the sprints.
+                  </p>
+                )
               )}
             </div>
 
@@ -462,6 +441,7 @@ export function FunctionalRequirementDetailDialog({
                 onChange={handleTeamMemberChange}
                 placeholder="Select team members..."
                 multiSelect={true}
+                disabled={!canEdit}
               />
             </div>
 
@@ -473,42 +453,68 @@ export function FunctionalRequirementDetailDialog({
                 implement this requirement" was a question the dialog answered
                 internally and never told anybody. */}
             <div className="space-y-2">
-              <label className="text-sm font-medium flex items-center gap-2">
-                Implementing Tasks
-                <Badge variant="secondary">{linkedTasks.length}</Badge>
-              </label>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-sm font-medium flex items-center gap-2">
+                  Implementing Tasks
+                  <Badge variant="secondary">{linkedTasks.length}</Badge>
+                </h3>
+                {canAddTask && (
+                  <Button asChild variant="outline" size="sm">
+                    <Link href={`/tasks?projectId=${projectId}&action=create&frId=${requirement.id}`}>
+                      Add a task
+                    </Link>
+                  </Button>
+                )}
+              </div>
               {linkedTasks.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
                   No tasks are linked to this requirement yet.
                 </p>
               ) : (
                 <ul className="space-y-1">
-                  {linkedTasks.map((task) => (
-                    <li
-                      key={task.id}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-md border p-2"
-                    >
-                      <div className="flex min-w-0 items-center gap-2">
-                        <Badge variant="outline" className="font-mono text-xs shrink-0">
-                          {task.hierarchyId}
-                        </Badge>
-                        <span className="truncate text-sm">{task.title}</span>
-                      </div>
-                      <Badge
-                        variant={
-                          task.status === 'DONE'
-                            ? 'success'
-                            : task.status === 'IN_PROGRESS'
-                              ? 'default'
-                              : 'secondary'
-                        }
-                        className="shrink-0"
-                      >
-                        {task.status.replace(/_/g, ' ')}
-                      </Badge>
-                    </li>
-                  ))}
+                  {linkedTasks.map((task) => {
+                    const status = getTaskStatusConfig(task.status);
+                    return (
+                      <li key={task.id}>
+                        <Link
+                          href={`/tasks?projectId=${projectId}&taskId=${task.id}`}
+                          className="flex flex-wrap items-center justify-between gap-2 rounded-md border p-2 transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          <div className="flex min-w-0 items-center gap-2">
+                            <Badge variant="outline" className="font-mono text-xs shrink-0">
+                              {task.hierarchyId}
+                            </Badge>
+                            <span className="truncate text-sm" title={task.title}>{task.title}</span>
+                          </div>
+                          <Badge variant={status.badgeVariant} className="shrink-0">
+                            {status.label}
+                          </Badge>
+                        </Link>
+                      </li>
+                    );
+                  })}
                 </ul>
+              )}
+            </div>
+
+            <Separator />
+
+            {/* What it delivers: the epic, and the client requirement behind it. */}
+            <div className="space-y-2">
+              <h3 className="text-sm font-medium flex items-center gap-2">
+                <LinkIcon className="h-4 w-4" />
+                Part of
+              </h3>
+              {epic ? (
+                <Link
+                  href={`/epics?projectId=${projectId}&epicId=${epic.id}`}
+                  className="inline-flex max-w-full items-baseline gap-2 text-sm font-medium underline-offset-4 hover:underline"
+                >
+                  <span className="shrink-0 font-mono text-xs text-muted-foreground">{epic.hierarchyId}</span>
+                  <span className="truncate" title={epic.name}>{epic.name}</span>
+                </Link>
+              ) : (
+                <p className="text-sm text-muted-foreground">Not in an epic.</p>
               )}
             </div>
 
@@ -518,11 +524,14 @@ export function FunctionalRequirementDetailDialog({
             {linkedClientReq && (
               <>
                 <div className="space-y-2">
-                  <label className="text-sm font-medium flex items-center gap-2">
+                  <h3 className="text-sm font-medium flex items-center gap-2">
                     <LinkIcon className="h-4 w-4" />
-                    Linked Client Requirement
-                  </label>
-                  <div className="p-3 border rounded-lg">
+                    Client Requirement
+                  </h3>
+                  <Link
+                    href={`/requirements?projectId=${projectId}&crId=${linkedClientReq.id}`}
+                    className="block p-3 border rounded-lg transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
                     <div className="font-medium">{linkedClientReq.title}</div>
                     {linkedClientReq.description && (
                       <div className="text-sm text-muted-foreground mt-1">
@@ -537,7 +546,7 @@ export function FunctionalRequirementDetailDialog({
                         {getRequirementStatusConfig(linkedClientReq.status).label}
                       </Badge>
                     </div>
-                  </div>
+                  </Link>
                 </div>
                 <Separator />
               </>
@@ -569,6 +578,33 @@ export function FunctionalRequirementDetailDialog({
               below does too. */}
           <DialogFooter className="sm:justify-between sm:space-x-0">
             <div className="flex gap-2 w-full sm:w-auto">
+              {canEdit && onEdit && (
+                <Button variant="outline" onClick={onEdit} className="flex-1 sm:flex-none">
+                  <Pencil className="h-4 w-4 mr-2" />
+                  Edit
+                </Button>
+              )}
+              {/* Signing off is a person's decision, and until now there was
+                  nowhere to make it: the status after "every task is done" could
+                  only be reached by dragging a card the board hides for any
+                  requirement that has tasks. */}
+              {canEdit && requirement.status === 'TESTED' && (
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    updateRequirement.mutate({
+                      requirementId: requirement.id,
+                      projectId,
+                      updates: { status: 'DEPLOYED' },
+                    })
+                  }
+                  disabled={updateRequirement.isPending}
+                  className="flex-1 sm:flex-none"
+                >
+                  <CheckCircle2 className="h-4 w-4 mr-2" />
+                  Mark as Done
+                </Button>
+              )}
               {canEdit && (
                 <Button
                   variant="outline"

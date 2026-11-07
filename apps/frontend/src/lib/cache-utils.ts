@@ -27,12 +27,3 @@ export function clearAllCache(queryClient: QueryClient): void {
     queryClient.clear();
 }
 
-/**
- * Invalidate workspace-scoped queries to trigger refetch
- * Use this when workspace data changes but you want to keep the cache
- */
-export function invalidateWorkspaceScopedCache(queryClient: QueryClient): void {
-    queryClient.invalidateQueries({
-        predicate: (query) => isWorkspaceScopedKey(query.queryKey),
-    });
-}

@@ -1,12 +1,11 @@
 'use client';
 
 import * as React from 'react';
-import { useForm } from 'react-hook-form';
+import { useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { PlusCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import {
   Dialog,
   DialogContent,
@@ -26,12 +25,10 @@ import {
   FormMessage,
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 
 import { useCreateProject } from '@/hooks/use-project';
 import { useAuth } from '@/components/providers/auth-provider';
-import type { ProjectMethodology } from '@/types';
 import { DatePicker } from '@/components/ui/date-picker';
 import { format, startOfDay } from 'date-fns';
 
@@ -67,7 +64,7 @@ interface CreateProjectDialogProps {
   workspaceId: string;
   /**
    * Optional controlled state, so something other than the built-in trigger can
-   * open the dialog — the command palette's "Create New Project" lands on
+   * open the dialog — the command palette's "New Project" lands on
    * /projects?action=create and the page opens it from there. Left out, the
    * dialog owns its own state exactly as before.
    */
@@ -90,7 +87,6 @@ export function CreateProjectDialog({
     },
     [onOpenChange],
   );
-  const [methodology] = React.useState<ProjectMethodology>('SCRUM');
 
   const createProject = useCreateProject();
 
@@ -129,12 +125,10 @@ export function CreateProjectDialog({
         name: values.name.trim(),
         description: values.description?.trim() ?? '',
         clientName: values.clientName.trim(),
-        methodology,
         // Date-only fields: an ISO instant is shifted into the previous day for
         // any UTC+ timezone before the @db.Date column truncates the time.
         startDate: values.startDate ? format(values.startDate, 'yyyy-MM-dd') : undefined,
         endDate: values.endDate ? format(values.endDate, 'yyyy-MM-dd') : undefined,
-        ownerId: user.id,
       });
     } catch {
       // error toast handled inside the mutation; keep the form as typed
@@ -145,20 +139,24 @@ export function CreateProjectDialog({
     setOpen(false);
   };
 
-  const startDate = form.watch('startDate');
+  const startDate = useWatch({ control: form.control, name: 'startDate' });
 
   return (
     <Dialog open={open} onOpenChange={(next) => (next ? setOpen(true) : closeDialog())}>
       <DialogTrigger asChild>
         <Button>
           <PlusCircle className="mr-2 h-4 w-4" />
-          Create Project
+          New Project
         </Button>
       </DialogTrigger>
       <DialogContent size="lg">
         <DialogHeader>
-          <DialogTitle>Create New Project</DialogTitle>
-          <DialogDescription>Set up a new project with Scrum methodology.</DialogDescription>
+          <DialogTitle>Create Project</DialogTitle>
+          <DialogDescription>
+            A project holds a client&apos;s requirements, the epics and sprints that deliver them,
+            and the tasks they become. It starts in Planning and is Active once its first sprint
+            starts.
+          </DialogDescription>
         </DialogHeader>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)}>
@@ -216,22 +214,7 @@ export function CreateProjectDialog({
                 )}
               />
 
-              <div className="grid gap-2">
-                <Label>Methodology</Label>
-                <div className="flex items-center gap-3 p-3 rounded-lg border bg-muted/50">
-                  <div className="flex flex-col flex-1">
-                    <span className="font-medium">Scrum</span>
-                    <span className="text-xs text-muted-foreground">
-                      Sprint-based iterative development
-                    </span>
-                  </div>
-                  <Badge variant="secondary" className="shrink-0">
-                    Default
-                  </Badge>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <FormField
                   control={form.control}
                   name="startDate"

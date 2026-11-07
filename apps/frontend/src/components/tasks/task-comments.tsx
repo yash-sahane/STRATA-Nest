@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import { useModKey } from '@/hooks/use-mod-key';
 import { formatDistanceToNow } from 'date-fns';
 import { MessageSquare, Pencil, Trash2 } from 'lucide-react';
 
@@ -12,6 +13,8 @@ import { useAuth } from '@/components/providers/auth-provider';
 import { useConfirm } from '@/components/providers/confirm-provider';
 import { useWorkspaceMembers } from '@/hooks/use-workspace';
 import { useTaskCommentsRealtime } from '@/hooks/use-realtime';
+import { useHasPermissionIn } from '@/hooks/use-permissions';
+import { Permission } from '@/lib/permissions';
 import {
   useTaskComments,
   useCreateTaskComment,
@@ -32,8 +35,8 @@ interface TaskCommentsProps {
  * Posting is deliberately NOT gated on `task:write`: the API allows any member
  * of the workspace to comment (it is the one write the read-only roles have),
  * and a project tool where the delivery team cannot reply on their own tasks
- * would be the same gap this component exists to close. Editing and deleting
- * are limited to the comment's own author.
+ * would be the same gap this component exists to close. Editing is the
+ * author's alone; deleting is the author's, or whoever may delete tasks.
  */
 export function TaskComments({ taskId, workspaceId }: TaskCommentsProps) {
   const { user } = useAuth();
@@ -42,8 +45,11 @@ export function TaskComments({ taskId, workspaceId }: TaskCommentsProps) {
   // A reply posted by someone else lands in an open task without a refresh.
   useTaskCommentsRealtime(taskId);
   const { data: members } = useWorkspaceMembers(workspaceId);
+  // Whoever may delete tasks may take down somebody else's comment (not edit it).
+  const canModerate = useHasPermissionIn(workspaceId, Permission.DELETE_TASK).allowed;
 
   const createComment = useCreateTaskComment();
+  const modKey = useModKey();
   const updateComment = useUpdateTaskComment();
   const deleteComment = useDeleteTaskComment();
 
@@ -150,10 +156,13 @@ export function TaskComments({ taskId, workspaceId }: TaskCommentsProps) {
   };
 
   const remove = async (comment: TaskComment) => {
+    const theirs = comment.userId !== user?.id;
     const ok = await confirm({
-      title: 'Delete this comment?',
-      description: 'This removes it for everyone and cannot be undone.',
-      confirmText: 'Delete',
+      title: theirs ? `Remove ${authorOf(comment.userId).name}'s comment?` : 'Delete this comment?',
+      description: theirs
+        ? 'This removes it for everyone and cannot be undone. They are told you removed it.'
+        : 'This removes it for everyone and cannot be undone.',
+      confirmText: theirs ? 'Remove' : 'Delete',
       destructive: true,
     });
     // Captured BEFORE the await: once the refetch lands this element is gone,
@@ -244,29 +253,32 @@ export function TaskComments({ taskId, workspaceId }: TaskCommentsProps) {
                     <p className="whitespace-pre-wrap break-words text-sm">{comment.content}</p>
                   )}
 
-                  {mine && editingId !== comment.id && (
+                  {(mine || canModerate) && editingId !== comment.id && (
                     <div className="mt-1 flex gap-1">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 px-2 text-xs"
-                        onClick={() => {
-                          setEditingId(comment.id);
-                          setEditDraft(comment.content);
-                        }}
-                      >
-                        <Pencil className="mr-1 h-3 w-3" />
-                        Edit
-                      </Button>
+                      {mine && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-2 text-xs"
+                          onClick={() => {
+                            setEditingId(comment.id);
+                            setEditDraft(comment.content);
+                          }}
+                        >
+                          <Pencil className="mr-1 h-3 w-3" />
+                          Edit
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="sm"
                         className="h-7 px-2 text-xs text-destructive-text"
                         onClick={() => remove(comment)}
                         disabled={deleteComment.isPending}
+                        aria-label={mine ? 'Delete your comment' : `Remove ${author.name}'s comment`}
                       >
                         <Trash2 className="mr-1 h-3 w-3" />
-                        Delete
+                        {mine ? 'Delete' : 'Remove'}
                       </Button>
                     </div>
                   )}
@@ -294,7 +306,7 @@ export function TaskComments({ taskId, workspaceId }: TaskCommentsProps) {
           }}
         />
         <div className="flex items-center justify-between">
-          <span className="text-xs text-muted-foreground">⌘/Ctrl + Enter to post</span>
+          <span className="text-xs text-muted-foreground">{modKey} + Enter to post</span>
           <Button size="sm" onClick={post} disabled={!draft.trim() || createComment.isPending}>
             {createComment.isPending ? 'Posting…' : 'Comment'}
           </Button>

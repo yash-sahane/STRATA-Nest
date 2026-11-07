@@ -202,7 +202,8 @@ export function EditEpicDialog({ open, onOpenChange, epic }: EditEpicDialogProps
                       <SelectItem value="none">No requirement</SelectItem>
                       {requirements.map((req) => (
                         <SelectItem key={req.id} value={req.id}>
-                          {req.id} - {req.title}
+                          {req.title}
+                          {req.clientName ? ` · ${req.clientName}` : ''}
                         </SelectItem>
                       ))}
                     </SelectContent>

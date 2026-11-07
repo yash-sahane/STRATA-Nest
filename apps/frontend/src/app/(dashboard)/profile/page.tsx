@@ -1,14 +1,14 @@
 'use client';
 
+import Link from 'next/link';
 import { PageHeader } from '@/components/layout/page-header';
 import { PageLoader } from '@/components/ui/page-loader';
 
 import * as React from 'react';
-import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useUserRole } from '@/hooks/use-permissions';
-import { ROLE_CONFIG } from '@/hooks/use-team';
+import { roleDisplayName } from '@/hooks/use-role-options';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,7 +20,6 @@ import { User, Mail, Shield, Calendar } from 'lucide-react';
 import { formatDate, getInitials } from '@/lib/utils';
 
 export default function ProfilePage() {
-  const router = useRouter();
   const { user } = useAuth();
   const { currentWorkspace } = useCurrentWorkspace();
   const userRole = useUserRole();
@@ -30,9 +29,7 @@ export default function ProfilePage() {
   // to be one of the seven built-in keys. Indexing ROLE_CONFIG blind threw
   // "cannot read properties of undefined (reading 'label')" and took the whole
   // page down for anyone on a custom role — fall back to the role name itself.
-  const roleLabel = userRole
-    ? ((ROLE_CONFIG as Record<string, { label: string } | undefined>)[userRole]?.label ?? userRole)
-    : null;
+  const roleLabel = userRole ? roleDisplayName(userRole) : null;
 
   // Read-only view. Editing lives in Settings → Profile, which owns the avatar
   // upload and the password form too; this page used to write the same name
@@ -57,7 +54,9 @@ export default function ProfilePage() {
               <CardTitle>Personal Information</CardTitle>
               <CardDescription>Edit these details in Settings</CardDescription>
             </div>
-            <Button onClick={() => router.push('/settings?tab=profile')}>Edit Profile</Button>
+            <Button asChild>
+              <Link href="/settings?tab=profile">Edit Profile</Link>
+            </Button>
           </div>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -99,7 +98,7 @@ export default function ProfilePage() {
               </Label>
               <Input id="email" type="email" value={user.email || ''} disabled readOnly />
               <p className="text-xs text-muted-foreground">
-                Email cannot be changed. Contact support if you need to update it.
+                Your email is how you sign in, so it is changed by a platform administrator, not here.
               </p>
             </div>
 
@@ -150,8 +149,8 @@ export default function ProfilePage() {
             <p className="text-sm text-muted-foreground">
               Keep your account secure by using a strong, unique password.
             </p>
-            <Button variant="outline" onClick={() => router.push('/change-password')}>
-              Change Password
+            <Button variant="outline" asChild>
+              <Link href="/change-password">Change Password</Link>
             </Button>
           </div>
         </CardContent>

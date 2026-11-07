@@ -43,7 +43,7 @@ export default function ActivityPage() {
       <div className="space-y-6">
         <PageHeader
           icon={Activity}
-          title="Activity Feed"
+          title="Activity"
           description="Track what's happening across your workspace"
         />
         <EmptyState
@@ -57,19 +57,17 @@ export default function ActivityPage() {
 
   return (
     // No `container`/`py-6` here: the dashboard layout already wraps every route
-    // in <PageContainer>, which owns the width and gutter (page-container.tsx).
+    // in <PageContainer>, which owns the width and gutter (page-container.tsx) —
+    // and no max-width on the feed either, which left it a narrower column than
+    // the header above it and every other page.
     <div className="space-y-6">
       <PageHeader
         icon={Activity}
-        title="Activity Feed"
+        title="Activity"
         description="Track what's happening across your workspace"
       />
 
-      <ActivityFeed
-        workspaceId={currentWorkspace.id}
-        showFilters={true}
-        className="max-w-5xl mx-auto"
-      />
+      <ActivityFeed workspaceId={currentWorkspace.id} showFilters={true} />
     </div>
   );
 }

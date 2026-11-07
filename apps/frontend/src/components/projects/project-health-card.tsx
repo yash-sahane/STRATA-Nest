@@ -26,12 +26,9 @@ import { cn } from '@/lib/utils';
  * fills in after the page has already painted. Anything about it whose height
  * depends on the data therefore shoves everything below it down (or yanks it
  * up) a frame later — this route's 0.16 layout-shift score, the worst in the
- * app. `calculateProjectHealth` emits between ZERO and FIVE recommendations
- * (measured live: a 4-task project with nothing done, nothing overdue and
- * nothing blocked scores 60/"warning" and emits none, because that function's
- * own fallback only fires at score >= 70), and each row is 38px at full width
- * but 56px once the text wraps. That is a 0..250px swing in a slot no
- * placeholder can predict.
+ * app. `calculateProjectHealth` emits between ONE and FIVE recommendations, and
+ * each row is 38px at full width but 56px once the text wraps. That is a
+ * 38..250px swing in a slot no placeholder can predict.
  *
  * Capping the slot and scrolling past it makes the card's height a constant, so
  * the loading state and the finished state agree to the pixel whatever the data
@@ -189,7 +186,8 @@ export function ProjectHealthCard({ health, projectName, loading }: ProjectHealt
           <MetricTile
             icon={CheckCircle2}
             label="Completion"
-            tone={scored && metrics ? getHealthBorderColor(metrics.completionRate) : undefined}
+            // No alert tone: completion is progress, not health. Coloured by the
+            // health bands, a project that had just started showed its 0% in red.
             caption={
               metrics ? (
                 `${metrics.completedTasksCount} of ${totalTasks} tasks`
@@ -206,14 +204,14 @@ export function ProjectHealthCard({ health, projectName, loading }: ProjectHealt
             label="Overdue"
             tone={
               metrics && metrics.overdueTasksCount > 0
-                ? 'border-red-300 bg-red-50 dark:bg-red-950/30'
+                ? 'border-red-300 bg-destructive/10'
                 : undefined
             }
             valueClassName={
               metrics
                 ? metrics.overdueTasksCount > 0
-                  ? 'text-red-600 dark:text-red-400'
-                  : 'text-green-700 dark:text-green-400'
+                  ? 'text-destructive-text'
+                  : 'text-success-text'
                 : undefined
             }
             caption={
@@ -241,13 +239,13 @@ export function ProjectHealthCard({ health, projectName, loading }: ProjectHealt
             label="Blocked"
             tone={
               metrics && metrics.blockedTasksCount > 0
-                ? 'border-orange-300 bg-orange-50 dark:bg-orange-950/30'
+                ? 'border-orange-300 bg-warning/10'
                 : undefined
             }
             valueClassName={
               metrics
                 ? metrics.blockedTasksCount > 0
-                  ? 'text-orange-700 dark:text-orange-400'
+                  ? 'text-warning-text'
                   : 'text-gray-600 dark:text-gray-400'
                 : undefined
             }
@@ -296,11 +294,10 @@ export function ProjectHealthCard({ health, projectName, loading }: ProjectHealt
                 </li>
               ))
             ) : (
-              // Reachable, and not the same thing as "healthy":
-              // `calculateProjectHealth`'s catch-all only fires at score >= 70,
-              // so a warning-grade project can produce an empty list. Say what
-              // the list means rather than pass a verdict the data has not
-              // earned. (The real gap is in lib/project-health.ts.)
+              // Defensive: `calculateProjectHealth` always gives at least one
+              // line — an "On track" one when nothing costs points. Should that
+              // ever change, say what the list means rather than pass a verdict
+              // the data has not earned.
               <li className="text-sm text-muted-foreground flex items-start gap-2 p-2 rounded-md bg-muted/50">
                 <span className="text-primary mt-0.5">•</span>
                 <span>

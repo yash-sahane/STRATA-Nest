@@ -12,28 +12,6 @@ export function formatDuration(seconds: number): string {
 }
 
 /**
- * Format seconds into human-readable format (e.g., "2h 30m")
- */
-export function formatDurationHuman(seconds: number): string {
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-
-  if (hours === 0 && minutes === 0) {
-    return `${seconds}s`;
-  }
-
-  if (hours === 0) {
-    return `${minutes}m`;
-  }
-
-  if (minutes === 0) {
-    return `${hours}h`;
-  }
-
-  return `${hours}h ${minutes}m`;
-}
-
-/**
  * Format minutes into human-readable format
  */
 export function formatMinutesHuman(minutes: number): string {
@@ -59,11 +37,3 @@ export function parseTimeToMinutes(time: string): number {
   return hours * 60 + minutes;
 }
 
-/**
- * Calculate duration between two ISO timestamps in minutes
- */
-export function calculateDuration(startTime: string, endTime: string): number {
-  const start = new Date(startTime).getTime();
-  const end = new Date(endTime).getTime();
-  return Math.floor((end - start) / 1000 / 60);
-}

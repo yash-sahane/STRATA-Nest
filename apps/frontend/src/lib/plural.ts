@@ -15,7 +15,3 @@ export function plural(count: number, singular: string, pluralForm?: string): st
   return `${count} ${word}`;
 }
 
-/** The noun alone, for callers that render the number separately. */
-export function pluralWord(count: number, singular: string, pluralForm?: string): string {
-  return count === 1 ? singular : (pluralForm ?? `${singular}s`);
-}

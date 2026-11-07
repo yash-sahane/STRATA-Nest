@@ -1,14 +1,15 @@
 'use client';
 
+import { getSprintStatusConfig } from '@/lib/semantic/status';
 import { PageHeader } from '@/components/layout/page-header';
-import { cn } from '@/lib/utils';
+import { cn, parseWireDate } from '@/lib/utils';
 import { formatLeaveDateRange } from '@/lib/leave-utils';
 import { plural } from '@/lib/plural';
 import { toneStyle } from '@/lib/semantic/tone';
 
 import * as React from 'react';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
-import { useTeamLeaveRequests } from '@/hooks/use-leave';
+import { useAwayList } from '@/hooks/use-leave';
 import { useProjects } from '@/hooks/use-project';
 import { useWorkspaceTasks } from '@/hooks/use-task';
 import { useWorkspaceSprints } from '@/hooks/use-sprint';
@@ -38,6 +39,13 @@ import {
   startOfWeek,
   endOfWeek,
 } from 'date-fns';
+import { humanizeEnum } from '@/lib/semantic/status';
+import {
+  useLeaveRequestsRealtime,
+  useSprintsRealtime,
+  useTasksRealtime,
+} from '@/hooks/use-realtime';
+import { isTaskOverdue } from '@/lib/task-dates';
 
 export default function CalendarPage() {
   const { currentWorkspace, isLoading: workspacesLoading } = useCurrentWorkspace();
@@ -54,14 +62,30 @@ export default function CalendarPage() {
    * This page had no notion of leave at all, which is the single thing a team calendar
    * is most often opened to check. APPROVED only: a pending request is a request, and
    * drawing it here would tell the team somebody is away before anybody agreed.
+   *
+   * From the away list, not the leave requests: those are personal, so anybody who
+   * does not approve leave was shown only their own and told "0 people away" on a day
+   * half the team was out. The away list is the same for everybody, and carries who
+   * and until when — not what kind of leave, which is nobody else's business.
    */
-  const { data: allLeave = [] } = useTeamLeaveRequests(currentWorkspace?.id);
-  const approvedLeave = React.useMemo(
-    () => allLeave.filter((l) => l.status === 'APPROVED'),
-    [allLeave],
-  );
-
   const [selectedMonth, setSelectedMonth] = React.useState(new Date());
+  // The weeks the grid draws, not a window around today: with no range the server
+  // answered for ~62 days back, so stepping back to August showed "0 people away"
+  // on days people were on approved leave.
+  const awayRange = React.useMemo(
+    () => ({
+      from: format(startOfWeek(startOfMonth(selectedMonth)), 'yyyy-MM-dd'),
+      to: format(endOfWeek(endOfMonth(selectedMonth)), 'yyyy-MM-dd'),
+    }),
+    [selectedMonth],
+  );
+  const { data: approvedLeave = [] } = useAwayList(currentWorkspace?.id, awayRange);
+  // A calendar is read to plan around: a due date moved, a sprint started or
+  // somebody's leave approved after it was opened has to appear on it.
+  useTasksRealtime(currentWorkspace?.id);
+  useSprintsRealtime(currentWorkspace?.id);
+  useLeaveRequestsRealtime(currentWorkspace?.id);
+
   const [selectedProject, setSelectedProject] = React.useState<string>('ALL');
   const [selectedDay, setSelectedDay] = React.useState<Date | null>(null);
 
@@ -82,12 +106,12 @@ export default function CalendarPage() {
 
     const tasksForDay = filteredTasks.filter((task) => {
       if (!task.dueDate) return false;
-      return format(new Date(task.dueDate), 'yyyy-MM-dd') === dateStr;
+      return format(parseWireDate(task.dueDate), 'yyyy-MM-dd') === dateStr;
     });
 
     const sprintsForDay = filteredSprints.filter((sprint) => {
-      const startDate = format(new Date(sprint.startDate), 'yyyy-MM-dd');
-      const endDate = format(new Date(sprint.endDate), 'yyyy-MM-dd');
+      const startDate = format(parseWireDate(sprint.startDate), 'yyyy-MM-dd');
+      const endDate = format(parseWireDate(sprint.endDate), 'yyyy-MM-dd');
       return dateStr >= startDate && dateStr <= endDate;
     });
 
@@ -121,23 +145,15 @@ export default function CalendarPage() {
 
     const upcomingTasks = filteredTasks.filter((task) => {
       if (!task.dueDate) return false;
-      const dueDate = new Date(task.dueDate);
+      const dueDate = parseWireDate(task.dueDate);
       return dueDate >= monthStart && dueDate <= monthEnd && task.status !== 'DONE';
     }).length;
 
-    const activeSprints = filteredSprints.filter((sprint) => {
-      const now = new Date();
-      return (
-        new Date(sprint.startDate) <= now &&
-        new Date(sprint.endDate) >= now &&
-        sprint.status === 'ACTIVE'
-      );
-    }).length;
+    // Started is active: comparing the dates to this instant dropped a sprint
+    // on its last day, whose end date is that day's midnight.
+    const activeSprints = filteredSprints.filter((sprint) => sprint.status === 'ACTIVE').length;
 
-    const overdueTasks = filteredTasks.filter((task) => {
-      if (!task.dueDate) return false;
-      return new Date(task.dueDate) < new Date() && task.status !== 'DONE';
-    }).length;
+    const overdueTasks = filteredTasks.filter((task) => isTaskOverdue(task)).length;
 
     return { upcomingTasks, activeSprints, overdueTasks };
   }, [filteredTasks, filteredSprints, selectedMonth]);
@@ -153,7 +169,7 @@ export default function CalendarPage() {
       <div className="space-y-6">
         <PageHeader
           icon={CalendarIcon}
-          title="Calendar & Schedule"
+          title="Calendar"
           description="We couldn't load your schedule."
         />
         <ErrorState
@@ -184,11 +200,11 @@ export default function CalendarPage() {
       {/* Header */}
       <PageHeader
         icon={CalendarIcon}
-        title="Calendar & Schedule"
+        title="Calendar"
         description="View tasks, sprints, and important dates"
         actions={
           <Select value={selectedProject} onValueChange={setSelectedProject}>
-            <SelectTrigger className="w-[200px]">
+            <SelectTrigger className="w-full sm:w-[200px]">
               <SelectValue placeholder="All Projects" />
             </SelectTrigger>
             <SelectContent>
@@ -294,6 +310,17 @@ export default function CalendarPage() {
                   return (
                     <button
                       key={idx}
+                      type="button"
+                      // "18" told a screen reader nothing: which day, and what is on it.
+                      aria-label={[
+                        format(day, 'EEEE, MMMM d'),
+                        events.tasks.length ? `${events.tasks.length} due` : '',
+                        events.sprints.length ? `${events.sprints.length} sprint${events.sprints.length === 1 ? '' : 's'}` : '',
+                        events.leave.length ? `${events.leave.length} away` : '',
+                      ]
+                        .filter(Boolean)
+                        .join(', ')}
+                      aria-pressed={isSelected}
                       onClick={() => setSelectedDay(day)}
                       className={`
                         aspect-square rounded-lg p-2 text-sm transition-colors
@@ -301,7 +328,7 @@ export default function CalendarPage() {
                         ${isSelected ? 'bg-primary text-primary-foreground' : ''}
                         ${!isSelected && isCurrentMonth ? 'hover:bg-muted' : ''}
                         ${!isCurrentMonth ? 'opacity-40' : ''}
-                        ${hasEvents && !isSelected ? 'bg-blue-50 dark:bg-blue-950' : ''}
+                        ${hasEvents && !isSelected ? 'bg-info/10' : ''}
                       `}
                     >
                       <div className="font-medium">{format(day, 'd')}</div>
@@ -381,11 +408,11 @@ export default function CalendarPage() {
                       {selectedDayEvents.leave.map((leave) => (
                         <div
                           key={leave.id}
-                          className="p-3 rounded-lg border bg-amber-50 dark:bg-amber-950"
+                          className="p-3 rounded-lg border bg-warning/10"
                         >
                           <div className="font-medium">{leave.userName || 'A team member'}</div>
                           <div className="text-sm text-muted-foreground mt-1">
-                            {String(leave.leaveType).replace(/_/g, " ").toLowerCase()} leave
+                            {leave.halfDay ? 'Away for half the day' : 'Away'}
                           </div>
                           <div className="text-xs text-muted-foreground mt-1">
                             {formatLeaveDateRange(leave.startDate, leave.endDate)}
@@ -406,21 +433,21 @@ export default function CalendarPage() {
                         return (
                           <div
                             key={sprint.id}
-                            className="p-3 rounded-lg border bg-blue-50 dark:bg-blue-950"
+                            className="p-3 rounded-lg border bg-info/10"
                           >
                             <div className="font-medium">{sprint.name}</div>
                             <div className="text-sm text-muted-foreground mt-1">
                               {project?.name}
                             </div>
                             <div className="text-xs text-muted-foreground mt-1">
-                              {format(new Date(sprint.startDate), 'MMM d')} -{' '}
-                              {format(new Date(sprint.endDate), 'MMM d')}
+                              {format(parseWireDate(sprint.startDate), 'MMM d')} -{' '}
+                              {format(parseWireDate(sprint.endDate), 'MMM d')}
                             </div>
                             <Badge
                               className="mt-2"
                               variant={sprint.status === 'ACTIVE' ? 'default' : 'secondary'}
                             >
-                              {sprint.status}
+                              {getSprintStatusConfig(sprint.status).label}
                             </Badge>
                           </div>
                         );
@@ -436,14 +463,13 @@ export default function CalendarPage() {
                       </h3>
                       {selectedDayEvents.tasks.map((task) => {
                         const project = projects.find((p) => p.id === task.projectId);
-                        const isOverdue =
-                          new Date(task.dueDate!) < new Date() && task.status !== 'DONE';
+                        const isOverdue = isTaskOverdue(task);
 
                         return (
                           <div
                             key={task.id}
                             /* Tone comes from the semantic module, not a raw
-                               palette pair: `bg-red-50 dark:bg-red-950` does not
+                               palette pair: `bg-destructive/10` does not
                                track the token theme the rest of the app uses. */
                             className={cn(
                               'p-3 rounded-lg border-l-4 border bg-muted/40',
@@ -466,12 +492,12 @@ export default function CalendarPage() {
                                       : 'secondary'
                                 }
                               >
-                                {task.priority}
+                                {humanizeEnum(task.priority)}
                               </Badge>
                               <Badge variant={task.status === 'DONE' ? 'default' : 'outline'}>
-                                {task.status.replace('_', ' ')}
+                                {humanizeEnum(task.status)}
                               </Badge>
-                              {isOverdue && <Badge variant="destructive">OVERDUE</Badge>}
+                              {isOverdue && <Badge variant="destructive">Overdue</Badge>}
                             </div>
                           </div>
                         );

@@ -1,6 +1,7 @@
 'use client';
 
-import { PageHeader } from '@/components/layout/page-header';
+import { SprintHeader, SprintUnavailable } from '@/components/sprints/sprint-header';
+import { sprintFigures } from '@/lib/sprint-figures';
 import { PageLoader } from '@/components/ui/page-loader';
 import { ErrorState } from '@/components/ui/error-state';
 
@@ -14,10 +15,12 @@ import { useTasksRealtime, useSprintsRealtime } from '@/hooks/use-realtime';
 import { useFunctionalRequirementsBySprint } from '@/hooks/use-functional-requirement';
 import { FunctionalRequirementStatus, TaskStatus } from '@/types';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ArrowLeft, BarChart3, ListChecks } from 'lucide-react';
 import { SprintBoard } from '@/components/sprints/sprint-board';
+import { TaskDetailsDialog } from '@/components/tasks/task-details-dialog';
+import { useTaskReview } from '@/hooks/use-task-review';
+import { useHasPermission } from '@/hooks/use-permissions';
+import { Permission } from '@/lib/permissions';
 import { BurndownChart } from '@/components/sprints/burndown-chart';
 
 const getBoardStatusForFR = (status: FunctionalRequirementStatus): TaskStatus => {
@@ -40,14 +43,30 @@ export default function SprintBoardPage() {
     data: sprint,
     isLoading: sprintLoading,
     isError: sprintError,
+    error: sprintLoadError,
     refetch: refetchSprint,
   } = useSprint(sprintId);
-  const { data: allTasks, isLoading: tasksLoading } = useTasks(sprint?.projectId);
+  const {
+    data: allTasks,
+    isLoading: tasksLoading,
+    isError: tasksError,
+    refetch: refetchTasks,
+  } = useTasks(sprint?.projectId);
   const { data: sprintFRs } = useFunctionalRequirementsBySprint(sprintId);
 
   // Enable real-time updates
   useTasksRealtime(sprint?.projectId);
   useSprintsRealtime(sprint?.projectId);
+
+  // The task whose details are open. Held by id and read back out of the live
+  // list, so the dialog follows a save made while it is up.
+  const [openTaskId, setOpenTaskId] = React.useState<string | null>(null);
+  const openTask = React.useMemo(
+    () => allTasks?.find((task) => task.id === openTaskId) ?? null,
+    [allTasks, openTaskId]
+  );
+  const canEditTasks = useHasPermission(Permission.EDIT_ANY_TASK);
+  const review = useTaskReview();
 
   // Filter tasks for this sprint
   const sprintTasks = React.useMemo(() => {
@@ -61,6 +80,11 @@ export default function SprintBoardPage() {
     const linkedFRIds = new Set(sprintTasks.map(t => t.functionalRequirementId).filter(Boolean));
     return sprintFRs.filter(fr => !linkedFRIds.has(fr.id));
   }, [sprintFRs, sprintTasks]);
+
+  // How far it got — the same figure Analytics and the sprint list give
+  // (sprintFigures: tasks only, and a closed sprint as it closed). The stat
+  // card and the Burndown tab both read it, so the two cannot disagree.
+  const figures = React.useMemo(() => sprintFigures(sprint, sprintTasks), [sprint, sprintTasks]);
 
   // Calculate stats
   const stats = React.useMemo(() => {
@@ -85,6 +109,9 @@ export default function SprintBoardPage() {
     // so the four numbers did not sum and completionRate was understated.
     const backlog = sprintTasks.filter(t => t.status === 'BACKLOG').length;
 
+    const recorded =
+      figures.source === 'snapshot' ? { total: figures.total, completed: figures.completed } : null;
+
     return {
       total,
       // Kept apart so the card can say what the total is made of. The Analytics
@@ -97,78 +124,51 @@ export default function SprintBoardPage() {
       review,
       todo,
       backlog,
-      completionRate: total > 0 ? Math.round((completed / total) * 100) : 0,
+      recorded,
+      completionRate: figures.completionRate,
     };
-  }, [sprintTasks, visibleFRs]);
+  }, [sprintTasks, visibleFRs, figures]);
 
   if (sprintLoading || tasksLoading) {
     return <PageLoader message="Loading sprint board..." />;
   }
 
-  // isError BEFORE the not-found branch. A 500 (or an offline blip) leaves
-  // `sprint` undefined exactly like a deleted sprint does, so every sub-page
-  // told the user a sprint that plainly exists was "Sprint not found" — a
-  // dead end with nothing to retry.
-  if (sprintError) {
+  // isError BEFORE the not-found branch: a 500 or an offline blip leaves
+  // `sprint` undefined exactly like a deleted sprint does. SprintUnavailable
+  // tells the two apart — a retry for the blip, a way back for the 404.
+  if (sprintError || !sprint) {
     return (
-      <ErrorState
-        className="mt-10"
-        title="Couldn't load this sprint"
-        description="The sprint is still there — this is a connection problem."
+      <SprintUnavailable
+        error={sprintError ? sprintLoadError : null}
         onRetry={() => void refetchSprint()}
       />
     );
   }
 
-  if (!sprint) {
+  const header = (
+    <SprintHeader sprint={sprint} current="board" description="Move the sprint's work across the board as it gets done" />
+  );
+
+  // Without its tasks the board is empty, and an empty board says "nothing in
+  // this sprint" rather than "couldn't load it" — with nothing to retry. Only
+  // when there is no list at all: a failed background refetch keeps the cached one.
+  if (tasksError && !allTasks) {
     return (
-      <div className="flex flex-col items-center justify-center h-[50vh] space-y-4">
-        <p className="text-muted-foreground">Sprint not found</p>
-        <Button onClick={() => router.push('/sprints')}>
-          <ArrowLeft className="mr-2 h-4 w-4" />
-          Back to Sprints
-        </Button>
+      <div className="space-y-6">
+        {header}
+        <ErrorState
+          title="Couldn't load this sprint's tasks"
+          description="The board needs them to show anything. This is a connection or server problem — try again."
+          onRetry={() => void refetchTasks()}
+        />
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => router.push('/sprints')}
-          className="mb-4"
-        >
-          <ArrowLeft className="mr-2 h-4 w-4" />
-          Back to Sprints
-        </Button>
-        
-        <PageHeader
-          title={sprint.name}
-          description={sprint.goal || 'Drag and drop tasks to update their status'}
-          actions={
-            <>
-              <Button
-                variant="outline"
-                onClick={() => router.push(`/sprints/${sprintId}/backlog`)}
-              >
-                <ListChecks className="mr-2 h-4 w-4" />
-                Backlog
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => router.push(`/sprints/${sprintId}/analytics`)}
-              >
-                <BarChart3 className="mr-2 h-4 w-4" />
-                Analytics
-              </Button>
-            </>
-          }
-        />
-      </div>
+      {/* Header — shared by the sprint's three views. */}
+      {header}
 
       {/* Stats Cards */}
       <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
@@ -214,7 +214,7 @@ export default function SprintBoardPage() {
             <CardTitle className="text-sm font-medium">In Progress</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">
+            <div className="text-2xl font-bold text-info-text">
               {stats.inProgress}
             </div>
           </CardContent>
@@ -236,11 +236,13 @@ export default function SprintBoardPage() {
             <CardTitle className="text-sm font-medium">Completed</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-green-700 dark:text-green-400">
+            <div className="text-2xl font-bold text-success-text">
               {stats.completed}
             </div>
             <p className="text-xs text-muted-foreground mt-1">
-              {stats.completionRate}% complete
+              {stats.recorded
+                ? `${stats.completionRate}% of the ${stats.recorded.total} tasks it closed with`
+                : `${stats.completionRate}% of its tasks done`}
             </p>
           </CardContent>
         </Card>
@@ -254,7 +256,15 @@ export default function SprintBoardPage() {
         </TabsList>
 
         <TabsContent value="board" className="space-y-4">
-          <SprintBoard tasks={sprintTasks} frs={visibleFRs} />
+          <SprintBoard
+            tasks={sprintTasks}
+            frs={visibleFRs}
+            onTaskClick={(task) => setOpenTaskId(task.id)}
+            // A closed sprint is a record. Dragging a Done card back to To Do
+            // put open work inside a sprint that will never roll it out.
+            readOnly={sprint.status === 'COMPLETED'}
+            started={sprint.status !== 'PLANNING'}
+          />
         </TabsContent>
 
         <TabsContent value="burndown" className="space-y-4">
@@ -263,6 +273,7 @@ export default function SprintBoardPage() {
               tasks={sprintTasks}
               sprintStartDate={sprint.startDate}
               sprintEndDate={sprint.endDate}
+              figures={figures}
             />
           ) : (
             <Card>
@@ -275,6 +286,28 @@ export default function SprintBoardPage() {
           )}
         </TabsContent>
       </Tabs>
+
+      {/* Reading, commenting and logging time happen here. Editing hands over to
+          the Tasks page, which owns the one task editor — with the task already
+          open in it, and scoped to the whole project so it is there to be found. */}
+      <TaskDetailsDialog
+        task={openTask}
+        open={openTask !== null}
+        onOpenChange={(open) => {
+          if (!open) setOpenTaskId(null);
+        }}
+        onEdit={
+          canEditTasks
+            ? (task) =>
+                router.push(
+                  `/tasks?projectId=${task.projectId}&taskId=${task.id}&scope=all&edit=1`
+                )
+            : undefined
+        }
+        canEditDependencies={canEditTasks}
+        onMoveStatus={review.move}
+        canSignOff={review.canSignOff}
+      />
     </div>
   );
 }

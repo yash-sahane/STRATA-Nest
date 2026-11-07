@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { resources, query } from '@/lib/api/client';
-import { restClient } from '@/lib/api/rest-client';
+import { API_BASE, restClient } from '@/lib/api/rest-client';
 import { COLLECTIONS } from '@/lib/api/config';
+import type { GitCommit } from '@/types';
 
 /**
  * Git and Discord integrations for a project.
@@ -26,7 +27,21 @@ interface VerificationState {
   lastTestError?: string | null;
 }
 
-export interface GitHubIntegration extends VerificationState {
+/**
+ * The receiving half of a repository integration.
+ *
+ * Connecting a repository stores how to REACH it. Commits arrive the other way:
+ * the provider calls a webhook, signed with a secret this server minted, and
+ * without that secret every delivery is refused. `webhookConfigured` is whether
+ * one exists; the secret itself is only ever in the response that created it.
+ */
+interface WebhookState {
+  webhookConfigured: boolean;
+  /** Relative to the API's `/api/v1` prefix — see `webhookUrlFor`. */
+  webhookPath: string;
+}
+
+export interface GitHubIntegration extends VerificationState, WebhookState {
   id: string;
   projectId: string;
   repoOwner: string;
@@ -37,7 +52,7 @@ export interface GitHubIntegration extends VerificationState {
   updatedAt: string;
 }
 
-export interface GitLabIntegration extends VerificationState {
+export interface GitLabIntegration extends VerificationState, WebhookState {
   id: string;
   projectId: string;
   projectPath: string;
@@ -50,10 +65,16 @@ export interface GitLabIntegration extends VerificationState {
 export interface DiscordIntegration extends VerificationState {
   id: string;
   projectId: string;
-  webhookUrl: string;
+  /** The tail of the webhook's id. The URL is a credential and is never sent back. */
+  webhookHint: string;
   enabledEvents: unknown[];
   createdAt: string;
   updatedAt: string;
+}
+
+/** The address a provider has to be given, in full. */
+export function webhookUrlFor(integration: WebhookState): string {
+  return `${API_BASE}/api/v1${integration.webhookPath}`;
 }
 
 const COLLECTION: Record<IntegrationProvider, string> = {
@@ -89,7 +110,7 @@ export function useCreateIntegration(provider: IntegrationProvider) {
     mutationFn: async (payload: Record<string, unknown>) =>
       // The second argument is the server-ignored resourceId; the body is the
       // third. Passing the payload second creates an EMPTY row.
-      resources.create(COLLECTION[provider], undefined, payload),
+      resources.create(COLLECTION[provider], payload),
     onSuccess: (_data, payload) => {
       queryClient.invalidateQueries({
         queryKey: ['integrations', provider, (payload as { projectId?: string }).projectId],
@@ -139,5 +160,71 @@ export function useTestIntegration(provider: IntegrationProvider) {
         queryKey: ['integrations', provider, variables.projectId],
       });
     },
+  });
+}
+
+/**
+ * Mint the webhook secret for a repository integration — or replace it.
+ *
+ * Resolves with the secret, which no other response carries: the caller has to
+ * show it there and then. Replacing one stops the old one working at once.
+ */
+export function useRotateWebhookSecret(provider: 'github' | 'gitlab') {
+  const queryClient = useQueryClient();
+  return useMutation<{ webhookSecret: string }, Error, { id: string; projectId?: string }>({
+    mutationFn: async ({ id }) =>
+      restClient.post(`/api/v1/${COLLECTION[provider]}/${id}/webhook-secret/`, {}) as Promise<{
+        webhookSecret: string;
+      }>,
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: ['integrations', provider, variables.projectId],
+      });
+    },
+  });
+}
+
+/** Change a setting on a repository integration (today: `autoUpdateStatus`). */
+export function useUpdateIntegration(provider: 'github' | 'gitlab') {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      id,
+      changes,
+    }: {
+      id: string;
+      projectId?: string;
+      changes: { autoUpdateStatus: boolean };
+    }) => resources.update(COLLECTION[provider], id, changes),
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: ['integrations', provider, variables.projectId],
+      });
+    },
+  });
+}
+
+/**
+ * The commits that mention a task, newest first.
+ *
+ * The worker has linked every pushed commit to the tasks its message names for
+ * as long as there has been a webhook receiver, and nothing ever read the result
+ * back: the link existed in the database and on no screen.
+ */
+export function useTaskCommits(taskId?: string, projectId?: string) {
+  return useQuery<GitCommit[]>({
+    queryKey: ['task-commits', taskId],
+    enabled: Boolean(taskId && projectId),
+    queryFn: async () => {
+      if (!taskId || !projectId) return [];
+      const response = await resources.list<GitCommit>(COLLECTIONS.GIT_COMMITS, [
+        query.equal('projectId', projectId),
+        query.equal('taskId', taskId),
+        query.orderDesc('timestamp'),
+        query.limit(20),
+      ]);
+      return response.items;
+    },
+    staleTime: 60 * 1000,
   });
 }

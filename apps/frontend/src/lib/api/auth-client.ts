@@ -1,6 +1,6 @@
 import { restClient } from './rest-client';
 import type { ApiModels } from './types';
-import { setBusinessTimeZone } from '@/lib/utils/working-days';
+import { setServerTimeZone } from '@/lib/utils/working-days';
 
 interface AuthMeResponse {
   user: ApiModels.User;
@@ -11,6 +11,8 @@ interface AuthMeResponse {
   /** The IANA zone the server files attendance days in. Optional: an older API omits it,
    *  and the date helpers fall back to the browser's own date when it is absent. */
   businessTimezone?: string;
+  /** Whether mail from this installation reaches an inbox. Absent from an older API. */
+  mailDelivers?: boolean;
 }
 
 let cachedUser: ApiModels.User | null = null;
@@ -22,7 +24,7 @@ async function loadMe(): Promise<AuthMeResponse> {
   // all ask `todayDateOnly()` which day it is, and it answered with the BROWSER's date
   // while the server filed rows against its own. A member outside the server's timezone
   // saw their check-in land on a day their calendar called tomorrow.
-  setBusinessTimeZone(me.businessTimezone);
+  setServerTimeZone(me.businessTimezone);
   cachedUser = {
     id: me.user.id,
     email: me.user.email,
@@ -31,10 +33,10 @@ async function loadMe(): Promise<AuthMeResponse> {
     workspaceId: me.user.workspaceId,
     hasTempPassword: me.hasTempPassword,
     isAdmin: me.isAdmin,
+    mailDelivers: me.mailDelivers !== false,
     workspaceIds: me.workspaceIds,
     createdAt: me.user.createdAt,
     updatedAt: me.user.updatedAt,
-    defaultWorkspaceId: me.user.defaultWorkspaceId,
     role: me.user.role,
     phone: me.user.phone,
     avatar: me.user.avatar,
@@ -55,7 +57,10 @@ async function getCurrentSession(): Promise<ApiModels.Session> {
 }
 
 async function login(email: string, password: string): Promise<ApiModels.Session> {
-  const data = await restClient.post('/api/v1/auth/login/', { email, password });
+  const data = await restClient.post<{ sessionId: string; user: { id: string } }>(
+    '/api/v1/auth/login/',
+    { email, password },
+  );
   cachedUser = null;
   cachedSession = null;
   await loadMe();
@@ -69,6 +74,16 @@ async function logout(): Promise<void> {
     cachedUser = null;
     cachedSession = null;
   }
+}
+
+/**
+ * Drop the cached profile — another tab signed this browser out. `getCurrentUser`
+ * answers from the cache once it holds one, so without this the tab would go on
+ * reporting the last user as signed in.
+ */
+function forget(): void {
+  cachedUser = null;
+  cachedSession = null;
 }
 
 async function updatePassword(newPassword: string, currentPassword: string): Promise<void> {
@@ -85,8 +100,13 @@ async function updatePassword(newPassword: string, currentPassword: string): Pro
  * exists — deliberately, so the form cannot be used to enumerate accounts —
  * so callers must show the same confirmation either way.
  */
-async function requestPasswordReset(email: string): Promise<void> {
-  await restClient.post('/api/v1/auth/password-reset/', { email });
+async function requestPasswordReset(email: string): Promise<{ delivers: boolean }> {
+  const answer = (await restClient.post('/api/v1/auth/password-reset/', { email })) as
+    | { delivers?: boolean }
+    | undefined;
+  // `delivers` is about the installation — whether it can send mail at all —
+  // and is the same for every address. Absent (an older API), assume it can.
+  return { delivers: answer?.delivers !== false };
 }
 
 /** Complete a reset from the `uid`/`token` pair the emailed link carries. */
@@ -125,9 +145,8 @@ export const authClient = {
   getCurrentSession,
   login,
   logout,
+  forget,
   updatePassword,
-  changePassword: (currentPassword: string, newPassword: string) =>
-    updatePassword(newPassword, currentPassword),
   requestPasswordReset,
   confirmPasswordReset,
   updateName,

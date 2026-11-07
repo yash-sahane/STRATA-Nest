@@ -1,6 +1,7 @@
 ﻿import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { resources } from '@/lib/api/client';
 import { query } from '@/lib/api/client';
+import { restClient } from '@/lib/api/rest-client';
 import { workloadBandForTasks } from '@/lib/team-workload';
 
 export interface TeamMember {
@@ -27,6 +28,11 @@ export interface TeamMember {
   rawRole: string;
   workspaceId: string;
   status: 'ACTIVE' | 'INACTIVE' | 'INVITED';
+  /**
+   * Still on the temporary password they were issued: they have never signed
+   * in. The API says so only to somebody who can act on it (member:update).
+   */
+  awaitingFirstSignIn: boolean;
   /**
    * When this membership began. Attendance cannot be missing before it: a day
    * before somebody joined is not a day they failed to attend, and painting it
@@ -70,6 +76,23 @@ function normalizeStatus(status: string): TeamMember['status'] {
   return status === 'INACTIVE' || status === 'INVITED' || status === 'ACTIVE' ? status : 'ACTIVE';
 }
 
+/** A workspace_members row, as far as useTeamMembers reads it. */
+interface WorkspaceMemberRow {
+  id: string;
+  userId: string;
+  email: string;
+  name: string;
+  phone?: string | null;
+  avatar?: string | null;
+  role: string;
+  workspaceId: string;
+  status?: string;
+  awaitingFirstSignIn?: boolean;
+  joinedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export function useTeamMembers(workspaceId?: string) {
   return useQuery({
     queryKey: ['team-members', workspaceId],
@@ -80,59 +103,29 @@ export function useTeamMembers(workspaceId?: string) {
       // client-side permission model is derived from, and a single page would
       // drop it (and its role) in a workspace with more members than the page
       // size.
-      const response = await resources.listAll('workspace_members', [
+      const response = await resources.listAll<WorkspaceMemberRow>('workspace_members', [
         query.equal('workspaceId', workspaceId),
       ]);
 
       // Map workspace_members to TeamMember interface
-      return response.items.map((doc: any) => ({
+      return response.items.map((doc) => ({
         id: doc.id,
         userId: doc.userId,
         email: doc.email,
-        name: doc.userName || doc.name,
+        name: doc.name,
         phone: doc.phone || '',
         avatar: doc.avatar || '',
         role: normalizeRole(doc.role),
         rawRole: doc.role || 'MEMBER',
         workspaceId: doc.workspaceId,
         status: normalizeStatus(doc.status || 'ACTIVE'),
+        awaitingFirstSignIn: doc.awaitingFirstSignIn === true,
         joinedAt: doc.joinedAt,
         createdAt: doc.createdAt,
         updatedAt: doc.updatedAt,
       })) as TeamMember[];
     },
     enabled: !!workspaceId,
-  });
-}
-
-export function useTeamMember(memberId?: string) {
-  return useQuery({
-    queryKey: ['team-member', memberId],
-    queryFn: async () => {
-      if (!memberId) return null;
-
-      const response = await resources.get('workspace_members', memberId);
-
-      return response as unknown as TeamMember;
-    },
-    enabled: !!memberId,
-  });
-}
-
-export function useCreateTeamMember() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: async (data: Omit<TeamMember, 'id' | 'createdAt' | 'updatedAt'>) => {
-      const response = await resources.create('workspace_members', 'unique()',
-        data
-      );
-
-      return response as unknown as TeamMember;
-    },
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['team-members', variables.workspaceId] });
-    },
   });
 }
 
@@ -188,7 +181,7 @@ export const ROLE_CONFIG = {
     color: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
   },
   DEVELOPER_INTERN: {
-    label: 'Software Developer Intern',
+    label: 'Developer Intern',
     color: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200',
   },
   TESTER: {
@@ -236,65 +229,16 @@ export function useMemberTaskCounts(workspaceId?: string) {
   return useQuery({
     queryKey: ['member-task-counts', workspaceId],
     queryFn: async () => {
-      if (!workspaceId) return new Map<string, MemberTaskCount>();
-
-      // listAll, not list(limit(1000)). The Resource Allocation card on the same
-      // page derives its figures from useWorkspaceTasks, which walks every page,
-      // so a workspace past 1000 tasks had the card and the table below it
-      // counting different corpora on top of the band mismatch — and the
-      // truncation was silent either way.
-      const response = await resources.listAll('tasks', [
-        query.equal('workspaceId', workspaceId),
-      ]);
-
-      const taskCounts = new Map<string, MemberTaskCount>();
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-
-      response.items.forEach((task: any) => {
-        // Parse assigneeIds/assignedTo
-        const assigneeIds = Array.isArray(task.assignedTo)
-          ? task.assignedTo
-          : typeof task.assigneeIds === 'string' && task.assigneeIds
-            ? JSON.parse(task.assigneeIds)
-            : Array.isArray(task.assigneeIds)
-              ? task.assigneeIds
-              : [];
-
-        const status = task.status || 'BACKLOG';
-        const dueDate = task.dueDate ? new Date(task.dueDate) : null;
-        const isOverdue = dueDate && dueDate < today && status !== 'DONE';
-
-        assigneeIds.forEach((userId: string) => {
-          if (!taskCounts.has(userId)) {
-            taskCounts.set(userId, {
-              userId,
-              totalTasks: 0,
-              activeTasks: 0,
-              completedTasks: 0,
-              overdueTasks: 0,
-            });
-          }
-
-          const counts = taskCounts.get(userId)!;
-          counts.totalTasks++;
-
-          if (status === 'DONE') {
-            counts.completedTasks++;
-          } else {
-            counts.activeTasks++;
-          }
-
-          if (isOverdue) {
-            counts.overdueTasks++;
-          }
-        });
-      });
-
-      return taskCounts;
+      // Counted by the server (GET /tasks/summary). This used to download every
+      // task in the workspace to count them here, a second copy beside the one
+      // the workload card already held.
+      const summary = (await restClient.get(
+        `/api/v1/tasks/summary/?workspaceId=${encodeURIComponent(workspaceId as string)}`
+      )) as { byAssignee: MemberTaskCount[] };
+      return new Map(summary.byAssignee.map((row) => [row.userId, row]));
     },
     enabled: !!workspaceId,
-    staleTime: 30000, // Cache for 30 seconds
+    staleTime: 30000,
   });
 }
 
@@ -316,3 +260,48 @@ export function getWorkloadLevel(activeTasks: number): { label: string; color: s
   return { label: band.label, color: band.color };
 }
 
+/** What `POST /users/:id/temp-password` answers with. */
+export interface ReissuedPassword {
+  userId: string;
+  /** Whether the new password was mailed to the person. */
+  emailSent: boolean;
+  /** Present only where mail is not delivered: shown once, to pass on by hand. */
+  temporaryPassword?: string;
+}
+
+/**
+ * Issue somebody a new temporary password.
+ *
+ * A new account's first password existed in one place — the welcome mail, or
+ * (where mail is not delivered) the dialog of whoever created the account. Lose
+ * it and the account could never be opened: there was no second copy, and no
+ * way to make one short of removing the person and adding them again.
+ */
+export function useReissueTempPassword() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (data: { userId: string; workspaceId: string }) =>
+      (await restClient.post(`/api/v1/users/${data.userId}/temp-password/`, {
+        workspaceId: data.workspaceId,
+      })) as ReissuedPassword,
+    onSuccess: (_result, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['team-members', variables.workspaceId] });
+    },
+  });
+}
+
+/**
+ * Change somebody's sign-in email — a platform administrator's act (the API
+ * refuses anybody else). Their sessions are not touched; the next sign-in uses
+ * the new address.
+ */
+export function useChangeSignInEmail() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (data: { userId: string; workspaceId: string; email: string }) =>
+      restClient.patch(`/api/v1/users/${data.userId}/`, { email: data.email.trim() }),
+    onSuccess: (_result, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['team-members', variables.workspaceId] });
+    },
+  });
+}

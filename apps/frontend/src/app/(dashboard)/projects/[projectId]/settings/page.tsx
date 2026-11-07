@@ -1,16 +1,17 @@
 'use client';
 
+import Link from 'next/link';
 import { PageLoader } from '@/components/ui/page-loader';
 import { ErrorState } from '@/components/ui/error-state';
 
 import * as React from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
-import { useProject, useUpdateProject, useDeleteProject, useChangeProjectMethodology } from '@/hooks/use-project';
+import { useProject, useUpdateProject, useDeleteProject } from '@/hooks/use-project';
 import { useHasPermissionIn } from '@/hooks/use-permissions';
 import { Permission } from '@/lib/permissions';
-import { Shield } from 'lucide-react';
 import { toast } from 'sonner';
+import { basedOnFor, changedFields } from '@/lib/utils/changed-fields';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -34,11 +35,12 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { DatePicker } from '@/components/ui/date-picker';
-import { MethodologySelector } from '@/components/projects/methodology-selector';
 import { format, startOfDay } from 'date-fns';
-import { ArrowLeft, Save, Trash2, Edit2 } from 'lucide-react';
+import { ArrowLeft, Save, Trash2 } from 'lucide-react';
 import { parseDateOnly } from '@/components/projects/project-dates';
-import type { ProjectStatus, ProjectMethodology } from '@/types';
+import type { ProjectStatus } from '@/types';
+import { NoAccess } from '@/components/ui/no-access';
+import { ProjectLoadFailure, ProjectNotFound } from '@/components/projects/project-load-failure';
 
 export default function ProjectSettingsPage() {
   const params = useParams();
@@ -49,11 +51,11 @@ export default function ProjectSettingsPage() {
     data: project,
     isLoading,
     isError: projectError,
+    error: projectLoadError,
     refetch: refetchProject,
   } = useProject(params.projectId as string);
   const updateProject = useUpdateProject();
   const deleteProject = useDeleteProject();
-  const changeMethodology = useChangeProjectMethodology();
   // The navigation entry point on /projects is gated; the ROUTE was not, so a
   // shared link or typed URL handed anyone the Danger Zone. The server rejects
   // the write, but the UI must not offer it.
@@ -83,24 +85,66 @@ export default function ProjectSettingsPage() {
   const [name, setName] = React.useState('');
   const [clientName, setClientName] = React.useState('');
   const [description, setDescription] = React.useState('');
-  const [methodology, setMethodology] = React.useState<ProjectMethodology>('SCRUM');
   const [status, setStatus] = React.useState<ProjectStatus>('PLANNING');
   const [startDate, setStartDate] = React.useState<Date | undefined>(undefined);
   const [endDate, setEndDate] = React.useState<Date | undefined>(undefined);
   const [showDeleteDialog, setShowDeleteDialog] = React.useState(false);
-  const [showMethodologyDialog, setShowMethodologyDialog] = React.useState(false);
 
-  // Initialize form with project data
+  /**
+   * The project as the form was seeded from it: what this person is editing
+   * from, and what a save is checked against.
+   *
+   * The form used to re-seed on EVERY refetch of the project — any colleague's
+   * save, or simply returning to the tab, threw away whatever was being typed.
+   * And a save sent every field with no baseline, so it wrote this page's copy
+   * of the fields nobody here had touched back over what they had since become.
+   */
+  const [seeded, setSeeded] = React.useState<typeof project | null>(null);
+
+  /** The fields as the form holds them, in the shape a save sends. */
+  const formValues = {
+    name: name.trim(),
+    description,
+    clientName,
+    status,
+    // `null`, not `undefined`: JSON.stringify drops an undefined property, so
+    // clearing a date used to send no field at all — the save reported success
+    // and the old date stayed on the row. The API treats null as "clear this".
+    startDate: startDate ? format(startDate, 'yyyy-MM-dd') : null,
+    endDate: endDate ? format(endDate, 'yyyy-MM-dd') : null,
+  };
+  /** The same shape, for a project as the API returned it. */
+  const valuesOf = (source: NonNullable<typeof project>): typeof formValues => {
+    const start = parseDateOnly(source.startDate);
+    const end = parseDateOnly(source.endDate);
+    return {
+      name: source.name,
+      description: source.description || '',
+      clientName: source.clientName || '',
+      status: source.status,
+      startDate: start ? format(start, 'yyyy-MM-dd') : null,
+      endDate: end ? format(end, 'yyyy-MM-dd') : null,
+    };
+  };
+  const pending = seeded ? changedFields(valuesOf(seeded), formValues) : {};
+  const dirty = Object.keys(pending).length > 0;
+
+  // Seed when the project first arrives, or a different one does. A refetch of
+  // the same project re-seeds only while nothing has been changed here, so
+  // somebody else's save shows up without costing an edit in progress.
   React.useEffect(() => {
-    if (project) {
-      setName(project.name);
-      setClientName(project.clientName || '');
-      setDescription(project.description || '');
-      setMethodology(project.methodology);
-      setStatus(project.status);
-      setStartDate(parseDateOnly(project.startDate));
-      setEndDate(parseDateOnly(project.endDate));
-    }
+    if (!project) return;
+    if (seeded && seeded.id === project.id && dirty) return;
+    setSeeded(project);
+    setName(project.name);
+    setClientName(project.clientName || '');
+    setDescription(project.description || '');
+    setStatus(project.status);
+    setStartDate(parseDateOnly(project.startDate));
+    setEndDate(parseDateOnly(project.endDate));
+    // `seeded` and `dirty` are read, not followed: this runs when the PROJECT
+    // changes, and following them would re-seed on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project]);
 
   const handleSave = async () => {
@@ -121,40 +165,27 @@ export default function ProjectSettingsPage() {
       return;
     }
 
-    try {
-      await updateProject.mutateAsync({
-        projectId: project.id,
-        workspaceId: project.workspaceId,
-        name: name.trim(),
-        description,
-        clientName,
-        status,
-        // `null`, not `undefined`: JSON.stringify drops an undefined property,
-        // so clearing a date used to send no field at all — the save reported
-        // success and the old date stayed on the row, with no other UI able to
-        // remove it. The API treats null as "clear this column".
-        startDate: startDate ? format(startDate, 'yyyy-MM-dd') : null,
-        endDate: endDate ? format(endDate, 'yyyy-MM-dd') : null,
-      });
-    } catch {
-      // error toast handled inside the mutation
-    }
-  };
-
-  const handleMethodologyChange = async (newMethodology: ProjectMethodology) => {
-    if (!project) return;
-
-    try {
-      await changeMethodology.mutateAsync({
-        projectId: project.id,
-        workspaceId: project.workspaceId,
-        methodology: newMethodology,
-      });
-    } catch {
-      return; // error toast handled inside the mutation
+    if (!seeded || !dirty) {
+      toast.info('Nothing has been changed.');
+      return;
     }
 
-    setMethodology(newMethodology);
+    try {
+      const saved = await updateProject.mutateAsync({
+        projectId: project.id,
+        workspaceId: project.workspaceId,
+        // Only what was changed here, and what those fields held when the form
+        // was seeded — so the API can refuse a save that would undo somebody
+        // else's change to the same field, and leave alone one that would not.
+        ...pending,
+        basedOn: basedOnFor(seeded as unknown as Record<string, unknown>, pending),
+      });
+      // What was just saved is what the next edit starts from.
+      setSeeded({ ...seeded, ...saved });
+    } catch {
+      // error toast handled inside the mutation; a conflict names the field,
+      // and the form keeps what was typed
+    }
   };
 
   const handleDelete = async () => {
@@ -177,47 +208,14 @@ export default function ProjectSettingsPage() {
     return <PageLoader message="Loading project settings..." />;
   }
 
-  // A failed fetch is not a missing project. Telling the owner of a live
-  // project that it "doesn't exist or you don't have access to it" over one
-  // 500 reads as a permissions change, and offered nothing to retry.
+  // A failed fetch is not a missing project, and a missing project is not a
+  // connection problem: a 500 must not read as a permissions change, and a 404
+  // must not offer a retry that can only fail again. See ProjectLoadFailure.
   if (projectError) {
-    return (
-      <div className="space-y-6">
-        <div>
-          <Button variant="ghost" onClick={() => router.push('/projects')}>
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            Back to Projects
-          </Button>
-        </div>
-        <ErrorState
-          title="Couldn't load this project"
-          description="The project is still there — this is a connection problem, not a change to your access."
-          onRetry={() => void refetchProject()}
-        />
-      </div>
-    );
+    return <ProjectLoadFailure error={projectLoadError} onRetry={() => void refetchProject()} />;
   }
 
-  if (!project) {
-    return (
-      <div className="space-y-6">
-        <div>
-          <Button variant="ghost" onClick={() => router.push('/projects')}>
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            Back to Projects
-          </Button>
-        </div>
-        <Card>
-          <CardHeader>
-            <CardTitle>Project Not Found</CardTitle>
-            <CardDescription>
-              The project you&apos;re looking for doesn&apos;t exist or you don&apos;t have access to it.
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      </div>
-    );
-  }
+  if (!project) return <ProjectNotFound />;
 
   // Wait for the capability answer before rendering a denial. `project` is
   // resolved by now, so `permissionLoading` is the roster request only.
@@ -232,7 +230,7 @@ export default function ProjectSettingsPage() {
       <ErrorState
         title="Couldn't check your access"
         description="We couldn't load your membership for this project's workspace, so we can't tell whether you may edit it."
-        onRetry={() => queryClient.invalidateQueries({ queryKey: ['my-memberships'] })}
+        onRetry={() => queryClient.invalidateQueries({ queryKey: ['my-access'] })}
       />
     );
   }
@@ -241,22 +239,14 @@ export default function ProjectSettingsPage() {
     return (
       <div className="space-y-6">
         <div>
-          <Button variant="ghost" onClick={() => router.push(`/projects/${project.id}`)}>
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            Back to Project
+          <Button variant="ghost" asChild>
+            <Link href={`/projects/${project.id}`}>
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Back to Project
+            </Link>
           </Button>
         </div>
-        <Card className="border-destructive/50">
-          <CardHeader>
-            <div className="flex items-center gap-2 text-destructive-text">
-              <Shield className="h-6 w-6" />
-              <CardTitle>Access Denied</CardTitle>
-            </div>
-            <CardDescription>
-              You don&apos;t have permission to manage this project&apos;s settings.
-            </CardDescription>
-          </CardHeader>
-        </Card>
+        <NoAccess what="change this project's settings" />
       </div>
     );
   }
@@ -266,9 +256,11 @@ export default function ProjectSettingsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <Button variant="ghost" onClick={() => router.push(`/projects/${project.id}`)}>
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            Back to Project
+          <Button variant="ghost" asChild>
+            <Link href={`/projects/${project.id}`}>
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Back to Project
+            </Link>
           </Button>
           <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl mt-2">Project Settings</h1>
           <p className="text-muted-foreground">
@@ -316,33 +308,7 @@ export default function ProjectSettingsPage() {
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="methodology">Methodology</Label>
-                <div className="flex gap-2">
-                  <Select value={methodology} disabled>
-                    <SelectTrigger id="methodology" className="flex-1">
-                      <SelectValue placeholder="Select methodology" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="SCRUM">Scrum</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    onClick={() => setShowMethodologyDialog(true)}
-                    title="Change methodology"
-                  >
-                    <Edit2 className="h-4 w-4" />
-                  </Button>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Click the edit icon to change methodology
-                </p>
-              </div>
-
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="status">Status</Label>
                 <Select value={status} onValueChange={(value) => setStatus(value as ProjectStatus)}>
@@ -360,14 +326,15 @@ export default function ProjectSettingsPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               {/* The shared DatePicker, not a second hand-rolled copy of it: the
                   inline calendars here were the only ones without `defaultMonth`,
                   so they opened on today instead of the month already in the
                   field. Same trigger, same 'PPP' label, one implementation. */}
               <div className="space-y-2">
-                <Label>Start Date</Label>
+                <Label htmlFor="project-start-date">Start Date</Label>
                 <DatePicker
+                  id="project-start-date"
                   date={startDate}
                   onSelect={setStartDate}
                   buttonClassName="w-full"
@@ -375,8 +342,9 @@ export default function ProjectSettingsPage() {
               </div>
 
               <div className="space-y-2">
-                <Label>End Date</Label>
+                <Label htmlFor="project-end-date">End Date</Label>
                 <DatePicker
+                  id="project-end-date"
                   date={endDate}
                   onSelect={setEndDate}
                   disabled={(date) => (startDate ? date < startOfDay(startDate) : false)}
@@ -450,14 +418,6 @@ export default function ProjectSettingsPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Methodology Selector Dialog */}
-      <MethodologySelector
-        open={showMethodologyDialog}
-        onOpenChange={setShowMethodologyDialog}
-        currentMethodology={methodology}
-        onSelect={handleMethodologyChange}
-        isChanging={changeMethodology.isPending}
-      />
     </div>
   );
 }

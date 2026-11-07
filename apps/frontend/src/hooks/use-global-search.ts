@@ -2,12 +2,19 @@ import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { resources } from '@/lib/api/client';
 import { query as apiQuery } from '@/lib/api/client';
-import type { Task, Project, Epic, Sprint } from '@/types';
+import type {
+  Task,
+  Project,
+  Epic,
+  Sprint,
+  FunctionalRequirement,
+  ClientRequirement,
+} from '@/types';
 import { logger } from '@/lib/logger';
 
 export interface SearchResult {
   id: string;
-  type: 'task' | 'project' | 'epic' | 'sprint' | 'requirement';
+  type: 'task' | 'project' | 'epic' | 'sprint' | 'requirement' | 'client-requirement';
   title: string;
   description?: string;
   status?: string;
@@ -96,45 +103,48 @@ interface SearchCorpus {
   projects: Project[];
   epics: Epic[];
   sprints: Sprint[];
-  requirements: any[];
+  requirements: FunctionalRequirement[];
+  /**
+   * Client requirements. The top of the whole chain — what the client asked
+   * for — was the one kind of record the search box could not find: its
+   * "requirements" were functional requirements only.
+   */
+  clientRequirements: ClientRequirement[];
 }
 
+/** At most this many matches per kind of record: the box shows the best few. */
+const PER_KIND = 20;
+
 /**
- * Load the full searchable corpus for a workspace. Uses `listAll` so search
- * covers every record, not just the first page — a workspace with more than a
- * page of tasks/projects would otherwise silently hide the rest from search.
- * Keyed by workspace (not by query term) so it is fetched once and reused while
- * the user refines their search client-side.
+ * Ask each collection for what matches `term` (`q=` — the server searches the
+ * fields each one names). The box used to download every task, project, epic,
+ * sprint and requirement in the workspace on the first keystroke and filter
+ * them here; a workspace of any size paid for all of it to show eight rows.
+ * The answers are still ranked here (scoreCorpus), which is cheap on a few
+ * dozen rows.
  */
-async function fetchSearchCorpus(workspaceId: string): Promise<SearchCorpus> {
-  const scope = [apiQuery.equal('workspaceId', workspaceId)];
-  try {
-    const [tasks, projects, epics, sprints] = await Promise.all([
-      resources.listAll<Task>('tasks', scope),
-      resources.listAll<Project>('projects', scope),
-      resources.listAll<Epic>('epics', scope),
-      resources.listAll<Sprint>('sprints', scope),
-    ]);
-
-    let requirements: any[] = [];
-    try {
-      // Requirements collection might not exist in all setups.
-      requirements = (await resources.listAll<any>('functional_requirements', scope)).items;
-    } catch (error) {
-      logger.warn('Requirements collection not found', { error });
-    }
-
-    return {
-      tasks: tasks.items,
-      projects: projects.items,
-      epics: epics.items,
-      sprints: sprints.items,
-      requirements,
-    };
-  } catch (error) {
-    logger.error('Global search error', { error });
-    return { tasks: [], projects: [], epics: [], sprints: [], requirements: [] };
-  }
+async function fetchSearchCorpus(workspaceId: string, term: string): Promise<SearchCorpus> {
+  const ask = <T,>(collection: string) =>
+    resources
+      .list<T>(collection, [
+        apiQuery.equal('workspaceId', workspaceId),
+        apiQuery.text(term),
+        apiQuery.limit(PER_KIND),
+      ])
+      .then((page) => page.items)
+      .catch((error: unknown) => {
+        logger.warn(`Search of ${collection} failed`, { error });
+        return [] as T[];
+      });
+  const [tasks, projects, epics, sprints, requirements, clientRequirements] = await Promise.all([
+    ask<Task>('tasks'),
+    ask<Project>('projects'),
+    ask<Epic>('epics'),
+    ask<Sprint>('sprints'),
+    ask<FunctionalRequirement>('functional_requirements'),
+    ask<ClientRequirement>('client_requirements'),
+  ]);
+  return { tasks, projects, epics, sprints, requirements, clientRequirements };
 }
 
 /** Score and rank the corpus against a search term. Pure + client-side. */
@@ -244,7 +254,7 @@ function scoreCorpus(corpus: SearchCorpus, searchQuery: string): SearchResult[] 
     }
   });
 
-  corpus.requirements.forEach((doc: any) => {
+  corpus.requirements.forEach((doc) => {
     const { score, best, matchedFields } = searchInFields(
       [
         { name: 'title', value: doc.title || '' },
@@ -277,6 +287,32 @@ function scoreCorpus(corpus: SearchCorpus, searchQuery: string): SearchResult[] 
     }
   });
 
+  corpus.clientRequirements.forEach((doc) => {
+    const { score, best, matchedFields } = searchInFields(
+      [
+        { name: 'title', value: doc.title || '' },
+        { name: 'description', value: doc.description || '' },
+        { name: 'client', value: doc.clientName || '' },
+      ],
+      searchQuery
+    );
+    if (score > 0) {
+      results.push({
+        id: doc.id,
+        type: 'client-requirement',
+        title: doc.title,
+        description: doc.description,
+        status: doc.status,
+        priority: doc.priority,
+        projectId: doc.projectId,
+        createdAt: doc.createdAt,
+        relevanceScore: score,
+        matchStrength: best,
+        matchedFields,
+      });
+    }
+  });
+
   // Sort by relevance score (highest first)
   return results.sort((a, b) => b.relevanceScore - a.relevanceScore);
 }
@@ -285,13 +321,14 @@ export function useGlobalSearch(query: string, workspaceId?: string) {
   const trimmed = query.trim();
   const active = !!workspaceId && trimmed.length >= 2;
 
-  // The corpus is fetched once per workspace (only after a real search starts)
-  // and cached; refining the term re-filters in memory without refetching.
+  // One question per term, answered by the server; the previous answer stays on
+  // screen while the next one is asked, so typing does not flash an empty list.
   const corpusQuery = useQuery({
-    queryKey: ['global-search-corpus', workspaceId],
-    queryFn: () => fetchSearchCorpus(workspaceId as string),
+    queryKey: ['global-search', workspaceId, trimmed],
+    queryFn: () => fetchSearchCorpus(workspaceId as string, trimmed),
     enabled: active,
-    staleTime: 30000, // Cache for 30 seconds
+    staleTime: 30000,
+    placeholderData: (previous) => previous,
   });
 
   const data = useMemo<SearchResult[]>(() => {

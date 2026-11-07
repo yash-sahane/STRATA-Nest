@@ -3,7 +3,9 @@
 import {
   getEpicStatusConfig,
   getFunctionalRequirementStatusConfig,
+  getTaskStatusConfig,
 } from '@/lib/semantic/status';
+import Link from 'next/link';
 
 import * as React from 'react';
 import {
@@ -34,7 +36,10 @@ import { format, parseISO } from 'date-fns';
 import { deriveEpicMetrics, useDeleteEpic } from '@/hooks/use-epic';
 import { EditEpicDialog } from '@/components/epic/edit-epic-dialog';
 import { useFunctionalRequirementsByEpic } from '@/hooks/use-functional-requirement';
+import { useClientRequirements } from '@/hooks/use-client-requirement';
 import type { Epic, Task } from '@/types';
+import { useHasPermission } from '@/hooks/use-permissions';
+import { Permission } from '@/lib/permissions';
 
 // Cancelling the Edit dialog or the delete confirm used to close this dialog
 // with it (Escape did not). The guard for that now lives in DialogContent
@@ -67,8 +72,11 @@ export function EpicDetailDialog({
   // those as UTC midnight and renders the previous day west of UTC.
   const formatEpicDate = (value: string) => format(parseISO(value), 'MMM d, yyyy');
 
-  // ✅ Load FRs linked to this epic
   const { data: linkedFRs = [] } = useFunctionalRequirementsByEpic(epic.id);
+  // The client requirement this epic delivers: the dialog never said.
+  const { data: clientRequirements = [] } = useClientRequirements(projectId);
+  const delivers = clientRequirements.find((cr) => cr.id === epic.requirementId);
+  const canAddRequirement = useHasPermission(Permission.CREATE_FUNCTIONAL_REQUIREMENT);
 
   // Progress is TASK-derived, matching the epic card and the persisted rollup in
   // useUpdateTask. This dialog used to prefer an FR-derived number with different
@@ -88,15 +96,19 @@ export function EpicDetailDialog({
       inProgressFRs,
       // deriveEpicMetrics, not a local copy: the card on /epics renders the same
       // numbers, and the two derivations drifted apart.
-      ...deriveEpicMetrics(tasks),
+      ...deriveEpicMetrics(epic, tasks),
     };
-  }, [linkedFRs, tasks]);
+  }, [linkedFRs, tasks, epic]);
 
   const handleDelete = async () => {
-    await deleteEpic.mutateAsync({
-      epicId: epic.id,
-      projectId,
-    });
+    try {
+      await deleteEpic.mutateAsync({
+        epicId: epic.id,
+        projectId,
+      });
+    } catch {
+      return; // the mutation's toast has said why
+    }
     setDeleteDialogOpen(false);
     onOpenChange(false);
   };
@@ -123,7 +135,26 @@ export function EpicDetailDialog({
           </DialogHeader>
 
           <div className="space-y-6">
-            {/* Status - Auto-calculated from FRs */}
+            {/* Where the epic comes from. */}
+            <div className="space-y-2">
+              <h3 className="text-sm font-medium">Delivers</h3>
+              {delivers ? (
+                <Link
+                  href={`/requirements?projectId=${projectId}&crId=${delivers.id}`}
+                  className="text-sm font-medium underline-offset-4 hover:underline"
+                >
+                  {delivers.title}
+                </Link>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Not linked to a client requirement.
+                </p>
+              )}
+            </div>
+
+            <Separator />
+
+            {/* Status — rolled up from its tasks */}
             <div className="space-y-2">
               <label className="text-sm font-medium">Status</label>
               <div className="flex items-center gap-2 px-3 py-2 bg-secondary/30 rounded-md">
@@ -132,7 +163,7 @@ export function EpicDetailDialog({
                 />
                 <span className="text-sm">{getEpicStatusConfig(metrics.status).label}</span>
                 <span className="text-xs text-muted-foreground ml-auto">
-                  (Auto-calculated from tasks)
+                  (From its tasks and requirements)
                 </span>
               </div>
             </div>
@@ -168,14 +199,40 @@ export function EpicDetailDialog({
 
             <Separator />
 
-            {/* Linked FRs */}
+            {/* Its functional requirements — or, with none, where to add the first. */}
+            {linkedFRs.length === 0 && (
+              <>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm text-muted-foreground">
+                    No functional requirements in this epic yet.
+                  </p>
+                  {canAddRequirement && (
+                    <Button asChild variant="outline" size="sm">
+                      <Link href={`/functional-requirements?projectId=${projectId}&action=create&epicId=${epic.id}`}>
+                        Add a functional requirement
+                      </Link>
+                    </Button>
+                  )}
+                </div>
+                <Separator />
+              </>
+            )}
             {linkedFRs.length > 0 && (
               <>
                 <div className="space-y-3">
-                  <label className="text-sm font-medium flex items-center gap-2">
-                    <FileText className="h-4 w-4" />
-                    Linked Functional Requirements ({linkedFRs.length})
-                  </label>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-sm font-medium flex items-center gap-2">
+                      <FileText className="h-4 w-4" />
+                      Functional Requirements ({linkedFRs.length})
+                    </h3>
+                    {canAddRequirement && (
+                      <Button asChild variant="outline" size="sm">
+                        <Link href={`/functional-requirements?projectId=${projectId}&action=create&epicId=${epic.id}`}>
+                          Add a functional requirement
+                        </Link>
+                      </Button>
+                    )}
+                  </div>
                   <div
                     role="region"
                     aria-label="Linked functional requirements"
@@ -192,16 +249,17 @@ export function EpicDetailDialog({
                       const status = getFunctionalRequirementStatusConfig(fr.status);
 
                       return (
-                        <div
+                        <Link
                           key={fr.id}
-                          className="flex items-center justify-between p-3 border rounded-lg"
+                          href={`/functional-requirements?projectId=${projectId}&frId=${fr.id}`}
+                          className="flex items-center justify-between gap-2 p-3 border rounded-lg transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         >
-                          <div className="flex-1">
+                          <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
-                              <Badge variant="outline" className="font-mono text-xs">
+                              <Badge variant="outline" className="font-mono text-xs shrink-0">
                                 {fr.hierarchyId}
                               </Badge>
-                              <span className="font-medium">{fr.title}</span>
+                              <span className="font-medium truncate" title={fr.title}>{fr.title}</span>
                             </div>
                             {fr.description && (
                               <p className="text-xs text-muted-foreground mt-1 line-clamp-1">
@@ -212,7 +270,7 @@ export function EpicDetailDialog({
                           <Badge variant={status.badgeVariant} className={status.badgeClassName}>
                             {status.label}
                           </Badge>
-                        </div>
+                        </Link>
                       );
                     })}
                   </div>
@@ -262,21 +320,26 @@ export function EpicDetailDialog({
                   tabIndex={0}
                   className="space-y-2 max-h-[300px] overflow-y-auto rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
-                  {tasks.map((task) => (
-                    <div
-                      key={task.id}
-                      className="flex items-center justify-between p-3 border rounded-lg"
-                    >
-                      <div className="flex-1">
-                        <div className="font-medium">{task.title}</div>
-                        <div className="flex items-center gap-2 mt-1">
-                          <Badge variant="outline" className="text-xs">
-                            {task.status}
-                          </Badge>
+                  {tasks.map((task) => {
+                    const status = getTaskStatusConfig(task.status);
+                    return (
+                      <Link
+                        key={task.id}
+                        href={`/tasks?projectId=${projectId}&taskId=${task.id}`}
+                        className="flex items-center justify-between gap-2 p-3 border rounded-lg transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                            {task.hierarchyId}
+                          </span>
+                          <span className="truncate font-medium" title={task.title}>{task.title}</span>
                         </div>
-                      </div>
-                    </div>
-                  ))}
+                        <Badge variant={status.badgeVariant} className="shrink-0">
+                          {status.label}
+                        </Badge>
+                      </Link>
+                    );
+                  })}
                 </div>
               )}
             </div>

@@ -1,11 +1,9 @@
 ﻿import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { resources } from '@/lib/api/client';
-import { query, id } from '@/lib/api/client';
+import { query } from '@/lib/api/client';
 import type { EditBasedOn, Epic, Task } from '@/types';
-import { toast } from '@/hooks/use-toast';
-import { saveFailureToast } from '@/lib/api/mutation-error';
-import { createBulkNotifications } from '@/hooks/use-notification';
-import { logger } from '@/lib/logger';
+import { showSaveFailure } from '@/lib/api/mutation-error';
+import { toast } from 'sonner';
 
 /**
  * The one definition of an epic's rollup.
@@ -29,21 +27,16 @@ import { logger } from '@/lib/logger';
  * updateParentProgress in use-task.ts and recalculateParentRollups in
  * use-functional-requirement.ts. Do not hand-roll the arithmetic again.
  */
-export function deriveEpicMetrics(tasks: Pick<Task, 'status'>[]) {
-  const totalTasks = tasks.length;
-  const completedTasks = tasks.filter((t) => t.status === 'DONE').length;
-  const status: Epic['status'] =
-    totalTasks > 0 && completedTasks === totalTasks
-      ? 'DONE'
-      : completedTasks > 0
-        ? 'IN_PROGRESS'
-        : 'TODO';
-
+export function deriveEpicMetrics(epic: Pick<Epic, 'status' | 'progress'>, tasks: Pick<Task, 'status'>[]) {
+  // Status and progress are the server's roll-up (rollups.ts in
+  // packages/prisma), kept current as work under the epic changes, and counting
+  // a requirement that has no task yet as open work. Every screen used to work
+  // out its own from the tasks it had loaded, and none of them counted that.
   return {
-    totalTasks,
-    completedTasks,
-    progress: totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0,
-    status,
+    totalTasks: tasks.length,
+    completedTasks: tasks.filter((t) => t.status === 'DONE').length,
+    progress: epic.progress ?? 0,
+    status: (epic.status ?? 'TODO') as Epic['status'],
   };
 }
 
@@ -65,38 +58,6 @@ export function useEpics(projectId?: string) {
   });
 }
 
-export function useEpic(epicId?: string) {
-  return useQuery({
-    queryKey: ['epic', epicId],
-    queryFn: async () => {
-      if (!epicId) return null;
-
-      const response = await resources.get('epics', epicId);
-
-      return response as unknown as Epic;
-    },
-    enabled: !!epicId,
-  });
-}
-
-// ? NEW: Get epics by requirement (proper hierarchy)
-export function useEpicsByRequirement(requirementId?: string) {
-  return useQuery({
-    queryKey: ['epics', 'requirement', requirementId],
-    queryFn: async () => {
-      if (!requirementId) return [];
-
-      const response = await resources.listAll('epics', [
-        query.equal('requirementId', requirementId),
-        query.orderDesc('createdAt'),
-      ]);
-
-      return response.items as unknown as Epic[];
-    },
-    enabled: !!requirementId,
-  });
-}
-
 export function useCreateEpic() {
   const queryClient = useQueryClient();
 
@@ -111,51 +72,25 @@ export function useCreateEpic() {
       color?: string;
       startDate?: string;
       endDate?: string;
-      assignedTeam?: string; // ? NEW: Team assignment
-      createdBy: string;
-      createdByName?: string;
     }) => {
       // DEFENSIVE: Validate workspaceId is provided
       if (!data.workspaceId) {
         throw new Error('Workspace id is required. Please select a workspace first.');
       }
 
-      // Get existing epics to generate hierarchyId (listAll: a truncated first
-      // page would freeze the counter and re-issue ids that already exist).
-      const existingEpics = await resources.listAll<{ hierarchyId?: string | null }>('epics', [
-        query.equal('projectId', data.projectId),
-      ]);
-
-      // Generate hierarchical id (e.g., ABC-EPIC-01, ABC-EPIC-02). Advance past
-      // the HIGHEST existing number rather than counting rows — deleting an epic
-      // must not make the next create re-use a live id.
-      const highest = existingEpics.items.reduce((max: number, e) => {
-        const n = Number.parseInt(/-EPIC-(\d+)$/.exec(String(e.hierarchyId ?? ''))?.[1] ?? '', 10);
-        return Number.isFinite(n) && n > max ? n : max;
-      }, 0);
-      const epicNumber = (Math.max(existingEpics.items.length, highest) + 1)
-        .toString()
-        .padStart(2, '0');
-      const hierarchyId = `${data.projectCode}-EPIC-${epicNumber}`;
-
+      // No id: the server mints the next ECOM-EPIC-NN.
       const epicData = {
         workspaceId: data.workspaceId,
         projectId: data.projectId,
-        hierarchyId,
         name: data.name,
         description: data.description || '',
         color: data.color,
         startDate: data.startDate,
         endDate: data.endDate,
-        status: 'TODO',
-        progress: 0,
-        requirementId: data.requirementId || '', // ? FIXED: Link to parent requirement
-        assignedTeam: data.assignedTeam || '', // ? NEW: Team assignment
-        createdBy: data.createdBy,
-        createdByName: data.createdByName || '',
+        requirementId: data.requirementId || '',
       };
 
-      const response = await resources.create('epics', id.unique(),
+      const response = await resources.create('epics',
         epicData
       );
 
@@ -169,58 +104,12 @@ export function useCreateEpic() {
         });
       }
 
-      // ? Send EPIC_CREATED notification to workspace members
-      try {
-        // Get project name for notification
-        let projectName = 'Project';
-        try {
-          const project = await resources.get('projects', variables.projectId
-          );
-          projectName = project.name || 'Project';
-        } catch (error) {
-          logger.error('Failed to get project name for notification', { error });
-        }
-
-        // Get workspace members to notify
-        const membersResponse = await resources.listAll('workspace_members', [query.equal('workspaceId', variables.workspaceId)]
-        );
-
-        const memberIds = membersResponse.items
-          .map((m: any) => m.userId)
-          .filter((id: string) => id !== variables.createdBy); // Don't notify creator
-
-        if (memberIds.length > 0) {
-          await createBulkNotifications({
-            workspaceId: variables.workspaceId,
-            userIds: memberIds,
-            type: 'EPIC_CREATED',
-            data: {
-              epicId: createdEpic.id,
-              epicTitle: createdEpic.name,
-              epicHierarchyId: createdEpic.hierarchyId,
-              projectId: variables.projectId,
-              projectName,
-              creatorName: variables.createdByName || 'Team Member',
-              entityType: 'EPIC',
-            },
-          });
-        }
-      } catch (error) {
-        logger.error('Failed to send epic creation notifications', { error });
-      }
-
-      toast({
-        title: 'Success',
-        description: 'Epic created successfully!',
-      });
+      // The workspace is told by the API as part of the write itself
+      // (WorkNotificationSubscriber) — not by this browser afterwards.
+      toast.success('Epic created');
     },
     onError: (error: Error) => {
-      toast({
-        title: 'Error',
-        description:
-          (error instanceof Error ? error.message : String(error)) || 'Failed to create epic',
-        variant: 'destructive',
-      });
+      toast.error('Failed to create epic', { description: error instanceof Error ? error.message : String(error) });
     },
   });
 }
@@ -238,8 +127,6 @@ export function useUpdateEpic() {
         color?: string;
         startDate?: string;
         endDate?: string;
-        status?: Epic['status'];
-        progress?: number;
         requirementId?: string; // ? FIXED: Use requirementId
         assignedTeam?: string; // ? NEW: Team assignment
       }>;
@@ -260,13 +147,18 @@ export function useUpdateEpic() {
           queryKey: ['epics', 'requirement', variables.updates.requirementId],
         });
       }
-      toast({
-        title: 'Success',
-        description: 'Epic updated successfully!',
-      });
+      // Moved to another client requirement (or off one): the server takes the
+      // epic's functional requirements along and re-derives both client
+      // requirements' status, so the requirement lists and counts change too.
+      if (variables.updates.requirementId !== undefined) {
+        queryClient.invalidateQueries({ queryKey: ['functional-requirements', variables.projectId] });
+        queryClient.invalidateQueries({ queryKey: ['client-requirements', variables.projectId] });
+        queryClient.invalidateQueries({ queryKey: ['client-requirement'] });
+      }
+      toast.success('Epic updated');
     },
     onError: (error: Error) => {
-      toast(saveFailureToast(error, 'Failed to update epic'));
+      showSaveFailure(error, 'Failed to update epic');
     },
   });
 }
@@ -285,18 +177,10 @@ export function useDeleteEpic() {
       queryClient.invalidateQueries({ queryKey: ['epics', data.projectId] });
       queryClient.invalidateQueries({ queryKey: ['functional-requirements', data.projectId] });
       queryClient.invalidateQueries({ queryKey: ['tasks', data.projectId] });
-      toast({
-        title: 'Success',
-        description: 'Epic deleted. Linked tasks and requirements were kept.',
-      });
+      toast.success('Epic deleted', { description: 'Its tasks and requirements were kept.' });
     },
     onError: (error: Error) => {
-      toast({
-        title: 'Error',
-        description:
-          (error instanceof Error ? error.message : String(error)) || 'Failed to delete epic',
-        variant: 'destructive',
-      });
+      toast.error('Failed to delete epic', { description: error instanceof Error ? error.message : String(error) });
     },
   });
 }

@@ -6,11 +6,17 @@ import { EmptyState } from '@/components/ui/empty-state';
 import * as React from 'react';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
-import { useWorkspaceMembersRealtime } from '@/hooks/use-realtime';
+import { useTabParam } from '@/hooks/use-tab-param';
+import {
+  useJoinRequestsRealtime,
+  useWorkspaceMembersRealtime,
+  useWorkspaceTasksRealtime,
+} from '@/hooks/use-realtime';
 import { useWorkspaceTasks } from '@/hooks/use-task';
 import {
   useTeamMembers,
   useUpdateTeamMember,
+  useChangeSignInEmail,
   useDeleteTeamMember,
   useMemberTaskCounts,
   getWorkloadLevel,
@@ -18,16 +24,18 @@ import {
   STATUS_CONFIG,
   TeamMember,
   TeamMemberUpdate,
+  useReissueTempPassword,
 } from '@/hooks/use-team';
 import { useJoinRequests } from '@/hooks/use-join-request';
-import { useHasPermission } from '@/hooks/use-permissions';
+import { useCanGrantRole, useHasPermission, useHasPermissionKey } from '@/hooks/use-permissions';
+import { useGrantableRolesWith } from '@/hooks/use-role-options';
 import { Permission } from '@/lib/permissions';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { cn } from '@/lib/utils';
+import { cn, formatDate } from '@/lib/utils';
 import {
   Table,
   TableBody,
@@ -68,29 +76,44 @@ import {
   Users,
   Search,
   MoreVertical,
-  Mail,
   Phone,
   Trash2,
   Edit,
   UserCheck,
   UserPlus,
   ShieldCheck,
+  KeyRound,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { ResourceAllocationCard } from '@/components/team/resource-allocation-card';
 import { AddMembersSection } from '@/components/team/add-members-section';
 import { JoinRequestsSection } from '@/components/team/join-requests-section';
 import { DeleteMemberDialog } from '@/components/team/delete-member-dialog';
+import {
+  TempPasswordNotice,
+  type IssuedCredential,
+} from '@/components/team/temp-password-notice';
 import { calculateTeamWorkload } from '@/lib/team-workload';
-import { addDays } from 'date-fns';
 import { logger } from '@/lib/logger';
 import { getInitials } from '@/lib/utils';
+import { useConfirm } from '@/components/providers/confirm-provider';
 
-export default function TeamPage() {
+const TEAM_TABS = ['members', 'add-members', 'requests'] as const;
+type TeamTab = (typeof TEAM_TABS)[number];
+
+function TeamPageContent() {
   const { user } = useAuth();
+  const confirm = useConfirm();
+  // In the URL so a "new join request" notification can land on the queue.
+  const [tab, setTab] = useTabParam<TeamTab>(TEAM_TABS, 'members');
   const { currentWorkspace, isLoading: workspacesLoading } = useCurrentWorkspace();
   // Realtime: a member joining or leaving left both workload panels stale.
   useWorkspaceMembersRealtime(currentWorkspace?.id);
+  // The page also shows each member's workload and the join-request queue; it
+  // heard about neither, so a reassignment or a new request did not show until
+  // a reload — while the bell had already said "New join request".
+  useWorkspaceTasksRealtime(currentWorkspace?.id);
+  useJoinRequestsRealtime(currentWorkspace?.id);
 
   const {
     data: teamMembers = [],
@@ -103,14 +126,24 @@ export default function TeamPage() {
   const { data: tasks, isLoading: tasksLoading } = useWorkspaceTasks(currentWorkspace?.id);
   const { data: taskCounts } = useMemberTaskCounts(currentWorkspace?.id);
   const updateMember = useUpdateTeamMember();
+  const changeEmail = useChangeSignInEmail();
   const deleteMember = useDeleteTeamMember();
 
   // Invite gating (Add Members tab) is separate from member management gating
   // (Actions column) — each action checks its own permission.
   const canInviteMembers = useHasPermission(Permission.INVITE_MEMBER);
+  // The queue is `join:manage` on the server — reading it, deciding it, and
+  // being notified of it. It used to ride on the invite permission: a role with
+  // only `member:invite` was shown an empty queue as fact, and a role with only
+  // `join:manage` was notified of a request and had no tab to open.
+  const canReviewRequests = useHasPermissionKey(currentWorkspace?.id, 'join:manage');
   const canEditMembers = useHasPermission(Permission.EDIT_MEMBER);
   const canRemoveMembers = useHasPermission(Permission.REMOVE_MEMBER);
   const canManageMembers = canEditMembers || canRemoveMembers;
+  // Rank: the API refuses a role grant above the caller's own, and refuses to
+  // change or remove a member who outranks them.
+  const canGrantRole = useCanGrantRole(currentWorkspace?.id);
+  const grantableRolesWith = useGrantableRolesWith(currentWorkspace?.id);
 
   // Shares the cache entry with the Join Requests tab below, so the summary
   // card and the queue can never disagree — and gated on the same permission
@@ -121,7 +154,7 @@ export default function TeamPage() {
   // and has no tab to open. Passing undefined disables the query outright, so
   // those visitors also stop paying for a list request they can't use.
   const { data: joinRequests = [] } = useJoinRequests(
-    canInviteMembers ? currentWorkspace?.id : undefined
+    canReviewRequests ? currentWorkspace?.id : undefined
   );
   // A request whose author has since joined by another route is not a decision
   // waiting on anybody: the API flags it (`alreadyMember`) and the queue offers
@@ -171,7 +204,7 @@ export default function TeamPage() {
       label: ROLE_CONFIG[key].label,
     }));
     return [...configured, ...[...new Set(present)].map((r) => ({ value: r, label: r }))];
-  }, [teamMembers]);
+  }, [teamMembers, isKnownRoleName]);
 
   const statusOptions = React.useMemo(() => {
     const configured = Object.keys(STATUS_CONFIG);
@@ -186,6 +219,49 @@ export default function TeamPage() {
   const [selectedStatus, setSelectedStatus] = React.useState<string>('ALL');
   const [editingMember, setEditingMember] = React.useState<TeamMember | null>(null);
   const [memberToDelete, setMemberToDelete] = React.useState<TeamMember | null>(null);
+  // A temporary password the API handed back because it could not be mailed.
+  const [reissued, setReissued] = React.useState<IssuedCredential[]>([]);
+  const reissuePassword = useReissueTempPassword();
+
+  // A platform administrator can reset anybody's password (the API allows it);
+  // a manager only the password of somebody who has never signed in.
+  const platformAdmin = user?.isAdmin === true;
+  const handleReissuePassword = async (member: TeamMember) => {
+    if (!member.awaitingFirstSignIn) {
+      // A password they set themselves: replacing it signs them out everywhere.
+      const proceed = await confirm({
+        title: `Reset ${member.name}'s password?`,
+        description:
+          'They are signed out on every device and sign in next with a temporary password, which they then replace.',
+        confirmText: 'Reset password',
+        destructive: true,
+      });
+      if (!proceed) return;
+    }
+    try {
+      const result = await reissuePassword.mutateAsync({
+        userId: member.userId,
+        workspaceId: member.workspaceId,
+      });
+      if (result.temporaryPassword) {
+        // Shown once, here, and nowhere else — see TempPasswordNotice.
+        setReissued([
+          { name: member.name, email: member.email, temporaryPassword: result.temporaryPassword },
+        ]);
+        toast.success('New temporary password issued', {
+          description: `Email is not set up here, so pass it to ${member.name} yourself. It is shown above the list.`,
+        });
+      } else {
+        toast.success('New temporary password sent', {
+          description: `It has been emailed to ${member.email}. The old one no longer works.`,
+        });
+      }
+    } catch (error) {
+      toast.error("Couldn't issue a new password", {
+        description: error instanceof Error ? error.message : 'Please try again.',
+      });
+    }
+  };
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = React.useState(false);
 
@@ -244,7 +320,7 @@ export default function TeamPage() {
       // non-zero as the side effect of an admin deactivating somebody. The real
       // queue of people waiting on a decision is the join requests, which only
       // a caller who can action them is allowed to read — hence the gate.
-      ...(canInviteMembers
+      ...(canReviewRequests
         ? [
             {
               title: 'Pending Requests',
@@ -265,17 +341,13 @@ export default function TeamPage() {
         icon: ShieldCheck,
       },
     ],
-    [stats, awaitingReview, canInviteMembers]
+    [stats, awaitingReview, canReviewRequests]
   );
 
-  // Calculate team workload (next 14 days)
+  // Each member's open tasks, against what counts as a full load.
   const workloadData = React.useMemo(() => {
     if (!tasks || !teamMembers) return null;
-
-    const startDate = new Date();
-    const endDate = addDays(startDate, 14);
-
-    return calculateTeamWorkload(tasks, teamMembers, startDate, endDate);
+    return calculateTeamWorkload(tasks, teamMembers);
   }, [tasks, teamMembers]);
 
   const handleEditMember = (member: TeamMember) => {
@@ -294,9 +366,29 @@ export default function TeamPage() {
     // overwrite a custom workspace role with the normalized display value.
     const role = formData.get('role') as string;
     const status = formData.get('status') as TeamMember['status'];
+    const email = String(formData.get('email') ?? editingMember.email).trim();
     const updates: TeamMemberUpdate = {};
     if (role !== editingMember.rawRole) updates.role = role;
     if (status !== editingMember.status) updates.status = status;
+    const emailChanged = user?.isAdmin === true && email.toLowerCase() !== editingMember.email.toLowerCase();
+
+    if (emailChanged) {
+      try {
+        await changeEmail.mutateAsync({
+          userId: editingMember.userId,
+          workspaceId: editingMember.workspaceId,
+          email,
+        });
+        toast.success('Sign-in email changed', {
+          description: `${editingMember.name} signs in with ${email.toLowerCase()} from now on.`,
+        });
+      } catch (error) {
+        toast.error("Couldn't change the sign-in email", {
+          description: error instanceof Error ? error.message : undefined,
+        });
+        return;
+      }
+    }
 
     if (Object.keys(updates).length === 0) {
       setIsEditDialogOpen(false);
@@ -343,11 +435,14 @@ export default function TeamPage() {
         workspaceId: memberToDelete.workspaceId,
       });
 
-      toast.success('Team member removed successfully');
+      toast.success(`${memberToDelete.name} removed from the workspace`);
       setDeleteDialogOpen(false);
       setMemberToDelete(null);
     } catch (error) {
-      toast.error('Failed to remove team member');
+      // The server says why (the owner, the last manager, a higher role): say it.
+      toast.error("Couldn't remove the member", {
+        description: error instanceof Error ? error.message : undefined,
+      });
       logger.error('Unexpected error', { error: error });
     }
   };
@@ -379,20 +474,26 @@ export default function TeamPage() {
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
       <PageHeader
         icon={Users}
-        title="Team Management"
+        title="Team"
         description={`Manage members, roles, and workload for ${currentWorkspace.name}`}
       />
 
       {/* Team Management Tabs */}
-      <Tabs defaultValue="members" className="space-y-6">
-        <TabsList
-          className={cn('grid w-full sm:w-fit', canInviteMembers ? 'grid-cols-3' : 'grid-cols-1')}
-        >
+      <Tabs
+        // Each of the other two tabs exists only for someone allowed to use it;
+        // a link to one must not leave anybody else on an empty page.
+        value={
+          (tab === 'add-members' && !canInviteMembers) || (tab === 'requests' && !canReviewRequests)
+            ? 'members'
+            : tab
+        }
+        onValueChange={(next) => setTab(next as TeamTab)}
+        className="space-y-6"
+      >
+        <TabsList className="flex h-auto w-full flex-wrap justify-start sm:w-fit">
           <TabsTrigger value="members">Team Members</TabsTrigger>
           {canInviteMembers && <TabsTrigger value="add-members">Add Members</TabsTrigger>}
-          {/* Same permission as inviting: both decide who gets into the
-              workspace, and the API gates approve/reject on join:manage. */}
-          {canInviteMembers && <TabsTrigger value="requests">Join Requests</TabsTrigger>}
+          {canReviewRequests && <TabsTrigger value="requests">Join Requests</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="members" className="space-y-6">
@@ -411,7 +512,7 @@ export default function TeamPage() {
               return (
                 <Card
                   key={card.title}
-                  className="overflow-hidden hover-lift"
+                  className="overflow-hidden"
                 >
                   <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                     <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -510,6 +611,8 @@ export default function TeamPage() {
                 </Select>
               </div>
 
+              <TempPasswordNotice credentials={reissued} onDismiss={() => setReissued([])} />
+
               {/* Team Members Table */}
               <div className="overflow-hidden rounded-md border">
                 <Table className="min-w-[640px] lg:min-w-full">
@@ -519,7 +622,6 @@ export default function TeamPage() {
                       <TableHead>Role</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Workload</TableHead>
-                      <TableHead className="hidden xl:table-cell">Contact</TableHead>
                       <TableHead className="hidden lg:table-cell">Joined</TableHead>
                       {canManageMembers && <TableHead className="text-right">Actions</TableHead>}
                     </TableRow>
@@ -538,10 +640,14 @@ export default function TeamPage() {
                       filteredMembers.map((member) => {
                         const isCurrentUser = member.userId === user?.id;
                         const isOwner = member.userId === currentWorkspace.ownerId;
-                        const canRemoveThisMember = canRemoveMembers && !isOwner && !isCurrentUser;
+                        // ...nor a member whose role can do more than the caller's.
+                        const outranksMe = !canGrantRole(member.rawRole);
+                        const canRemoveThisMember =
+                          canRemoveMembers && !isOwner && !isCurrentUser && !outranksMe;
                         // Same rule as removal: the API refuses to demote or
                         // deactivate the owner or the caller, so don't offer it.
-                        const canEditThisMember = canEditMembers && !isOwner && !isCurrentUser;
+                        const canEditThisMember =
+                          canEditMembers && !isOwner && !isCurrentUser && !outranksMe;
                         // The colour comes from the normalised role; the LABEL is
                         // what is actually stored. Using the config's label showed a
                         // custom workspace role as "Member", because normalizeRole
@@ -582,7 +688,18 @@ export default function TeamPage() {
                                 </div>
                                 <div className="min-w-0">
                                   <div className="flex items-center gap-2 font-medium">
-                                    <span className="truncate">{member.name}</span>
+                                    <span className="truncate" title={member.name}>{member.name}</span>
+                                    {/* Somebody who was added and has never got in.
+                                        Until now the roster showed them exactly like
+                                        everybody else, so nobody knew to chase it. */}
+                                    {member.awaitingFirstSignIn && (
+                                      <Badge
+                                        variant="outline"
+                                        className="h-5 whitespace-nowrap rounded-md px-1.5 text-2xs font-medium"
+                                      >
+                                        Hasn&apos;t signed in yet
+                                      </Badge>
+                                    )}
                                     {isCurrentUser && (
                                       <Badge
                                         variant="secondary"
@@ -592,9 +709,20 @@ export default function TeamPage() {
                                       </Badge>
                                     )}
                                   </div>
-                                  <div className="truncate text-sm text-muted-foreground">
+                                  <div className="truncate text-sm text-muted-foreground" title={member.email}>
                                     {member.email}
                                   </div>
+                                  {/* The phone lives with the name and address now. A
+                                      separate Contact column printed the email a second
+                                      time, a few centimetres to the right, and its width
+                                      pushed Joined and the row actions off the table at
+                                      an ordinary 1440px window. */}
+                                  {member.phone && (
+                                    <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                                      <Phone className="h-3 w-3 shrink-0" aria-hidden="true" />
+                                      <span className="truncate">{member.phone}</span>
+                                    </div>
+                                  )}
                                 </div>
                               </div>
                             </TableCell>
@@ -617,9 +745,9 @@ export default function TeamPage() {
                                   >
                                     {workload.label}
                                   </Badge>
-                                  <span className="text-sm font-medium">{activeTasks} active</span>
+                                  <span className="whitespace-nowrap text-sm font-medium">{activeTasks} active</span>
                                 </div>
-                                <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                                <div className="flex items-center gap-3 whitespace-nowrap text-xs text-muted-foreground">
                                   <span>{completedTasks} done</span>
                                   {overdueTasks > 0 && (
                                     <span className="text-red-500 font-medium">
@@ -629,22 +757,8 @@ export default function TeamPage() {
                                 </div>
                               </div>
                             </TableCell>
-                            <TableCell className="hidden xl:table-cell">
-                              <div className="flex flex-col gap-1 text-sm">
-                                <div className="flex max-w-64 items-center gap-2 text-muted-foreground">
-                                  <Mail className="h-3 w-3" />
-                                  <span className="truncate">{member.email}</span>
-                                </div>
-                                {member.phone && (
-                                  <div className="flex items-center gap-2 text-muted-foreground">
-                                    <Phone className="h-3 w-3" />
-                                    {member.phone}
-                                  </div>
-                                )}
-                              </div>
-                            </TableCell>
-                            <TableCell className="hidden text-muted-foreground lg:table-cell">
-                              {new Date(member.createdAt).toLocaleDateString()}
+                            <TableCell className="hidden whitespace-nowrap text-muted-foreground lg:table-cell">
+                              {formatDate(member.createdAt)}
                             </TableCell>
                             {canManageMembers && (
                               <TableCell className="text-right">
@@ -668,6 +782,18 @@ export default function TeamPage() {
                                         <DropdownMenuItem onClick={() => handleEditMember(member)}>
                                           <Edit className="h-4 w-4 mr-2" />
                                           Edit Member
+                                        </DropdownMenuItem>
+                                      )}
+                                      {((canEditThisMember && member.awaitingFirstSignIn) ||
+                                        (platformAdmin && member.userId !== user?.id)) && (
+                                        <DropdownMenuItem
+                                          disabled={reissuePassword.isPending}
+                                          onClick={() => handleReissuePassword(member)}
+                                        >
+                                          <KeyRound className="h-4 w-4 mr-2" />
+                                          {member.awaitingFirstSignIn
+                                            ? 'New Temporary Password'
+                                            : 'Reset Password'}
                                         </DropdownMenuItem>
                                       )}
                                       {canRemoveThisMember && (
@@ -696,7 +822,11 @@ export default function TeamPage() {
         </TabsContent>
 
         {canInviteMembers && (
-          <TabsContent value="add-members">
+          // Kept mounted while another tab is showing. This section holds the
+          // only copy of a new account's temporary password when the server
+          // cannot mail it; unmounting on a tab click threw it away, and there
+          // is no way to issue another.
+          <TabsContent value="add-members" forceMount className="data-[state=inactive]:hidden">
             <AddMembersSection
               workspaceId={currentWorkspace.id}
               workspaceName={currentWorkspace.name}
@@ -705,7 +835,7 @@ export default function TeamPage() {
           </TabsContent>
         )}
 
-        {canInviteMembers && (
+        {canReviewRequests && (
           <TabsContent value="requests">
             <JoinRequestsSection workspaceId={currentWorkspace.id} />
           </TabsContent>
@@ -726,6 +856,21 @@ export default function TeamPage() {
           {editingMember && (
             <form onSubmit={handleUpdateMember}>
               <div className="space-y-4">
+                {user?.isAdmin === true && (
+                  <div>
+                    <Label htmlFor="member-email">Sign-in email</Label>
+                    <Input
+                      id="member-email"
+                      name="email"
+                      type="email"
+                      defaultValue={editingMember.email}
+                      required
+                    />
+                    <p className="mt-1.5 text-xs text-muted-foreground">
+                      As a platform administrator you can change the address they sign in with.
+                    </p>
+                  </div>
+                )}
                 <div>
                   <Label htmlFor="role">Role</Label>
                   {/* Seeded from the RAW role so a custom workspace role stays
@@ -735,14 +880,12 @@ export default function TeamPage() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {!(editingMember.rawRole in ROLE_CONFIG) && (
-                        <SelectItem value={editingMember.rawRole}>
-                          {editingMember.rawRole}
-                        </SelectItem>
-                      )}
-                      {Object.entries(ROLE_CONFIG).map(([role, config]) => (
-                        <SelectItem key={role} value={role}>
-                          {config.label}
+                      {/* Only roles the caller may hand out — the workspace's
+                          custom roles among them — plus the one the member
+                          already holds so the field is never blank. */}
+                      {grantableRolesWith(editingMember.rawRole).map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -782,8 +925,8 @@ export default function TeamPage() {
                 <Button type="button" variant="outline" onClick={() => setIsEditDialogOpen(false)}>
                   Cancel
                 </Button>
-                <Button type="submit" disabled={updateMember.isPending}>
-                  {updateMember.isPending ? 'Saving...' : 'Save Changes'}
+                <Button type="submit" disabled={updateMember.isPending || changeEmail.isPending}>
+                  {updateMember.isPending || changeEmail.isPending ? 'Saving...' : 'Save Changes'}
                 </Button>
               </DialogFooter>
             </form>
@@ -798,7 +941,32 @@ export default function TeamPage() {
         member={memberToDelete}
         onConfirm={confirmDeleteMember}
         isDeleting={deleteMember.isPending}
+        onDeactivate={async () => {
+          if (!memberToDelete) return;
+          try {
+            await updateMember.mutateAsync({ id: memberToDelete.id, data: { status: 'INACTIVE' } });
+            toast.success(`${memberToDelete.name}'s access is switched off`, {
+              description: 'Everything is kept. Switch it back on from Edit Member.',
+            });
+            setDeleteDialogOpen(false);
+            setMemberToDelete(null);
+          } catch (error) {
+            toast.error("Couldn't switch their access off", {
+              description: error instanceof Error ? error.message : undefined,
+            });
+          }
+        }}
       />
     </div>
+  );
+}
+
+// useTabParam reads useSearchParams(), which bails out of prerendering unless a
+// Suspense boundary sits above the component that calls it.
+export default function TeamPage() {
+  return (
+    <React.Suspense fallback={<PageLoader message="Loading team members..." />}>
+      <TeamPageContent />
+    </React.Suspense>
   );
 }

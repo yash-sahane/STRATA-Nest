@@ -20,7 +20,7 @@ import {
   ATTENDANCE_STATUS,
   getUserLeaveDates,
 } from '@/lib/attendance-utils';
-import { formatDateOnly } from '@/lib/utils/working-days';
+import { businessDateOf, formatDateOnly, parseDateOnly } from '@/lib/utils/working-days';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -60,14 +60,17 @@ export function AttendanceCalendar() {
   // A public holiday is not a working day, so a past holiday with no check-in
   // must not be painted ABSENT.
   const { data: holidays = [] } = useHolidays(currentWorkspace?.id);
-  const [currentMonth, setCurrentMonth] = useState(new Date().getMonth());
-  const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
+  // Opens on the business day's month — the app's today — not the browser's.
+  const [currentMonth, setCurrentMonth] = useState(() => parseDateOnly(getCurrentDate()).getMonth());
+  const [currentYear, setCurrentYear] = useState(() => parseDateOnly(getCurrentDate()).getFullYear());
   const [leaveDates, setLeaveDates] = useState<Set<string>>(new Set());
   // The day this user's membership began. Absence before it is not absence.
+  // The BUSINESS day, like every date it is compared with here: the timestamp's
+  // own first ten characters are its UTC date (see businessDateOf).
   const { data: roster = [] } = useTeamMembers(currentWorkspace?.id);
   const membershipStart = React.useMemo(() => {
     const mine = roster.find((m) => m.userId === user?.id);
-    return mine?.joinedAt ? String(mine.joinedAt).slice(0, 10) : '';
+    return mine?.joinedAt ? businessDateOf(String(mine.joinedAt)) : '';
   }, [roster, user?.id]);
 
   const { data: attendanceData, isLoading, isError, refetch } = useMonthlyAttendance(
@@ -188,7 +191,7 @@ export function AttendanceCalendar() {
     const isSaturday = date.getDay() === 6;
     const saturdayWorking = isSaturday && isSaturdayWorking(dateString);
 
-    let classes = 'relative min-h-[80px] p-2 border rounded-lg transition-all hover:shadow-md ';
+    let classes = 'relative min-h-14 min-w-0 overflow-hidden p-1 border rounded-lg sm:min-h-[80px] sm:p-2 ';
 
     if (isToday) {
       classes += 'ring-2 ring-primary ring-offset-2 ';
@@ -198,7 +201,7 @@ export function AttendanceCalendar() {
       const colorClass = getAttendanceStatusColor(status);
       classes += colorClass + ' ';
     } else if (!isPast) {
-      classes += 'bg-card hover:bg-accent ';
+      classes += 'bg-card ';
     } else {
       classes += 'bg-muted ';
     }
@@ -263,7 +266,7 @@ export function AttendanceCalendar() {
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <CardTitle>Attendance Calendar</CardTitle>
           <div className="flex items-center gap-2">
             <Button
@@ -274,7 +277,7 @@ export function AttendanceCalendar() {
             >
               <ChevronLeft className="h-4 w-4" />
             </Button>
-            <span className="min-w-[180px] text-center font-semibold">{monthName}</span>
+            <span className="min-w-0 text-center font-semibold sm:min-w-[180px]">{monthName}</span>
             <Button
               variant="outline"
               size="icon"
@@ -288,11 +291,11 @@ export function AttendanceCalendar() {
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Working Saturday Info */}
-        <div className="flex items-start gap-2 p-3 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-lg">
-          <Info className="h-4 w-4 text-blue-600 dark:text-blue-400 mt-0.5 flex-shrink-0" />
-          <div className="text-sm text-blue-800 dark:text-blue-200">
+        <div className="flex items-start gap-2 p-3 bg-info/10 border border-info/30 rounded-lg">
+          <Info className="h-4 w-4 text-info-text mt-0.5 flex-shrink-0" />
+          <div className="text-sm text-foreground">
             <p className="font-medium">Working Schedule</p>
-            <p className="text-blue-700 dark:text-blue-300">
+            <p className="text-info-text">
               Saturdays on Week 1 and Week 3 are working days. All other Saturdays are off.
             </p>
           </div>
@@ -315,17 +318,17 @@ export function AttendanceCalendar() {
         </div>
 
         {/* Calendar Grid */}
-        <div className="grid grid-cols-7 gap-2">
+        <div className="grid grid-cols-7 gap-1 sm:gap-2">
           {/* Day headers */}
           {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
-            <div key={day} className="text-center font-semibold text-sm py-2">
+            <div key={day} className="text-center font-semibold text-xs py-2 sm:text-sm">
               {day}
             </div>
           ))}
 
           {/* Empty cells for padding - ensures dates align with correct weekday */}
           {Array.from({ length: firstDayOfMonth }).map((_, index) => (
-            <div key={`empty-${index}`} className="min-h-[80px]" />
+            <div key={`empty-${index}`} className="min-h-14 sm:min-h-[80px]" />
           ))}
 
           {/* Date cells */}
@@ -340,7 +343,11 @@ export function AttendanceCalendar() {
             const weekNum = getWeekOfMonth(dateString);
 
             return (
-              <div key={dateString} className={getDayCellClass(date)}>
+              /* data-date: the day this cell is, for anything that has to find
+                 one cell. Two browser checks found cells by a sizing class,
+                 and a responsive tweak to it made one fail and the other pass
+                 without looking at anything. */
+              <div key={dateString} data-date={dateString} className={getDayCellClass(date)}>
                 <div className="flex flex-col h-full">
                   <div className="flex items-start justify-between mb-1">
                     <span className="font-semibold text-sm">{date.getDate()}</span>
@@ -354,7 +361,7 @@ export function AttendanceCalendar() {
                       /* w-fit: this is a flex item of the flex-col wrapper, so the
                          default align-items:stretch made a two-character label span
                          the entire day cell and read as a filled bar, not a badge. */
-                      className="w-fit text-2xs px-1 py-0 mb-1 bg-blue-50 dark:bg-blue-950 border-blue-300 dark:border-blue-700"
+                      className="w-fit text-2xs px-1 py-0 mb-1 bg-info/10 border-blue-300 dark:border-blue-700"
                     >
                       W{weekNum}
                     </Badge>
@@ -383,19 +390,19 @@ export function AttendanceCalendar() {
         {attendanceData && attendanceData.length > 0 && (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-4 border-t">
             <div className="text-center">
-              <p className="text-2xl font-bold text-green-700 dark:text-green-400">{monthSummary.present}</p>
+              <p className="text-2xl font-bold text-success-text">{monthSummary.present}</p>
               <p className="text-xs text-muted-foreground">Present Days</p>
             </div>
             <div className="text-center">
-              <p className="text-2xl font-bold text-orange-700 dark:text-orange-400">{monthSummary.late}</p>
+              <p className="text-2xl font-bold text-warning-text">{monthSummary.late}</p>
               <p className="text-xs text-muted-foreground">Late Days</p>
             </div>
             <div className="text-center">
-              <p className="text-2xl font-bold text-red-600 dark:text-red-400">{monthSummary.absent}</p>
+              <p className="text-2xl font-bold text-destructive-text">{monthSummary.absent}</p>
               <p className="text-xs text-muted-foreground">Absent Days</p>
             </div>
             <div className="text-center">
-              <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">
+              <p className="text-2xl font-bold text-info-text">
                 {attendanceData
                   .filter((r) => r.workHours)
                   .reduce((sum, r) => sum + (r.workHours || 0), 0)

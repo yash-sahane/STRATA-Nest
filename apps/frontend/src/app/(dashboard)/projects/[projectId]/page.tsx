@@ -1,11 +1,21 @@
 'use client';
 
 import { PageLoader } from '@/components/ui/page-loader';
-import { ErrorState } from '@/components/ui/error-state';
-import { getProjectStatusConfig } from '@/lib/semantic/status';
+import {
+  getEpicStatusConfig,
+  getProjectStatusConfig,
+  getSprintStatusConfig,
+  getTaskStatusConfig,
+} from '@/lib/semantic/status';
+import Link from 'next/link';
+import { useHasPermissionIn } from '@/hooks/use-permissions';
+import { Permission } from '@/lib/permissions';
+import { rememberSelectedProject } from '@/hooks/use-project-selection-sync';
+import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
+import { getInitials } from '@/lib/utils';
 
 import * as React from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams } from 'next/navigation';
 import { useProject } from '@/hooks/use-project';
 import { useTasks } from '@/hooks/use-task';
 import { useEpics } from '@/hooks/use-epic';
@@ -18,10 +28,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ProjectFilesPanel } from '@/components/files/project-files-panel';
 import {
   ArrowLeft,
+  ArrowLeftRight,
   Calendar,
   Users,
-  GitBranch,
-  Kanban,
   Settings,
   CheckCircle2,
   Clock,
@@ -30,16 +39,72 @@ import {
 } from 'lucide-react';
 import { formatProjectDate } from '@/components/projects/project-dates';
 import { ProjectHealthCard } from '@/components/projects/project-health-card';
+import { ProjectLoadFailure, ProjectNotFound } from '@/components/projects/project-load-failure';
 import { calculateProjectHealth } from '@/lib/project-health';
+import { useProjectsRealtime, useTasksRealtime, useSprintsRealtime, useEpicsRealtime } from '@/hooks/use-realtime';
+
+/** How many people the "People on This Project" card names before "+N more". */
+const PEOPLE_SHOWN = 6;
 
 export default function ProjectDetailPage() {
   const params = useParams();
-  const router = useRouter();
   const projectId = params.projectId as string;
   // Fetch by id: resolving through the CURRENT workspace's list reported a
   // perfectly accessible project as missing whenever the selected workspace was
   // a different one (or had not hydrated yet on first paint).
-  const { data: project, isLoading, isError, refetch } = useProject(projectId);
+  const { data: project, isLoading, isError, error, refetch } = useProject(projectId);
+  // The project somebody opened is the one the tasks, sprints and requirements
+  // pages should open on next — they each picked whatever they last showed.
+  React.useEffect(() => {
+    if (project?.id) rememberSelectedProject(project.id);
+  }, [project?.id]);
+  // Asked of the PROJECT's workspace, as its settings page asks: asked of the
+  // selected one, Settings was offered (or withheld) on the strength of a role
+  // in a different workspace from the project's.
+  const { allowed: canEditProject } = useHasPermissionIn(
+    project?.workspaceId,
+    Permission.EDIT_PROJECT
+  );
+  const { allowed: canManageSettings } = useHasPermissionIn(
+    project?.workspaceId,
+    Permission.MANAGE_PROJECT_SETTINGS
+  );
+  const canChangeProject = canEditProject || canManageSettings;
+
+  // Open the project in its own workspace. The Requirements, Epics, Sprints and
+  // Tasks links below land on pages that choose from the SELECTED workspace's
+  // projects, so for a project from another one (a notification, a search
+  // result, a shared link) they could not find it and opened that workspace's
+  // first project instead. The bell switches workspace before it navigates for
+  // the same reason (notification-center.tsx).
+  const {
+    currentWorkspaceId,
+    workspaces,
+    isLoading: workspacesLoading,
+    setCurrentWorkspaceId,
+  } = useCurrentWorkspace();
+  const projectWorkspace = workspaces?.find((w) => w.id === project?.workspaceId);
+  const inOtherWorkspace = Boolean(project) && project?.workspaceId !== currentWorkspaceId;
+  // Once per project: somebody who then switches away by hand is not dragged
+  // back on the next render — they get a button to return instead.
+  const [switchedFor, setSwitchedFor] = React.useState<string | null>(null);
+  const switching =
+    inOtherWorkspace &&
+    (workspacesLoading || (Boolean(projectWorkspace) && switchedFor !== project?.id));
+  React.useEffect(() => {
+    if (!project || !projectWorkspace || project.workspaceId === currentWorkspaceId) return;
+    // Not before a workspace is selected at all: useCurrentWorkspace's own
+    // effect picks one then, and would land after this switch and undo it.
+    if (!currentWorkspaceId || switchedFor === project.id) return;
+    setSwitchedFor(project.id);
+    setCurrentWorkspaceId(project.workspaceId);
+  }, [project, projectWorkspace, currentWorkspaceId, switchedFor, setCurrentWorkspaceId]);
+  // The project's own page: its tasks, sprints and epics are other people's
+  // work in progress, and this used to show them as they were when it opened.
+  useProjectsRealtime(project?.workspaceId);
+  useTasksRealtime(projectId);
+  useSprintsRealtime(projectId);
+  useEpicsRealtime(projectId);
   // Keyed off the ROUTE PARAM, not `project?.id`. They are the same value, but
   // waiting for the project response turned the task list into a second round
   // trip that only started once the first had landed — the waterfall that made
@@ -50,6 +115,28 @@ export default function ProjectDetailPage() {
   // list exists, which is exactly the window the health card's loading state
   // has to cover.
   const { data: tasks = [], isPending: tasksPending } = useTasks(projectId);
+  // Who is working on it: everybody a task of this project is assigned to. The
+  // card used to count `project.memberIds`, which the create form seeds with
+  // whoever made the project and nothing ever updates — so it read "1 team
+  // member(s)" for a project ten people were delivering. Then it gave only the
+  // count; it names them now, with how much each still has open, busiest first.
+  const people = React.useMemo(() => {
+    const byId = new Map<string, { id: string; name: string; open: number }>();
+    for (const task of tasks) {
+      (task.assigneeIds ?? []).forEach((id, index) => {
+        const person = byId.get(id) ?? { id, name: '', open: 0 };
+        // Names are index-aligned with the ids; any task that names somebody will do.
+        if (!person.name) person.name = task.assigneeNames?.[index] ?? '';
+        if (task.status !== 'DONE') person.open += 1;
+        byId.set(id, person);
+      });
+    }
+    // Busiest first; then by name, with anybody whose name is unknown last.
+    return [...byId.values()].sort(
+      (a, b) =>
+        b.open - a.open || Number(!a.name) - Number(!b.name) || a.name.localeCompare(b.name)
+    );
+  }, [tasks]);
   // For "Recent Updates" below, which promises every project entity. Both are
   // already cached elsewhere on this route, so neither is an extra round trip in
   // practice.
@@ -115,8 +202,11 @@ export default function ProjectDetailPage() {
     const inProgress = tasks.filter(t => t.status === 'IN_PROGRESS').length;
     const todo = tasks.filter(t => t.status === 'TODO' || t.status === 'BACKLOG').length;
     const review = tasks.filter(t => t.status === 'REVIEW').length;
+    // Review is work under way too. No card showed it, so the cards did not add
+    // up to the total beside them (6 done + 2 in progress + 10 to do of 20).
+    const underway = inProgress + review;
 
-    return { total, completed, inProgress, todo, review };
+    return { total, completed, inProgress, todo, review, underway };
   }, [tasks]);
 
   // Calculate project health. Computed for an empty project too — the card
@@ -131,60 +221,44 @@ export default function ProjectDetailPage() {
     return <PageLoader message="Loading project..." />;
   }
 
-  // A failed request is not a missing project: without this the "not found"
-  // card below claimed the project did not exist whenever the fetch broke.
+  // A failed request is not a missing project, and a missing project is not a
+  // connection problem — see ProjectLoadFailure: a 404 offered a retry that
+  // could only fail again.
   if (isError) {
-    return (
-      <div className="space-y-6">
-        <div>
-          <Button variant="ghost" onClick={() => router.push('/projects')}>
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            Back to Projects
-          </Button>
-        </div>
-        <ErrorState
-          title="Couldn't load this project"
-          description="The project could not be fetched. Check your connection and try again."
-          onRetry={() => refetch()}
-        />
-      </div>
-    );
+    return <ProjectLoadFailure error={error} onRetry={() => void refetch()} />;
   }
 
-  if (!project) {
+  if (!project) return <ProjectNotFound />;
+
+  // Held back until the workspace is the project's, so nothing renders with
+  // links and permissions that belong to the workspace being left.
+  if (switching) {
     return (
-      <div className="space-y-6">
-        <div>
-          <Button variant="ghost" onClick={() => router.push('/projects')}>
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            Back to Projects
-          </Button>
-        </div>
-        <Card>
-          <CardHeader>
-            <CardTitle>Project Not Found</CardTitle>
-            <CardDescription>
-              The project you&apos;re looking for doesn&apos;t exist or you don&apos;t have access to it.
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      </div>
+      <PageLoader
+        message={
+          projectWorkspace
+            ? `Opening ${project.name} in ${projectWorkspace.name}...`
+            : 'Loading project...'
+        }
+      />
     );
   }
 
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
             <Button
               variant="ghost"
               size="sm"
               aria-label="Back to projects"
-              onClick={() => router.push('/projects')}
+              asChild
             >
-              <ArrowLeft className="h-4 w-4" />
+              <Link href="/projects">
+                <ArrowLeft className="h-4 w-4" />
+              </Link>
             </Button>
             <div>
               <div className="flex items-center gap-2">
@@ -194,16 +268,54 @@ export default function ProjectDetailPage() {
                 </Badge>
               </div>
               <p className="text-muted-foreground">
-                {project.shortCode} • {project.methodology === 'SCRUM' ? 'Scrum' : 'Kanban'} Project
+                {project.shortCode}
               </p>
             </div>
           </div>
         </div>
 
-        <Button onClick={() => router.push(`/requirements?projectId=${project.id}`)}>
-          <FileText className="mr-2 h-4 w-4" />
-          View Requirements
-        </Button>
+        {/* Everything the project holds, from here. */}
+        <nav aria-label="This project" className="flex flex-wrap items-center gap-2">
+          {/* Those pages show the SELECTED workspace's projects, so from any
+              other workspace these links would open somebody else's project:
+              offer the way back to this one's workspace instead. */}
+          {inOtherWorkspace ? (
+            projectWorkspace ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentWorkspaceId(projectWorkspace.id)}
+              >
+                <ArrowLeftRight className="mr-2 h-4 w-4" />
+                Switch to {projectWorkspace.name}
+              </Button>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                This project is in a workspace you are not a member of, so its requirements,
+                epics, sprints and tasks cannot be opened from here.
+              </p>
+            )
+          ) : (
+            [
+              { label: 'Requirements', href: `/requirements?projectId=${project.id}` },
+              { label: 'Epics', href: `/epics?projectId=${project.id}` },
+              { label: 'Sprints', href: `/sprints?projectId=${project.id}` },
+              { label: 'Tasks', href: `/tasks?projectId=${project.id}` },
+            ].map((place) => (
+              <Button key={place.label} asChild variant="outline" size="sm">
+                <Link href={place.href}>{place.label}</Link>
+              </Button>
+            ))
+          )}
+          {canChangeProject && (
+            <Button asChild size="sm">
+              <Link href={`/projects/${project.id}/settings`}>
+                <Settings className="mr-2 h-4 w-4" />
+                Settings
+              </Link>
+            </Button>
+          )}
+        </nav>
       </div>
 
       {/* Stats Grid */}
@@ -240,9 +352,11 @@ export default function ProjectDetailPage() {
             <Clock className="h-4 w-4 text-blue-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{taskStats.inProgress}</div>
+            <div className="text-2xl font-bold">{taskStats.underway}</div>
             <p className="text-xs text-muted-foreground">
-              Currently being worked on
+              {taskStats.review > 0
+                ? `Being worked on, ${taskStats.review} of them in review`
+                : 'Currently being worked on'}
             </p>
           </CardContent>
         </Card>
@@ -266,7 +380,6 @@ export default function ProjectDetailPage() {
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="files">Files</TabsTrigger>
-          <TabsTrigger value="settings">Settings</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="space-y-4">
@@ -322,23 +435,6 @@ export default function ProjectDetailPage() {
                 </div>
 
                 <div>
-                  <div className="text-sm font-medium text-muted-foreground mb-1">Methodology</div>
-                  <div className="flex items-center gap-2">
-                    {project.methodology === 'SCRUM' ? (
-                      <div className="flex items-center gap-1 text-blue-600 dark:text-blue-400">
-                        <GitBranch className="h-4 w-4" />
-                        <span className="text-sm">Scrum</span>
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-1 text-purple-600 dark:text-purple-400">
-                        <Kanban className="h-4 w-4" />
-                        <span className="text-sm">Kanban</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div>
                   <div className="text-sm font-medium text-muted-foreground mb-1">Project Code</div>
                   <Badge variant="outline">{project.shortCode}</Badge>
                 </div>
@@ -348,18 +444,50 @@ export default function ProjectDetailPage() {
             {/* Team Members */}
             <Card>
               <CardHeader>
-                <CardTitle>Team Members</CardTitle>
-                <CardDescription>People working on this project</CardDescription>
+                <CardTitle>People on This Project</CardTitle>
+                <CardDescription>Everybody with a task in it</CardDescription>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-3">
                 <div className="flex items-center gap-2">
-                  <Users className="h-4 w-4 text-muted-foreground" />
+                  <Users className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                   <span className="text-sm text-muted-foreground">
-                    {project.memberIds && Array.isArray(project.memberIds) && project.memberIds.length > 0
-                      ? `${project.memberIds.length} team member(s)`
-                      : 'No team members yet'}
+                    {people.length > 0
+                      ? `${people.length} ${people.length === 1 ? 'person has' : 'people have'} tasks here`
+                      : 'Nobody has been given a task here yet'}
                   </span>
                 </div>
+                {people.length > 0 && (
+                  <ul className="space-y-1.5" aria-label="People on this project">
+                    {people.slice(0, PEOPLE_SHOWN).map((person) => {
+                      const name = person.name || 'Unknown member';
+                      return (
+                        <li key={person.id} className="flex items-center justify-between gap-3 text-sm">
+                          <span className="flex min-w-0 items-center gap-2">
+                            <span
+                              aria-hidden="true"
+                              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium"
+                            >
+                              {getInitials(name)}
+                            </span>
+                            <span className="truncate" title={name}>
+                              {name}
+                            </span>
+                          </span>
+                          <span className="shrink-0 text-xs text-muted-foreground">
+                            {person.open > 0
+                              ? `${person.open} open ${person.open === 1 ? 'task' : 'tasks'}`
+                              : 'No open tasks'}
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+                {people.length > PEOPLE_SHOWN && (
+                  <p className="text-xs text-muted-foreground">
+                    +{people.length - PEOPLE_SHOWN} more
+                  </p>
+                )}
               </CardContent>
             </Card>
           </div>
@@ -376,16 +504,23 @@ export default function ProjectDetailPage() {
               {recentUpdates.length > 0 ? (
                 <div className="space-y-2">
                   {recentUpdates.map(row => (
-                    <div
+                    <Link
                       key={`${row.kind}-${row.id}`}
-                      className="flex items-center justify-between gap-3 p-3 rounded-lg border hover:bg-accent/50 transition-colors"
+                      href={
+                        row.kind === 'Task'
+                          ? `/tasks?projectId=${project.id}&taskId=${row.id}`
+                          : row.kind === 'Epic'
+                            ? `/epics?projectId=${project.id}&epicId=${row.id}`
+                            : `/sprints/${row.id}/board`
+                      }
+                      className="flex items-center justify-between gap-3 p-3 rounded-lg border hover:bg-accent/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
                       <div className="flex min-w-0 items-center gap-3">
                         <Badge variant="outline" className="font-mono text-xs shrink-0">
                           {row.ref ?? row.kind}
                         </Badge>
                         <div className="min-w-0">
-                          <p className="text-sm font-medium truncate">{row.title}</p>
+                          <p className="text-sm font-medium truncate" title={row.title}>{row.title}</p>
                           {/* The time is the point of the card: without it there
                               was nothing to tell "recent" from "first on the
                               board". */}
@@ -399,21 +534,21 @@ export default function ProjectDetailPage() {
                           </p>
                         </div>
                       </div>
-                      {row.status && (
-                        <Badge
-                          className="shrink-0"
-                          variant={
-                            row.status === 'DONE' || row.status === 'COMPLETED'
-                              ? 'success'
-                              : row.status === 'IN_PROGRESS' || row.status === 'ACTIVE'
-                                ? 'default'
-                                : 'secondary'
-                          }
-                        >
-                          {row.status.replace('_', ' ')}
-                        </Badge>
-                      )}
-                    </div>
+                      {row.status && (() => {
+                        // Each kind in its own words and colours, as on its own page.
+                        const status =
+                          row.kind === 'Task'
+                            ? getTaskStatusConfig(row.status)
+                            : row.kind === 'Epic'
+                              ? getEpicStatusConfig(row.status)
+                              : getSprintStatusConfig(row.status);
+                        return (
+                          <Badge className={`shrink-0 ${status.badgeClassName}`} variant={status.badgeVariant}>
+                            {status.label}
+                          </Badge>
+                        );
+                      })()}
+                    </Link>
                   ))}
                 </div>
               ) : (
@@ -429,23 +564,6 @@ export default function ProjectDetailPage() {
           <ProjectFilesPanel workspaceId={project.workspaceId} projectId={project.id} />
         </TabsContent>
 
-        <TabsContent value="settings" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Project Settings</CardTitle>
-              <CardDescription>Manage your project configuration</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm text-muted-foreground mb-4">
-                Configure project details, methodology, status, dates, and more.
-              </p>
-              <Button onClick={() => router.push(`/projects/${project?.id}/settings`)}>
-                <Settings className="h-4 w-4 mr-2" />
-                Open Settings
-              </Button>
-            </CardContent>
-          </Card>
-        </TabsContent>
       </Tabs>
     </div>
   );

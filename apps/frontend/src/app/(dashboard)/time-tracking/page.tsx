@@ -30,29 +30,46 @@ import {
   useDeleteTimeEntry,
   useApproveTimeEntry,
   useRejectTimeEntry,
+  useTimeApprovers,
 } from '@/hooks/use-time-entry';
 import { formatMinutesHuman } from '@/lib/utils/time-format';
 import { Check, Timer, X } from 'lucide-react';
 import type { TimeEntry, TimeEntryStatus } from '@/types';
+import { useTabParam } from '@/hooks/use-tab-param';
 
 const STATUS_FILTERS = ['ALL', 'PENDING', 'APPROVED', 'REJECTED'] as const;
 
-export default function TimeTrackingPage() {
+const TIME_TABS = ['mine', 'approvals'] as const;
+type TimeTab = (typeof TIME_TABS)[number];
+
+function TimeTrackingContent() {
   const { user } = useAuth();
   const { currentWorkspace, isLoading: workspaceLoading } = useCurrentWorkspace();
   // Realtime: a timer started on another device was invisible here until a refresh.
   useTimeEntriesRealtime(currentWorkspace?.id);
   const confirm = useConfirm();
   const canApprove = useHasPermission(Permission.APPROVE_TIME);
+  // In the URL, so "time waiting for your approval" can open Approvals.
+  const [activeTab, setActiveTab] = useTabParam<TimeTab>(TIME_TABS, 'mine');
+  // Your own entries wait on another approver — unless there is none.
+  const { data: timeApprovers = [] } = useTimeApprovers(canApprove ? currentWorkspace?.id : undefined);
+  const soleApprover = canApprove && !timeApprovers.some((a) => a.userId !== user?.id);
 
   const [statusFilter, setStatusFilter] = React.useState<(typeof STATUS_FILTERS)[number]>('ALL');
   const [editingEntry, setEditingEntry] = React.useState<TimeEntry | null>(null);
   const [rejectingEntry, setRejectingEntry] = React.useState<TimeEntry | null>(null);
 
-  const mine = useTimeEntries(user?.id, {
-    workspaceId: currentWorkspace?.id,
-    status: statusFilter === 'ALL' ? undefined : (statusFilter as TimeEntryStatus),
-  });
+  // Every entry of the caller's, filtered for the table below rather than at
+  // the API: the cards above it are totals of the caller's whole timesheet, and
+  // filtering the table to "Approved" used to turn "awaiting approval" into 0.
+  const mine = useTimeEntries(user?.id, { workspaceId: currentWorkspace?.id });
+  const shownEntries = React.useMemo(
+    () =>
+      statusFilter === 'ALL'
+        ? (mine.data ?? [])
+        : (mine.data ?? []).filter((e) => e.status === (statusFilter as TimeEntryStatus)),
+    [mine.data, statusFilter]
+  );
   const pending = usePendingTimeEntries(canApprove ? currentWorkspace?.id : undefined);
 
   const deleteEntry = useDeleteTimeEntry();
@@ -129,19 +146,24 @@ export default function TimeTrackingPage() {
           user ? (
             <ManualTimeEntryDialog
               userId={user.id}
-              userName={user.name ?? ''}
-              userEmail={user.email ?? ''}
             />
           ) : null
         }
       />
 
+      {/* Whose figures these are, in each label. "Awaiting approval 0" sat
+          above a tab reading "Approvals 2" — the same words for the caller's
+          own entries and for the team's entries waiting on the caller. */}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {[
-          { label: 'Entries', value: String(totals.entries), excludesRejected: false },
-          { label: 'Total logged', value: formatMinutesHuman(totals.minutes), excludesRejected: true },
-          { label: 'Billable', value: formatMinutesHuman(totals.billable), excludesRejected: true },
-          { label: 'Awaiting approval', value: String(totals.awaiting), excludesRejected: false },
+          { label: 'My entries', value: String(totals.entries), excludesRejected: false },
+          { label: 'My time logged', value: formatMinutesHuman(totals.minutes), excludesRejected: true },
+          { label: 'My billable time', value: formatMinutesHuman(totals.billable), excludesRejected: true },
+          {
+            label: 'My entries awaiting approval',
+            value: String(totals.awaiting),
+            excludesRejected: false,
+          },
         ].map((stat) => (
           <Card key={stat.label}>
             <CardHeader className="pb-2">
@@ -163,7 +185,11 @@ export default function TimeTrackingPage() {
         ))}
       </div>
 
-      <Tabs defaultValue="mine" className="space-y-6">
+      <Tabs
+        value={canApprove ? activeTab : 'mine'}
+        onValueChange={(v) => setActiveTab(v as TimeTab)}
+        className="space-y-6"
+      >
         <TabsList className={canApprove ? 'grid w-full grid-cols-2 sm:w-fit' : 'grid w-full grid-cols-1 sm:w-fit'}>
           <TabsTrigger value="mine">My Timesheet</TabsTrigger>
           {/* Gated on the same permission the API enforces for
@@ -173,7 +199,9 @@ export default function TimeTrackingPage() {
             <TabsTrigger value="approvals">
               Approvals
               {(pending.data?.length ?? 0) > 0 && (
-                <Badge variant="secondary" className="ml-2">
+                // h-5 py-0: the badge sits inside the trigger's 20px line. At its
+                // default 22px it made this tab 34px against its neighbour's 32px.
+                <Badge variant="secondary" className="ml-2 h-5 px-1.5 py-0">
                   {pending.data?.length}
                 </Badge>
               )}
@@ -206,7 +234,7 @@ export default function TimeTrackingPage() {
             </CardHeader>
             <CardContent>
               <TimesheetTable
-                entries={mine.data ?? []}
+                entries={shownEntries}
                 isLoading={mine.isLoading}
                 isError={mine.isError}
                 onRetry={() => mine.refetch()}
@@ -223,8 +251,9 @@ export default function TimeTrackingPage() {
               <CardHeader>
                 <CardTitle className="text-base">Pending Approvals</CardTitle>
                 <CardDescription>
-                  Time submitted by the team. You cannot approve your own entries — the server
-                  refuses it.
+                  {soleApprover
+                    ? 'Time submitted by the team. You are the only approver here, so your own entries are yours to approve.'
+                    : 'Time submitted by the team. Your own entries are approved by another approver.'}
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -241,22 +270,31 @@ export default function TimeTrackingPage() {
                       (approve.isPending && approve.variables?.id === entry.id) ||
                       (reject.isPending && reject.variables?.id === entry.id);
                     const isOwn = entry.userId === user?.id;
+                    // Said in words beside the entry: a title on a disabled
+                    // button is shown to nobody.
+                    if (isOwn && !soleApprover) {
+                      return (
+                        <span className="text-xs text-muted-foreground">
+                          Another approver decides your own time
+                        </span>
+                      );
+                    }
                     return (
                       <>
+                        {!isOwn && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={busy}
+                            onClick={() => setRejectingEntry(entry)}
+                          >
+                            <X className="h-4 w-4" />
+                            Reject
+                          </Button>
+                        )}
                         <Button
                           size="sm"
-                          variant="outline"
-                          disabled={busy || isOwn}
-                          title={isOwn ? 'You cannot approve your own entry' : undefined}
-                          onClick={() => setRejectingEntry(entry)}
-                        >
-                          <X className="h-4 w-4" />
-                          Reject
-                        </Button>
-                        <Button
-                          size="sm"
-                          disabled={busy || isOwn}
-                          title={isOwn ? 'You cannot approve your own entry' : undefined}
+                          disabled={busy}
                           onClick={() =>
                             approve.mutateAsync({
                               id: entry.id,
@@ -285,8 +323,6 @@ export default function TimeTrackingPage() {
           key={editingEntry.id}
           entry={editingEntry}
           userId={user.id}
-          userName={user.name ?? ''}
-          userEmail={user.email ?? ''}
           open
           onOpenChange={(open) => !open && setEditingEntry(null)}
         />
@@ -303,5 +339,14 @@ export default function TimeTrackingPage() {
         />
       )}
     </div>
+  );
+}
+
+// useTabParam reads useSearchParams(), which needs a Suspense boundary above it.
+export default function TimeTrackingPage() {
+  return (
+    <React.Suspense fallback={<PageLoader message="Loading time tracking..." />}>
+      <TimeTrackingContent />
+    </React.Suspense>
   );
 }

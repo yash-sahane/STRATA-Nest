@@ -210,6 +210,27 @@
        that still get through, and for names that predate the cap. */
     overflow-wrap: anywhere;
   }
+  /* …except inside a table. Because `anywhere` shrinks min-content, the auto
+     table layout was free to give a column less width than its words: "Medium"
+     printed as "Mediu / m", "Completed" as "Complete / d", the Team directory's
+     joined date one character per line, a header reading "Acti / ons" — at an
+     ordinary 1440px window. Cells size from whole words again. A pathological
+     unbroken token now widens only its own table, and the <Table> wrapper
+     (overflow-auto) scrolls that table in place, never the page. */
+  th,
+  td {
+    overflow-wrap: break-word;
+  }
+  /* Tailwind 4's reset gives a <button> the default arrow — v3 gave it the
+     pointer — so every raw button in the app (a dialog's close, a row's
+     activator, a calendar day) read as plain text under the mouse while the
+     styled ones read as clickable. Whatever can be clicked says so; a disabled
+     control keeps the cursor it sets for itself. */
+  button:not(:disabled):not([aria-disabled='true']),
+  [role='button']:not([aria-disabled='true']),
+  summary {
+    cursor: pointer;
+  }
 }
 
 /* Compact Mode — tightens the vertical rhythm only: block padding, row gaps

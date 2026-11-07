@@ -14,42 +14,31 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
+import Link from 'next/link';
 import { Calendar, Clock, User, Edit, Trash2, Tag } from 'lucide-react';
 import { formatDate, cn, getInitials } from '@/lib/utils';
-import type { Task } from '@/types';
+import type { Task, TaskStatus } from '@/types';
+import { Textarea } from '@/components/ui/textarea';
 import { TaskDependencies } from '@/components/tasks/task-dependencies';
 import { TaskComments } from '@/components/tasks/task-comments';
+import { TaskCommits } from '@/components/tasks/task-commits';
+import { AttachmentsSection } from '@/components/files/project-files-panel';
 import { TaskTimeTracking } from '@/components/time-tracking/task-time-tracking';
 import {
-  useWorkspaceTasks,
+  useTasksByIds,
   useAddTaskDependency,
   useRemoveTaskDependency,
 } from '@/hooks/use-task';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
-import { useTeamMembers, ROLE_CONFIG } from '@/hooks/use-team';
+import { useTeamMembers } from '@/hooks/use-team';
+import { useSprints } from '@/hooks/use-sprint';
+import { useEpics } from '@/hooks/use-epic';
+import { useFunctionalRequirements } from '@/hooks/use-functional-requirement';
+import { useClientRequirements } from '@/hooks/use-client-requirement';
+import { roleDisplayName } from '@/hooks/use-role-options';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-
-// Helper function to parse label format "color:text"
-const parseLabel = (label: string) => {
-  const parts = label.split(':');
-  if (parts.length === 2) {
-    return { color: parts[0], text: parts[1] };
-  }
-  return { color: 'gray', text: label };
-};
-
-// Color mapping for label backgrounds
-const labelColorMap: Record<string, string> = {
-  red: 'bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/20',
-  orange: 'bg-orange-500/10 text-orange-700 dark:text-orange-400 border-orange-500/20',
-  yellow: 'bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border-yellow-500/20',
-  green: 'bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20',
-  blue: 'bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20',
-  purple: 'bg-purple-500/10 text-purple-700 dark:text-purple-400 border-purple-500/20',
-  pink: 'bg-pink-500/10 text-pink-700 dark:text-pink-400 border-pink-500/20',
-  gray: 'bg-gray-500/10 text-gray-700 dark:text-gray-400 border-gray-500/20',
-};
+import { labelColorClass, labelText } from '@/components/tasks/task-display';
 
 interface TaskDetailsDialogProps {
   task: Task | null;
@@ -59,6 +48,13 @@ interface TaskDetailsDialogProps {
   onDelete?: (taskId: string) => void;
   /** Whether the viewer may change the task's dependency edges (`task:write`). */
   canEditDependencies?: boolean;
+  /**
+   * Moves the task through review, with an optional note posted on it. Absent:
+   * the viewer may not move tasks, and no review controls are offered.
+   */
+  onMoveStatus?: (task: Task, status: TaskStatus, note?: string) => Promise<void>;
+  /** Whether the viewer signs tasks off (approve, or send back from Review). */
+  canSignOff?: boolean;
 }
 
 export function TaskDetailsDialog({
@@ -68,13 +64,39 @@ export function TaskDetailsDialog({
   onEdit,
   onDelete,
   canEditDependencies = false,
+  onMoveStatus,
+  canSignOff = false,
 }: TaskDetailsDialogProps) {
-  // Dependency edges are workspace-scoped server-side (tasks.services.ts refuses
-  // only CROSS-WORKSPACE edges), and TaskDependencies renders a "Cross-project"
-  // badge for them. Scoping this to the task's project made that badge dead code
-  // and, worse, hid any existing cross-project dependency from both lists —
-  // `allTasks.filter(t => task.blockedBy.includes(t.id))` simply dropped it.
-  const { data: allTasks = [] } = useWorkspaceTasks(task?.workspaceId);
+  // "Send back" asks what needs another look; the answer is posted on the task.
+  const [sendingBack, setSendingBack] = React.useState(false);
+  const [note, setNote] = React.useState('');
+  const [moving, setMoving] = React.useState(false);
+  React.useEffect(() => {
+    setSendingBack(false);
+    setNote('');
+  }, [task?.id, open]);
+  const move = async (status: TaskStatus, withNote?: string) => {
+    if (!task || !onMoveStatus) return;
+    setMoving(true);
+    try {
+      await onMoveStatus(task, status, withNote);
+      setSendingBack(false);
+      setNote('');
+    } catch {
+      // The save's own toast has said why; the dialog stays as it was.
+    } finally {
+      setMoving(false);
+    }
+  };
+  // The tasks this one names — what it waits on, what waits on it, and what it
+  // is part of — fetched by id, wherever in the workspace they are (edges may
+  // cross projects; TaskDependencies badges those). It used to download every
+  // task in the workspace each time a task was opened, to find a handful.
+  const { data: relatedTasks = [], isSuccess: relatedLoaded } = useTasksByIds([
+    ...(task?.blockedBy ?? []),
+    ...(task?.blocks ?? []),
+    task?.parentTaskId ?? '',
+  ]);
   const addDependency = useAddTaskDependency();
   const removeDependency = useRemoveTaskDependency();
 
@@ -85,6 +107,46 @@ export function TaskDetailsDialog({
   // Tracking block below. The selected workspace is what this dialog wants.
   const { currentWorkspace } = useCurrentWorkspace();
   const { data: teamMembers = [] } = useTeamMembers(currentWorkspace?.id);
+
+  // What the task delivers. The dialog showed none of it — not the sprint it
+  // is planned into, not the requirement it implements — and the parent task as
+  // a raw id, so the chain from a client's ask to this piece of work could only
+  // be followed from the other end. Same project-scoped queries the board's
+  // filters already hold.
+  const { data: sprints = [] } = useSprints(task?.projectId);
+  const { data: epics = [] } = useEpics(task?.projectId);
+  const { data: requirements = [] } = useFunctionalRequirements(task?.projectId);
+  const { data: clientRequirements = [] } = useClientRequirements(task?.projectId);
+  const chain = React.useMemo(() => {
+    if (!task) return [];
+    const projectId = task.projectId;
+    const fr = requirements.find((r) => r.id === task.functionalRequirementId);
+    const epic = epics.find((e) => e.id === (task.epicId || fr?.epicId));
+    const cr = clientRequirements.find((c) => c.id === (fr?.clientRequirementId || epic?.requirementId));
+    const sprint = sprints.find((s) => s.id === task.sprintId);
+    const parent = relatedTasks.find((t) => t.id === task.parentTaskId);
+    const rows: { label: string; text: string; href: string; code?: string }[] = [];
+    if (cr) rows.push({ label: 'Client requirement', text: cr.title, href: `/requirements?projectId=${projectId}&crId=${cr.id}` });
+    if (epic) rows.push({ label: 'Epic', text: epic.name, code: epic.hierarchyId, href: `/epics?projectId=${projectId}&epicId=${epic.id}` });
+    if (fr) {
+      rows.push({
+        label: 'Functional requirement',
+        text: fr.title,
+        code: fr.hierarchyId,
+        href: `/functional-requirements?projectId=${projectId}&frId=${fr.id}`,
+      });
+    }
+    if (sprint) rows.push({ label: 'Sprint', text: sprint.name, href: `/sprints/${sprint.id}/board` });
+    if (parent) {
+      rows.push({
+        label: 'Part of',
+        text: parent.title,
+        code: parent.hierarchyId,
+        href: `/tasks?projectId=${parent.projectId}&taskId=${parent.id}`,
+      });
+    }
+    return rows;
+  }, [task, requirements, epics, clientRequirements, sprints, relatedTasks]);
 
   // Get assignee details
   const assignees = React.useMemo(() => {
@@ -145,6 +207,37 @@ export function TaskDetailsDialog({
 
           <Separator />
 
+          {/* Where this piece of work comes from and where it is planned. */}
+          <div>
+            <h3 className="text-sm font-medium mb-2">Delivers</h3>
+            {chain.length > 0 ? (
+              <dl className="grid grid-cols-1 gap-x-4 gap-y-1.5 text-sm sm:grid-cols-[max-content_1fr]">
+                {chain.map((row) => (
+                  <React.Fragment key={row.label}>
+                    <dt className="text-muted-foreground">{row.label}</dt>
+                    <dd className="min-w-0">
+                      <Link
+                        href={row.href}
+                        className="inline-flex max-w-full items-baseline gap-2 rounded-sm font-medium underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        {row.code && (
+                          <span className="shrink-0 font-mono text-xs text-muted-foreground">{row.code}</span>
+                        )}
+                        <span className="truncate" title={row.text}>{row.text}</span>
+                      </Link>
+                    </dd>
+                  </React.Fragment>
+                ))}
+              </dl>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Not linked to a requirement, an epic or a sprint yet.
+              </p>
+            )}
+          </div>
+
+          <Separator />
+
           {/* Task Details Grid */}
           <div className="grid grid-cols-2 gap-6">
             {/* Due Date */}
@@ -200,18 +293,15 @@ export function TaskDetailsDialog({
                   Labels
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  {labels.map((label, index) => {
-                    const { color, text } = parseLabel(label);
-                    return (
-                      <Badge
-                        key={index}
-                        variant="outline"
-                        className={cn('border', labelColorMap[color] || labelColorMap.gray)}
-                      >
-                        {text}
-                      </Badge>
-                    );
-                  })}
+                  {labels.map((label, index) => (
+                    <Badge
+                      key={index}
+                      variant="outline"
+                      className={cn('border whitespace-normal', labelColorClass(label))}
+                    >
+                      {labelText(label)}
+                    </Badge>
+                  ))}
                 </div>
               </div>
             </>
@@ -228,10 +318,7 @@ export function TaskDetailsDialog({
                 </div>
                 <div className="space-y-2">
                   {assignees.map((member) => (
-                    <div
-                      key={member.userId}
-                      className="flex items-center gap-3 p-2 rounded-lg hover:bg-accent"
-                    >
+                    <div key={member.userId} className="flex items-center gap-3 p-2 rounded-lg">
                       <Avatar className="h-8 w-8">
                         <AvatarImage src={member.avatar} alt={member.name} />
                         <AvatarFallback className="text-xs">
@@ -240,10 +327,10 @@ export function TaskDetailsDialog({
                       </Avatar>
                       <div className="flex-1 min-w-0">
                         <div className="font-medium text-sm">{member.name}</div>
-                        <div className="text-xs text-muted-foreground truncate">{member.email}</div>
+                        <div className="text-xs text-muted-foreground truncate" title={member.email}>{member.email}</div>
                       </div>
                       <Badge variant="outline" className="text-xs shrink-0">
-                        {ROLE_CONFIG[member.role].label}
+                        {roleDisplayName(member.rawRole)}
                       </Badge>
                     </div>
                   ))}
@@ -293,7 +380,7 @@ export function TaskDetailsDialog({
                       <User className="h-4 w-4" />
                       Assigned By
                     </div>
-                    <div className="flex items-center gap-3 p-2 rounded-lg hover:bg-accent">
+                    <div className="flex items-center gap-3 p-2 rounded-lg">
                       <Avatar className="h-8 w-8">
                         <AvatarImage src={assigner.avatar} alt={assigner.name} />
                         <AvatarFallback className="text-xs">
@@ -307,7 +394,7 @@ export function TaskDetailsDialog({
                         </div>
                       </div>
                       <Badge variant="outline" className="text-xs shrink-0">
-                        {ROLE_CONFIG[assigner.role].label}
+                        {roleDisplayName(assigner.rawRole)}
                       </Badge>
                     </div>
                   </div>
@@ -315,24 +402,16 @@ export function TaskDetailsDialog({
               );
             })()}
 
-          {/* Parent Task */}
-          {task.parentTaskId && (
-            <>
-              <Separator />
-              <div>
-                <h3 className="text-sm font-medium mb-2">Parent Task</h3>
-                <Badge variant="outline" className="font-mono">
-                  {task.parentTaskId}
-                </Badge>
-              </div>
-            </>
-          )}
+          {/* Attachments: screenshots, logs, documents for this task. */}
+          <Separator />
+          <AttachmentsSection workspaceId={task.workspaceId} projectId={task.projectId} taskId={task.id} />
 
           {/* Task Dependencies */}
           <Separator />
           <TaskDependencies
             task={task}
-            allTasks={allTasks}
+            relatedTasks={relatedTasks}
+            relatedLoaded={relatedLoaded}
             onAddDependency={handleAddDependency}
             onRemoveDependency={handleRemoveDependency}
             canEdit={canEditDependencies}
@@ -343,6 +422,10 @@ export function TaskDetailsDialog({
           <Separator />
           <TaskComments taskId={task.id} workspaceId={currentWorkspace?.id} />
 
+          {/* Commits whose message names this task. Draws nothing — heading
+              included — unless there are some. */}
+          <TaskCommits taskId={task.id} projectId={task.projectId} />
+
           {/* Time Tracking */}
           {user && currentWorkspace && (
             <>
@@ -350,8 +433,6 @@ export function TaskDetailsDialog({
               <TaskTimeTracking
                 task={task}
                 userId={user.id}
-                userName={user.name || 'User'}
-                userEmail={user.email}
                 workspaceId={currentWorkspace.id}
               />
             </>
@@ -365,6 +446,65 @@ export function TaskDetailsDialog({
               other dialog puts its confirm button. Delete now sits on the left and
               Edit takes the primary position. The deletion path is unchanged and
               still goes through the parent's confirmation. */}
+          {/* Review, where the task is: submitted by whoever is doing it,
+              signed off — or sent back with a note — by whoever approves. */}
+          {onMoveStatus && task.status === 'IN_PROGRESS' && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3">
+              <p className="text-sm text-muted-foreground">Finished? Ask for it to be signed off.</p>
+              <Button size="sm" onClick={() => void move('REVIEW')} disabled={moving}>
+                Submit for review
+              </Button>
+            </div>
+          )}
+          {onMoveStatus && task.status === 'REVIEW' && canSignOff && (
+            <div className="space-y-3 rounded-lg border p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm text-muted-foreground">Waiting for your sign-off.</p>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setSendingBack((v) => !v)}
+                    disabled={moving}
+                    aria-expanded={sendingBack}
+                  >
+                    Send back
+                  </Button>
+                  <Button size="sm" onClick={() => void move('DONE')} disabled={moving}>
+                    Approve — mark Done
+                  </Button>
+                </div>
+              </div>
+              {sendingBack && (
+                <div className="space-y-2">
+                  <label htmlFor="send-back-note" className="text-sm font-medium">
+                    What needs another look?
+                  </label>
+                  <Textarea
+                    id="send-back-note"
+                    value={note}
+                    onChange={(event) => setNote(event.target.value)}
+                    placeholder="Posted on the task as a comment (optional)"
+                    rows={3}
+                  />
+                  <div className="flex justify-end gap-2">
+                    <Button size="sm" variant="ghost" onClick={() => setSendingBack(false)} disabled={moving}>
+                      Cancel
+                    </Button>
+                    <Button size="sm" onClick={() => void move('IN_PROGRESS', note)} disabled={moving}>
+                      Send back to In Progress
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          {onMoveStatus && task.status === 'REVIEW' && !canSignOff && (
+            <p className="rounded-lg border p-3 text-sm text-muted-foreground">
+              In review: waiting for somebody who signs tasks off.
+            </p>
+          )}
+
           <DialogFooter className="sm:justify-between sm:space-x-0">
             <div className="flex gap-2">
               {onDelete && (

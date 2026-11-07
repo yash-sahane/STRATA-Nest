@@ -13,7 +13,8 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Copy, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
+import { Copy, Loader2 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import type { Project } from '@/types';
 
 interface CloneProjectDialogProps {
@@ -22,14 +23,67 @@ interface CloneProjectDialogProps {
   onOpenChange: (open: boolean) => void;
   onClone: (data: CloneProjectData) => Promise<void>;
   isLoading?: boolean;
+  /**
+   * Whether the reader may create what each part of the copy creates — the
+   * same permissions the API asks for. An option they cannot use is shown
+   * switched off with the reason, rather than offered and then refused.
+   */
+  canCopyWork?: boolean;
+  canCopySprints?: boolean;
 }
 
 export interface CloneProjectData {
   name: string;
-  includeSettings: boolean;
   includeTasks: boolean;
-  includeMembers: boolean;
   includeSprints: boolean;
+}
+
+interface CloneOptionProps {
+  id: string;
+  title: string;
+  description: string;
+  checked: boolean;
+  onCheckedChange: (checked: boolean) => void;
+  disabled?: boolean;
+  /** Why the option cannot be used, shown in place of its description. */
+  unavailable?: string;
+}
+
+/**
+ * One option, the whole row its label: the row highlights on hover, so the
+ * row is what a click on it toggles — not only the box and the title.
+ */
+function CloneOption({
+  id,
+  title,
+  description,
+  checked,
+  onCheckedChange,
+  disabled,
+  unavailable,
+}: CloneOptionProps) {
+  const off = disabled || Boolean(unavailable);
+  return (
+    <label
+      htmlFor={id}
+      className={cn(
+        'flex items-start gap-3 rounded-lg border p-3 transition-colors',
+        off ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-muted/50'
+      )}
+    >
+      <Checkbox
+        id={id}
+        checked={checked && !unavailable}
+        onCheckedChange={(value) => onCheckedChange(value === true)}
+        disabled={off}
+        className="mt-0.5"
+      />
+      <span className="flex-1 space-y-1">
+        <span className="block text-sm font-medium leading-none">{title}</span>
+        <span className="block text-xs text-muted-foreground">{unavailable ?? description}</span>
+      </span>
+    </label>
+  );
 }
 
 export function CloneProjectDialog({
@@ -38,42 +92,30 @@ export function CloneProjectDialog({
   onOpenChange,
   onClone,
   isLoading,
+  canCopyWork = true,
+  canCopySprints = true,
 }: CloneProjectDialogProps) {
   const [name, setName] = React.useState('');
-  const [includeSettings, setIncludeSettings] = React.useState(true);
   const [includeTasks, setIncludeTasks] = React.useState(true);
-  const [includeMembers, setIncludeMembers] = React.useState(false);
   const [includeSprints, setIncludeSprints] = React.useState(false);
 
-  // Reset form when dialog opens with new project
+  // Reset the form each time it opens on a project.
   React.useEffect(() => {
     if (open && project) {
       setName(`${project.name} (Copy)`);
-      setIncludeSettings(true);
-      setIncludeTasks(true);
-      setIncludeMembers(false);
+      setIncludeTasks(canCopyWork);
       setIncludeSprints(false);
     }
-  }, [open, project]);
+  }, [open, project, canCopyWork]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
-
     await onClone({
       name: name.trim(),
-      includeSettings,
-      includeTasks,
-      includeMembers,
-      includeSprints,
+      includeTasks: includeTasks && canCopyWork,
+      includeSprints: includeSprints && canCopySprints,
     });
-
-    // Reset form
-    setName('');
-    setIncludeSettings(true);
-    setIncludeTasks(true);
-    setIncludeMembers(false);
-    setIncludeSprints(false);
   };
 
   if (!project) return null;
@@ -87,145 +129,59 @@ export function CloneProjectDialog({
             Clone Project
           </DialogTitle>
           <DialogDescription>
-            Create a duplicate of <strong>{project.name}</strong>. Choose what to include in the clone.
+            Create a copy of <strong>{project.name}</strong>. Choose what to include in it.
           </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit}>
           <div className="space-y-6 py-4">
-            {/* Project Name */}
             <div className="space-y-2">
-              <Label htmlFor="name">New Project Name</Label>
+              <Label htmlFor="clone-name">New Project Name</Label>
               <Input
-                id="name"
+                id="clone-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Enter project name"
                 required
+                maxLength={255}
                 disabled={isLoading}
               />
             </div>
 
-            {/* Clone Options */}
-            <div className="space-y-4">
-              <Label>What to Include</Label>
+            <fieldset className="space-y-3">
+              <legend className="mb-3 text-sm font-medium">What to Include</legend>
+              <CloneOption
+                id="clone-tasks"
+                title="Tasks & Requirements"
+                description="Every client requirement, epic, functional requirement and task — all reset to To Do"
+                checked={includeTasks}
+                onCheckedChange={setIncludeTasks}
+                disabled={isLoading}
+                unavailable={
+                  canCopyWork
+                    ? undefined
+                    : 'Needs permission to write requirements, plan and create tasks in this workspace'
+                }
+              />
+              {/* Not "dates will be cleared": a sprint's start and end are NOT
+                  NULL, so they are copied. */}
+              <CloneOption
+                id="clone-sprints"
+                title="Sprints"
+                description="Sprint names, goals and dates (each starts again in Planning)"
+                checked={includeSprints}
+                onCheckedChange={setIncludeSprints}
+                disabled={isLoading}
+                unavailable={canCopySprints ? undefined : 'Needs permission to plan sprints in this workspace'}
+              />
+            </fieldset>
 
-              <div className="space-y-3">
-                {/* Settings */}
-                <div className="flex items-start space-x-3 rounded-lg border p-3 hover:bg-muted/50 transition-colors">
-                  <Checkbox
-                    id="settings"
-                    checked={includeSettings}
-                    onCheckedChange={(checked) => setIncludeSettings(checked as boolean)}
-                    disabled={isLoading}
-                  />
-                  <div className="flex-1 space-y-1">
-                    <label
-                      htmlFor="settings"
-                      className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
-                    >
-                      Project Settings
-                    </label>
-                    {/* Labels are named here because they are what this box
-                        actually carries besides the settings object — they were
-                        being cloned whether or not it was ticked. */}
-                    <p className="text-xs text-muted-foreground">
-                      Time tracking, custom fields, the project&apos;s labels, and other project
-                      configuration
-                    </p>
-                  </div>
-                  <CheckCircle2 className="h-4 w-4 text-green-700 dark:text-green-400" />
-                </div>
-
-                {/* Tasks */}
-                <div className="flex items-start space-x-3 rounded-lg border p-3 hover:bg-muted/50 transition-colors">
-                  <Checkbox
-                    id="tasks"
-                    checked={includeTasks}
-                    onCheckedChange={(checked) => setIncludeTasks(checked as boolean)}
-                    disabled={isLoading}
-                  />
-                  <div className="flex-1 space-y-1">
-                    <label
-                      htmlFor="tasks"
-                      className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
-                    >
-                      Tasks & Requirements
-                    </label>
-                    <p className="text-xs text-muted-foreground">
-                      All tasks, epics, and requirements (will be reset to TODO status)
-                    </p>
-                  </div>
-                  {includeTasks ? (
-                    <CheckCircle2 className="h-4 w-4 text-green-700 dark:text-green-400" />
-                  ) : (
-                    <XCircle className="h-4 w-4 text-muted-foreground" />
-                  )}
-                </div>
-
-                {/* Members */}
-                <div className="flex items-start space-x-3 rounded-lg border p-3 hover:bg-muted/50 transition-colors">
-                  <Checkbox
-                    id="members"
-                    checked={includeMembers}
-                    onCheckedChange={(checked) => setIncludeMembers(checked as boolean)}
-                    disabled={isLoading}
-                  />
-                  <div className="flex-1 space-y-1">
-                    <label
-                      htmlFor="members"
-                      className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
-                    >
-                      Team Members
-                    </label>
-                    <p className="text-xs text-muted-foreground">
-                      Copy all team members to the new project
-                    </p>
-                  </div>
-                  {includeMembers ? (
-                    <CheckCircle2 className="h-4 w-4 text-green-700 dark:text-green-400" />
-                  ) : (
-                    <XCircle className="h-4 w-4 text-muted-foreground" />
-                  )}
-                </div>
-
-                {/* Sprints */}
-                <div className="flex items-start space-x-3 rounded-lg border p-3 hover:bg-muted/50 transition-colors">
-                  <Checkbox
-                    id="sprints"
-                    checked={includeSprints}
-                    onCheckedChange={(checked) => setIncludeSprints(checked as boolean)}
-                    disabled={isLoading}
-                  />
-                  <div className="flex-1 space-y-1">
-                    <label
-                      htmlFor="sprints"
-                      className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
-                    >
-                      Sprints
-                    </label>
-                    {/* Not "dates will be cleared": a sprint's start and end are
-                        NOT NULL and the API refuses a sprint without them, so
-                        they are copied. Saying otherwise described a clone the
-                        product cannot produce. */}
-                    <p className="text-xs text-muted-foreground">
-                      Clone sprint structure — names, goals and dates (status resets to Planning)
-                    </p>
-                  </div>
-                  {includeSprints ? (
-                    <CheckCircle2 className="h-4 w-4 text-green-700 dark:text-green-400" />
-                  ) : (
-                    <XCircle className="h-4 w-4 text-muted-foreground" />
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Warning Message */}
-            <div className="rounded-lg bg-blue-50 dark:bg-blue-950/30 p-3 border border-blue-200 dark:border-blue-800">
-              <p className="text-xs text-blue-800 dark:text-blue-200">
-                <strong>Note:</strong> The cloned project will start fresh with PLANNING status. 
-                All task assignments and dates will be preserved, but progress will not be copied.
+            <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 dark:border-blue-800 dark:bg-blue-950/30">
+              <p className="text-xs text-foreground">
+                <strong>Note:</strong> The copy starts in Planning, and its tasks keep their
+                assignees, due dates and estimates. Progress, logged time, comments, files and
+                dependencies stay with the original. Work assigned to someone who has left the
+                workspace is copied unassigned.
               </p>
             </div>
           </div>

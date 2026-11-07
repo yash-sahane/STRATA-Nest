@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/select';
 import { useCreateLeaveRequest, useLeaveAvailability } from '@/hooks/use-leave';
 import {
+  LEAVE_TYPES,
   SELECTABLE_LEAVE_TYPES,
   type LeaveType,
   calculateLeaveDays,
@@ -32,6 +33,7 @@ import {
 } from '@/lib/leave-utils';
 import { getBalanceFieldForLeaveType } from '@/lib/leave-balance-mapper';
 import { parseDateOnly } from '@/lib/utils/working-days';
+import { useHolidaySet } from '@/hooks/use-holidays';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
 interface LeaveRequestFormProps {
@@ -50,6 +52,8 @@ export function LeaveRequestForm({ open, onOpenChange, userId, workspaceId }: Le
   const [submitError, setSubmitError] = React.useState('');
 
   const createLeaveRequest = useCreateLeaveRequest();
+  // The office's declared holidays: not working days, so not charged.
+  const { holidays } = useHolidaySet(workspaceId);
   // The balance is charged to the year the leave STARTS in, so validate against
   // that year's row rather than whichever year it happens to be today.
   const targetYear = /^\d{4}-\d{2}-\d{2}$/.test(startDate)
@@ -72,8 +76,8 @@ export function LeaveRequestForm({ open, onOpenChange, userId, workspaceId }: Le
   // Calculate days when dates change
   const calculatedDays = React.useMemo(() => {
     if (!startDate || !endDate) return 0;
-    return calculateLeaveDays(startDate, endDate, leaveType);
-  }, [startDate, endDate, leaveType]);
+    return calculateLeaveDays(startDate, endDate, leaveType, holidays);
+  }, [startDate, endDate, leaveType, holidays]);
 
   // A half-day is a single session; keep the range collapsed so the preview and
   // the server agree.
@@ -105,7 +109,7 @@ export function LeaveRequestForm({ open, onOpenChange, userId, workspaceId }: Le
   // Validate dates
   React.useEffect(() => {
     if (startDate && endDate) {
-      const validation = validateLeaveDates(startDate, endDate, leaveType);
+      const validation = validateLeaveDates(startDate, endDate, leaveType, holidays);
       if (!validation.valid) {
         setValidationError(validation.error || '');
       } else if (sufficientBalance === false) {
@@ -130,7 +134,7 @@ export function LeaveRequestForm({ open, onOpenChange, userId, workspaceId }: Le
     sufficientBalance,
     calculatedDays,
     availableBalance,
-    committedUnits,
+    committedUnits, holidays,
   ]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -171,8 +175,9 @@ export function LeaveRequestForm({ open, onOpenChange, userId, workspaceId }: Le
     onOpenChange(false);
   };
 
-  // Selectable range, on the LOCAL calendar (today .. one year out).
-  const { min: minDate, max: maxDate } = leaveDateBounds();
+  // Selectable range, on the LOCAL calendar: from today — or, for leave that
+  // is recorded after the fact, from a month back — to one year out.
+  const { min: minDate, max: maxDate } = leaveDateBounds(leaveType);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -196,7 +201,13 @@ export function LeaveRequestForm({ open, onOpenChange, userId, workspaceId }: Le
                   <SelectValue placeholder="Select leave type" />
                 </SelectTrigger>
                 <SelectContent>
-                  {Object.entries(SELECTABLE_LEAVE_TYPES).map(([key, label]) => (
+                  {[
+                    ...Object.entries(SELECTABLE_LEAVE_TYPES),
+                    // Earned, so only for somebody who has some to spend.
+                    ...(leaveBalance && available.compOff > 0
+                      ? ([['COMP_OFF', LEAVE_TYPES.COMP_OFF]] as Array<[string, string]>)
+                      : []),
+                  ].map(([key, label]) => (
                     <SelectItem key={key} value={key}>
                       {label}
                     </SelectItem>
@@ -226,7 +237,7 @@ export function LeaveRequestForm({ open, onOpenChange, userId, workspaceId }: Le
             </div>
 
             {/* Date Range */}
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="startDate">Start Date *</Label>
                 <Input

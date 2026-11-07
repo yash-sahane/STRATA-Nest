@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import { OPEN_COMMAND_PALETTE, useModKey } from '@/hooks/use-mod-key';
 import { useRouter } from 'next/navigation';
 import {
   CommandDialog,
@@ -11,29 +12,19 @@ import {
   CommandSeparator,
 } from '@/components/ui/command';
 import { Badge } from '@/components/ui/badge';
-import {
-  Search,
-  FileText,
-  FolderKanban,
-  Target,
-  Zap,
-  Calendar,
-  Users,
-  Settings,
-  BarChart3,
-  Clock,
-  CheckSquare,
-  Home,
-} from 'lucide-react';
+import { Search, FileText, FolderKanban, Target, Zap, Settings, CheckSquare } from 'lucide-react';
+import { navigationGroups } from '@/components/layout/sidebar';
 import { useGlobalSearch } from '@/hooks/use-global-search';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
+import { useNavigationPermissions } from '@/hooks/use-permissions';
+import { Permission } from '@/lib/permissions';
+import { searchResultUrl, searchTypeLabel } from '@/lib/search-result-url';
 
 type CommandAction = {
   id: string;
   label: string;
   icon: React.ReactNode;
   onSelect: () => void;
-  shortcut?: string;
   group: string;
 };
 
@@ -43,13 +34,16 @@ export function CommandPalette() {
 
   const [open, setOpen] = React.useState(false);
   const [searchQuery, setSearchQuery] = React.useState('');
+  const { permissions, isLoading: permissionsLoading } = useNavigationPermissions();
 
   const { data: searchResults = [], isLoading } = useGlobalSearch(
     searchQuery,
     currentWorkspace?.id
   );
 
-  // Keyboard shortcut (Cmd+K or Ctrl+K)
+  const modKey = useModKey();
+
+  // Keyboard shortcut (Cmd+K or Ctrl+K), and the header's button.
   React.useEffect(() => {
     const down = (e: KeyboardEvent) => {
       if (e.key === 'k' && (e.metaKey || e.ctrlKey)) {
@@ -57,185 +51,114 @@ export function CommandPalette() {
         setOpen((open) => !open);
       }
     };
+    const ask = () => setOpen(true);
 
     document.addEventListener('keydown', down);
-    return () => document.removeEventListener('keydown', down);
+    window.addEventListener(OPEN_COMMAND_PALETTE, ask);
+    return () => {
+      document.removeEventListener('keydown', down);
+      window.removeEventListener(OPEN_COMMAND_PALETTE, ask);
+    };
   }, []);
 
-  // Navigation actions
-  const navigationActions: CommandAction[] = [
-    {
-      id: 'nav-home',
-      label: 'Dashboard',
-      icon: <Home className="h-4 w-4" />,
-      onSelect: () => {
-        router.push('/dashboard');
-        setOpen(false);
-      },
-      group: 'Navigation',
+  const go = React.useCallback(
+    (href: string) => {
+      router.push(href);
+      setOpen(false);
     },
-    {
-      id: 'nav-tasks',
-      label: 'Tasks',
-      icon: <CheckSquare className="h-4 w-4" />,
-      onSelect: () => {
-        router.push('/tasks');
-        setOpen(false);
-      },
-      group: 'Navigation',
-    },
-    {
-      id: 'nav-projects',
-      label: 'Projects',
-      icon: <FolderKanban className="h-4 w-4" />,
-      onSelect: () => {
-        router.push('/projects');
-        setOpen(false);
-      },
-      group: 'Navigation',
-    },
-    {
-      id: 'nav-epics',
-      label: 'Epics',
-      icon: <Target className="h-4 w-4" />,
-      onSelect: () => {
-        router.push('/epics');
-        setOpen(false);
-      },
-      group: 'Navigation',
-    },
-    {
-      id: 'nav-sprints',
-      label: 'Sprints',
-      icon: <Zap className="h-4 w-4" />,
-      onSelect: () => {
-        router.push('/sprints');
-        setOpen(false);
-      },
-      group: 'Navigation',
-    },
-    {
-      id: 'nav-calendar',
-      label: 'Calendar',
-      icon: <Calendar className="h-4 w-4" />,
-      onSelect: () => {
-        router.push('/calendar');
-        setOpen(false);
-      },
-      group: 'Navigation',
-    },
-    {
-      id: 'nav-team',
-      label: 'Team',
-      icon: <Users className="h-4 w-4" />,
-      onSelect: () => {
-        router.push('/team');
-        setOpen(false);
-      },
-      group: 'Navigation',
-    },
-    {
-      id: 'nav-analytics',
-      label: 'Analytics',
-      icon: <BarChart3 className="h-4 w-4" />,
-      onSelect: () => {
-        router.push('/analytics');
-        setOpen(false);
-      },
-      group: 'Navigation',
-    },
-    {
-      id: 'nav-requirements',
-      label: 'Requirements',
-      icon: <FileText className="h-4 w-4" />,
-      onSelect: () => {
-        router.push('/requirements');
-        setOpen(false);
-      },
-      group: 'Navigation',
-    },
-    {
-      id: 'nav-activity',
-      label: 'Activity Feed',
-      icon: <Clock className="h-4 w-4" />,
-      onSelect: () => {
-        router.push('/activity');
-        setOpen(false);
-      },
-      group: 'Navigation',
-    },
-  ];
+    [router]
+  );
 
-  // Quick actions
+  /**
+   * Navigation: the sidebar's own list, filtered the way the sidebar filters it.
+   *
+   * This used to be a second, hand-written list — eleven destinations to the
+   * sidebar's sixteen, so Attendance, Leave, Time Tracking, Functional
+   * Requirements and Workspaces could not be reached from here at all, two of
+   * the rest were named differently from the page they opened, and none of it
+   * looked at what the caller's role may see.
+   */
+  const navigationActions: CommandAction[] = navigationGroups
+    .flatMap((group) => group.items)
+    .filter(
+      (item) => permissionsLoading || !item.permission || permissions.has(item.permission)
+    )
+    .map((item) => ({
+      id: `nav-${item.href}`,
+      label: item.name,
+      icon: <item.icon className="h-4 w-4" />,
+      onSelect: () => go(item.href),
+      group: 'Go to',
+    }));
+
+  /**
+   * Quick actions, offered only to somebody who may take them. Each opens the
+   * page's own create dialog (`?action=create`); a role without the permission
+   * used to be sent to a page that then ignored the request.
+   */
   const quickActions: CommandAction[] = [
     {
       id: 'action-create-task',
-      label: 'Create New Task',
+      label: 'New Task',
       icon: <CheckSquare className="h-4 w-4" />,
-      onSelect: () => {
-        router.push('/tasks?action=create');
-        setOpen(false);
-      },
-      shortcut: 'T',
-      group: 'Actions',
+      onSelect: () => go('/tasks?action=create'),
+      group: 'Create',
+      permission: Permission.CREATE_TASK,
     },
     {
       id: 'action-create-project',
-      label: 'Create New Project',
+      label: 'New Project',
       icon: <FolderKanban className="h-4 w-4" />,
-      onSelect: () => {
-        router.push('/projects?action=create');
-        setOpen(false);
-      },
-      shortcut: 'P',
-      group: 'Actions',
+      onSelect: () => go('/projects?action=create'),
+      group: 'Create',
+      permission: Permission.CREATE_PROJECT,
     },
     {
       id: 'action-create-epic',
-      label: 'Create New Epic',
+      label: 'New Epic',
       icon: <Target className="h-4 w-4" />,
-      onSelect: () => {
-        router.push('/epics?action=create');
-        setOpen(false);
-      },
-      shortcut: 'E',
-      group: 'Actions',
+      onSelect: () => go('/epics?action=create'),
+      group: 'Create',
+      permission: Permission.CREATE_EPIC,
     },
     {
       id: 'action-create-sprint',
-      label: 'Create New Sprint',
+      label: 'New Sprint',
       icon: <Zap className="h-4 w-4" />,
-      onSelect: () => {
-        router.push('/sprints?action=create');
-        setOpen(false);
-      },
-      shortcut: 'S',
-      group: 'Actions',
+      onSelect: () => go('/sprints?action=create'),
+      group: 'Create',
+      permission: Permission.CREATE_SPRINT,
     },
-  ];
+  ].filter((action) => !permissionsLoading && permissions.has(action.permission));
 
-  // Settings actions
+  // Each lands on the tab it names. "Workspace Settings" used to open the
+  // Workspaces list, and "Profile Settings" whichever tab was open last.
   const settingsActions: CommandAction[] = [
-    {
-      id: 'settings-workspace',
-      label: 'Workspace Settings',
-      icon: <Settings className="h-4 w-4" />,
-      onSelect: () => {
-        router.push('/workspaces');
-        setOpen(false);
-      },
-      group: 'Settings',
-    },
     {
       id: 'settings-profile',
       label: 'Profile Settings',
       icon: <Settings className="h-4 w-4" />,
-      onSelect: () => {
-        router.push('/settings');
-        setOpen(false);
-      },
+      onSelect: () => go('/settings?tab=profile'),
       group: 'Settings',
     },
+    {
+      id: 'settings-notifications',
+      label: 'Notification Preferences',
+      icon: <Settings className="h-4 w-4" />,
+      onSelect: () => go('/settings?tab=notifications'),
+      group: 'Settings',
+    },
+    ...(permissions.has(Permission.MANAGE_WORKSPACE_SETTINGS)
+      ? [
+          {
+            id: 'settings-workspace',
+            label: 'Workspace Settings',
+            icon: <Settings className="h-4 w-4" />,
+            onSelect: () => go('/settings?tab=workspace'),
+            group: 'Settings',
+          },
+        ]
+      : []),
   ];
 
   const allActions = [...navigationActions, ...quickActions, ...settingsActions];
@@ -273,28 +196,10 @@ export function CommandPalette() {
       case 'sprint':
         return <Zap className="h-4 w-4" />;
       case 'requirement':
+      case 'client-requirement':
         return <FileText className="h-4 w-4" />;
       default:
         return <Search className="h-4 w-4" />;
-    }
-  };
-
-  const getResultUrl = (result: typeof searchResults[0]) => {
-    switch (result.type) {
-      case 'task':
-        return `/tasks?taskId=${result.id}`;
-      case 'project':
-        return `/projects/${result.id}`;
-      case 'epic':
-        return `/epics?epicId=${result.id}`;
-      case 'sprint':
-        return `/sprints/${result.id}/board`;
-      case 'requirement':
-        // The 'requirement' corpus is functional_requirements (use-global-search),
-        // so the id belongs to /functional-requirements — `reqId` was read by no page.
-        return `/functional-requirements?frId=${result.id}`;
-      default:
-        return '/dashboard';
     }
   };
 
@@ -327,7 +232,7 @@ export function CommandPalette() {
                 <CommandItem
                   key={result.id}
                   onSelect={() => {
-                    router.push(getResultUrl(result));
+                    router.push(searchResultUrl(result));
                     setOpen(false);
                   }}
                   className="flex items-center gap-3"
@@ -335,7 +240,7 @@ export function CommandPalette() {
                   {getResultIcon(result.type)}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="font-medium truncate">{result.title}</span>
+                      <span className="font-medium truncate" title={result.title}>{result.title}</span>
                       {result.hierarchyId && (
                         <Badge variant="outline" className="text-xs">
                           {result.hierarchyId}
@@ -348,8 +253,8 @@ export function CommandPalette() {
                       </p>
                     )}
                     <div className="flex items-center gap-2 mt-1">
-                      <Badge variant="secondary" className="text-xs capitalize">
-                        {result.type}
+                      <Badge variant="secondary" className="text-xs">
+                        {searchTypeLabel(result.type)}
                       </Badge>
                       {result.matchedFields.length > 0 && (
                         <span className="text-xs text-muted-foreground">
@@ -377,11 +282,6 @@ export function CommandPalette() {
                 >
                   {action.icon}
                   <span className="flex-1">{action.label}</span>
-                  {action.shortcut && (
-                    <Badge variant="outline" className="text-xs font-mono">
-                      {action.shortcut}
-                    </Badge>
-                  )}
                 </CommandItem>
               ))}
             </CommandGroup>
@@ -392,7 +292,7 @@ export function CommandPalette() {
 
       <div className="flex items-center justify-center gap-2 p-2 border-t bg-muted/50 text-xs text-muted-foreground">
         <kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-2xs font-medium">
-          <span className="text-xs">⌘</span>K
+          <span className="text-xs">{modKey}</span>K
         </kbd>
         <span>to open</span>
         <span>•</span>

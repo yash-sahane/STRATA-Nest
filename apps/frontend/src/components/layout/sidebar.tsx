@@ -26,7 +26,7 @@ import {
 import { cn, getInitials } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useSidebar } from '@/components/layout/sidebar-context';
@@ -70,7 +70,7 @@ export const navigationGroups: NavGroup[] = [
   {
     label: 'Overview',
     items: [
-      { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, description: 'Overview and analytics' },
+      { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, description: 'Your work at a glance' },
       { name: 'Analytics', href: '/analytics', icon: BarChart3, description: 'Reports and insights', permission: Permission.VIEW_ANALYTICS },
       { name: 'Activity', href: '/activity', icon: Activity, description: 'Recent workspace activity', permission: Permission.VIEW_WORKSPACE },
     ],
@@ -79,9 +79,9 @@ export const navigationGroups: NavGroup[] = [
     label: 'Work',
     items: [
       { name: 'Projects', href: '/projects', icon: FolderKanban, description: 'Manage your projects', permission: Permission.VIEW_PROJECTS },
-      { name: 'Requirements', href: '/requirements', icon: FileText, description: 'Client requirements', permission: Permission.VIEW_REQUIREMENTS },
+      { name: 'Client Requirements', href: '/requirements', icon: FileText, description: 'What the client has asked for', permission: Permission.VIEW_REQUIREMENTS },
       { name: 'Epics', href: '/epics', icon: Target, description: 'Large features & initiatives', permission: Permission.VIEW_EPICS },
-      { name: 'Functional Reqs', href: '/functional-requirements', icon: List, description: 'Technical specifications', permission: Permission.VIEW_FUNCTIONAL_REQUIREMENTS },
+      { name: 'Functional Requirements', href: '/functional-requirements', icon: List, description: 'What the team builds to meet them', permission: Permission.VIEW_FUNCTIONAL_REQUIREMENTS },
       { name: 'Sprints', href: '/sprints', icon: GitBranch, description: 'Sprint planning & tracking', permission: Permission.VIEW_SPRINTS },
       { name: 'Tasks', href: '/tasks', icon: CheckSquare, description: 'View and manage tasks', permission: Permission.VIEW_TASKS },
     ],
@@ -90,7 +90,7 @@ export const navigationGroups: NavGroup[] = [
     label: 'Team & Time',
     items: [
       { name: 'Team', href: '/team', icon: Users, description: 'Team members & roles', permission: Permission.VIEW_TEAM },
-      { name: 'Attendance', href: '/attendance', icon: Clock, description: 'Check-in & time tracking', permission: Permission.VIEW_TEAM },
+      { name: 'Attendance', href: '/attendance', icon: Clock, description: 'Check in and out', permission: Permission.VIEW_TEAM },
       // No permission gate: logging your own time is part of the member
       // baseline (hr:write). The Approvals tab inside is gated separately.
       { name: 'Time Tracking', href: '/time-tracking', icon: Timer, description: 'Timesheet & approvals' },
@@ -102,7 +102,7 @@ export const navigationGroups: NavGroup[] = [
     label: 'Workspace',
     items: [
       { name: 'Workspaces', href: '/workspaces', icon: Building2, description: 'Switch or manage workspaces', permission: Permission.VIEW_WORKSPACE },
-      { name: 'Settings', href: '/settings', icon: Settings, description: 'Workspace settings' },
+      { name: 'Settings', href: '/settings', icon: Settings, description: 'Your profile and this workspace' },
     ],
   },
 ];
@@ -110,32 +110,40 @@ export const navigationGroups: NavGroup[] = [
 /** Flat list of every destination — consumed by the header search/nav. */
 export const navigation: NavItem[] = navigationGroups.flatMap((group) => group.items);
 
+/**
+ * The navigation as this person may use it: the sidebar's groups, and the
+ * flat list the phone menu shows. One filter for both — the phone menu listed
+ * every page, Analytics and Activity included, to people the sidebar hid them
+ * from.
+ *
+ * Fails OPEN while the membership request is in flight: `permissions` is empty
+ * until it resolves, so filtering eagerly would render almost nothing on every
+ * cold load and then pop the real list in. A link the user cannot use for a few
+ * hundred milliseconds is a far smaller harm than navigation that flickers —
+ * and the destination page enforces its own access regardless.
+ */
+export function useVisibleNavigation(): { groups: NavGroup[]; items: NavItem[] } {
+  const { permissions, isLoading } = useNavigationPermissions();
+  return React.useMemo(() => {
+    const groups = isLoading
+      ? navigationGroups
+      : navigationGroups
+          .map((group) => ({
+            ...group,
+            items: group.items.filter((item) => !item.permission || permissions.has(item.permission)),
+          }))
+          .filter((group) => group.items.length > 0);
+    return { groups, items: groups.flatMap((group) => group.items) };
+  }, [permissions, isLoading]);
+}
+
 export function Sidebar({ className }: SidebarProps) {
   const pathname = usePathname();
   const { user } = useAuth();
   const { collapsed, toggle } = useSidebar();
-  const { permissions, isLoading: permissionsLoading } = useNavigationPermissions();
+  const { groups: visibleGroups } = useVisibleNavigation();
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + '/');
-
-  /**
-   * Filter, then drop groups the filter emptied.
-   *
-   * Fails OPEN while the membership request is in flight: `permissions` is empty
-   * until it resolves, so filtering eagerly would render an almost-blank sidebar
-   * on every cold load and then pop the real one in. A link the user cannot use
-   * for a few hundred milliseconds is a far smaller harm than navigation that
-   * flickers — and the destination page enforces its own access regardless.
-   */
-  const visibleGroups = React.useMemo(() => {
-    if (permissionsLoading) return navigationGroups;
-    return navigationGroups
-      .map((group) => ({
-        ...group,
-        items: group.items.filter((item) => !item.permission || permissions.has(item.permission)),
-      }))
-      .filter((group) => group.items.length > 0);
-  }, [permissions, permissionsLoading]);
 
   return (
     <div
@@ -208,7 +216,15 @@ export function Sidebar({ className }: SidebarProps) {
                   )}
                 >
                   <Icon className="h-5 w-5 shrink-0" />
-                  {!collapsed && <span>{item.name}</span>}
+                  {/* The two requirement pages are named in full — abbreviating one
+                      to "Functional Reqs" beside a bare "Requirements" is what made
+                      them read as the same thing twice. Truncation is the fallback
+                      for a narrow sidebar, with the whole name on hover. */}
+                  {!collapsed && (
+                    <span className="truncate" title={item.name}>
+                      {item.name}
+                    </span>
+                  )}
                 </Link>
               );
 
@@ -239,13 +255,15 @@ export function Sidebar({ className }: SidebarProps) {
                 this must not look clickable. */}
             <div className="flex items-center gap-3 rounded-lg p-2">
               <Avatar className="h-10 w-10 shadow-md ring-2 ring-background">
+                {/* The picture set in Settings — this showed initials only. */}
+                {user.avatar && <AvatarImage src={user.avatar} alt="" />}
                 <AvatarFallback className="bg-gradient-to-br from-primary to-primary/80 font-semibold text-primary-foreground">
                   {getInitials(user.name || 'User')}
                 </AvatarFallback>
               </Avatar>
               <div className="flex-1 overflow-hidden">
-                <p className="truncate text-sm font-semibold">{user.name || 'User'}</p>
-                <p className="truncate text-xs text-muted-foreground">{user.email}</p>
+                <p className="truncate text-sm font-semibold" title={user.name || 'User'}>{user.name || 'User'}</p>
+                <p className="truncate text-xs text-muted-foreground" title={user.email}>{user.email}</p>
               </div>
             </div>
           </div>

@@ -17,7 +17,16 @@ import { useSearchParams } from 'next/navigation';
  * left the parameter on the address bar anyway), so a refresh or a
  * back-navigation would reopen a dialog the user had already closed.
  */
-export function useCreateActionParam(onCreate: () => void, ready = true): void {
+export function useCreateActionParam(
+  onCreate: (params: URLSearchParams) => void,
+  ready = true,
+  /**
+   * Parameters that travel with the request and are consumed with it — what the
+   * new record belongs to (`?action=create&epicId=…`). The handler is given them,
+   * and they leave the address bar with `action`.
+   */
+  carried: readonly string[] = [],
+): void {
   const searchParams = useSearchParams();
   const isCreate = searchParams.get('action') === 'create';
   // Keep the latest callback without making the effect depend on its identity —
@@ -36,6 +45,10 @@ export function useCreateActionParam(onCreate: () => void, ready = true): void {
   // Once per arrival: opening the dialog re-renders, and the parameter is gone
   // by then, but a guard makes that ordering explicit rather than incidental.
   const consumed = React.useRef(false);
+  const carriedRef = React.useRef(carried);
+  React.useEffect(() => {
+    carriedRef.current = carried;
+  }, [carried]);
 
   React.useEffect(() => {
     if (!isCreate) {
@@ -46,8 +59,10 @@ export function useCreateActionParam(onCreate: () => void, ready = true): void {
     consumed.current = true;
 
     const url = new URL(window.location.href);
+    const asked = new URLSearchParams(url.searchParams);
     url.searchParams.delete('action');
+    for (const name of carriedRef.current) url.searchParams.delete(name);
     window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
-    handler.current();
+    handler.current(asked);
   }, [isCreate, ready]);
 }

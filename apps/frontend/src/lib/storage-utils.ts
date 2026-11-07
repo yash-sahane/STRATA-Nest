@@ -52,18 +52,3 @@ export function removeCurrentWorkspaceId(): void {
     }
 }
 
-/**
- * Check if localStorage is available
- */
-export function isLocalStorageAvailable(): boolean {
-    if (typeof window === 'undefined') return false;
-
-    try {
-        const test = '__localStorage_test__';
-        localStorage.setItem(test, test);
-        localStorage.removeItem(test);
-        return true;
-    } catch {
-        return false;
-    }
-}

@@ -65,13 +65,6 @@ export function getBalanceFieldForLeaveType(leaveType: LeaveRequestType): LeaveB
 }
 
 /**
- * Helper: Get the display name for a leave type
- */
-export function getLeaveTypeDisplayName(leaveType: LeaveRequestType): string {
-  return LEAVE_REQUEST_TYPES[leaveType];
-}
-
-/**
  * Helper: Get the display name for a balance field
  */
 export function getBalanceFieldDisplayName(field: LeaveBalanceField): string {

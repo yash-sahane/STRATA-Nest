@@ -4,6 +4,7 @@ import {
   formatDateOnly,
   parseDateOnly,
   todayDateOnly,
+  type HolidayDates,
 } from './utils/working-days';
 
 /**
@@ -20,9 +21,11 @@ export const LEAVE_TYPES = LEAVE_REQUEST_TYPES;
 export type LeaveType = LeaveRequestType;
 
 /**
- * Types a member may pick in the request form. COMP_OFF is excluded: it is an
- * EARNED balance and nothing in the product credits it yet, so offering it only
- * ever produces "Insufficient balance". Existing COMP_OFF records still render.
+ * Types a member may always pick in the request form. COMP_OFF is not among
+ * them: it is an EARNED balance, so the form offers it only to somebody who
+ * has been granted some (Leave > Team Balances) — see `leaveTypeOptions` in
+ * leave-request-form.tsx. Offered to everybody it only ever produced
+ * "Insufficient balance"; offered to nobody, a granted day could not be taken.
  */
 export const SELECTABLE_LEAVE_TYPES = Object.fromEntries(
   Object.entries(LEAVE_REQUEST_TYPES).filter(([key]) => key !== 'COMP_OFF')
@@ -62,8 +65,12 @@ export function getLeaveStatusLabel(status: LeaveStatus): string {
  * canonical rule (Mon-Fri plus alternate working Saturdays) so leave durations
  * and attendance agree about what a working day is.
  */
-export function calculateWorkingDays(startDate: string, endDate: string): number {
-  return countWorkingDaysBetween(startDate, endDate);
+export function calculateWorkingDays(
+  startDate: string,
+  endDate: string,
+  holidays?: HolidayDates
+): number {
+  return countWorkingDaysBetween(startDate, endDate, holidays);
 }
 
 /**
@@ -74,12 +81,18 @@ export function calculateWorkingDays(startDate: string, endDate: string): number
 export function calculateLeaveDays(
   startDate: string,
   endDate: string,
-  leaveType?: LeaveType
+  leaveType?: LeaveType,
+  /**
+   * The workspace's declared holidays. The API leaves them out of what a
+   * request costs; without them this preview said "5 working days" for a week
+   * the request was then charged 4 for.
+   */
+  holidays?: HolidayDates
 ): number {
   if (leaveType === 'HALF_DAY') {
     return startDate === endDate ? 0.5 : 0;
   }
-  return calculateWorkingDays(startDate, endDate);
+  return calculateWorkingDays(startDate, endDate, holidays);
 }
 
 /**
@@ -171,36 +184,39 @@ export function formatLeaveDateRange(startDate: string, endDate: string): string
 }
 
 /**
- * Calculate leave utilization percentage
+ * Leave that is not planned, and so may be recorded after it has begun — and
+ * for how many days afterwards. The API enforces the same two values
+ * (AFTER_THE_FACT_LEAVE / AFTER_THE_FACT_DAYS in leave.services.ts).
  */
-export function calculateLeaveUtilization(
-  used: number,
-  total: number
-): number {
-  if (total === 0) return 0;
-  return Math.round((used / total) * 100);
-}
+const AFTER_THE_FACT_LEAVE: ReadonlySet<string> = new Set(['SICK', 'BEREAVEMENT', 'UNPAID']);
+export const AFTER_THE_FACT_DAYS = 30;
+
+export const canBeRecordedAfterwards = (leaveType?: LeaveType): boolean =>
+  Boolean(leaveType) && AFTER_THE_FACT_LEAVE.has(String(leaveType));
 
 /**
- * Get leave balance status (low, medium, high)
+ * The earliest / latest date the form may offer, from the workspace's business
+ * day (not the browser's clock).
+ *
+ * Earliest: today, or for leave that is not planned, up to
+ * AFTER_THE_FACT_DAYS before it — nobody could record through the form that
+ * they had been ill yesterday, which is when sickness is reported.
+ *
+ * Latest: the end of next year. Leave is charged to the year it starts in and
+ * balances are kept for this year and the next (isAllowedBalanceYear in the
+ * API). The form used to say "a year from today", which disagreed with the API
+ * on both sides of that date.
  */
-export function getLeaveBalanceStatus(
-  remaining: number,
-  total: number
-): 'low' | 'medium' | 'high' {
-  const percentage = (remaining / total) * 100;
-
-  if (percentage <= 25) return 'low';
-  if (percentage <= 50) return 'medium';
-  return 'high';
+export function leaveDateBounds(leaveType?: LeaveType): { min: string; max: string } {
+  const today = parseDateOnly(todayDateOnly());
+  const min = new Date(today);
+  if (canBeRecordedAfterwards(leaveType)) min.setDate(min.getDate() - AFTER_THE_FACT_DAYS);
+  const max = new Date(today.getFullYear() + 1, 11, 31);
+  return { min: formatDateOnly(min), max: formatDateOnly(max) };
 }
 
-/** The earliest / latest date the form may offer, on the LOCAL calendar. */
-export function leaveDateBounds(): { min: string; max: string } {
-  const max = new Date();
-  max.setFullYear(max.getFullYear() + 1);
-  return { min: todayDateOnly(), max: formatDateOnly(max) };
-}
+/** The longest range one request may cover, as the API counts it (MAX_LEAVE_RANGE_DAYS). */
+const MAX_LEAVE_RANGE_DAYS = 366;
 
 /**
  * Validate leave request dates
@@ -208,14 +224,14 @@ export function leaveDateBounds(): { min: string; max: string } {
 export function validateLeaveDates(
   startDate: string,
   endDate: string,
-  leaveType?: LeaveType
+  leaveType?: LeaveType,
+  holidays?: HolidayDates
 ): { valid: boolean; error?: string } {
   // Date-only strings are parsed on the LOCAL calendar; `new Date('YYYY-MM-DD')`
   // is UTC midnight, which reads as the previous local day west of UTC and made
   // today's date fail the past-date check.
   const start = parseDateOnly(startDate);
   const end = parseDateOnly(endDate);
-  const today = parseDateOnly(todayDateOnly());
 
   // Check if dates are valid
   if (isNaN(start.getTime()) || isNaN(end.getTime())) {
@@ -227,17 +243,24 @@ export function validateLeaveDates(
     return { valid: false, error: 'End date cannot be before start date' };
   }
 
-  // Check if start date is in the past (for non-emergency leaves)
-  if (start < today) {
-    return { valid: false, error: 'Start date cannot be in the past' };
+  // Planned leave is asked for ahead; the kinds that are not planned can be
+  // recorded for a while afterwards. Same rule, same words, as the API.
+  const earliest = parseDateOnly(leaveDateBounds(leaveType).min);
+  if (start < earliest) {
+    return {
+      valid: false,
+      error: canBeRecordedAfterwards(leaveType)
+        ? `Leave can be recorded up to ${AFTER_THE_FACT_DAYS} days after the fact`
+        : 'This kind of leave has to be requested before it starts. Sick, bereavement and unpaid leave can be recorded afterwards.',
+    };
   }
 
-  // Check if leave is too far in the future (e.g., more than 1 year)
-  const oneYearFromNow = new Date();
-  oneYearFromNow.setFullYear(oneYearFromNow.getFullYear() + 1);
-
-  if (start > oneYearFromNow) {
-    return { valid: false, error: 'Leave cannot be requested more than 1 year in advance' };
+  // The API's two limits, in its words.
+  if (start > parseDateOnly(leaveDateBounds(leaveType).max)) {
+    return { valid: false, error: 'Leave can be booked up to the end of next year.' };
+  }
+  if ((end.getTime() - start.getTime()) / 86_400_000 > MAX_LEAVE_RANGE_DAYS) {
+    return { valid: false, error: 'A leave request cannot span more than a year.' };
   }
 
   // A half-day is one session, so it cannot span a range.
@@ -247,7 +270,7 @@ export function validateLeaveDates(
 
   // A range made entirely of weekends costs nothing and the server rejects it —
   // say so instead of silently disabling Submit.
-  if (leaveType !== 'HALF_DAY' && calculateWorkingDays(startDate, endDate) === 0) {
+  if (calculateWorkingDays(startDate, endDate, holidays) === 0) {
     return { valid: false, error: 'The selected dates contain no working days' };
   }
 

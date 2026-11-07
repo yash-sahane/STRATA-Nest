@@ -10,12 +10,13 @@ import { WorkspaceGuard } from '@/components/guards/workspace-guard';
 import { TempPasswordGuard } from '@/components/guards/temp-password-guard';
 import { CommandPalette } from '@/components/search/command-palette';
 import { WorkspaceProvider } from '@/components/providers/workspace-provider';
-import { DeadlineReminderChecker } from '@/components/notifications/deadline-reminder-checker';
 import { PageContainer } from '@/components/layout/page-container';
 import { SidebarProvider, useSidebar } from '@/components/layout/sidebar-context';
 import { PageLoader } from '@/components/ui/page-loader';
 import { ErrorState } from '@/components/ui/error-state';
 import { cn } from '@/lib/utils';
+import { useMyAccessRealtime } from '@/hooks/use-realtime';
+import { loginPathReturningTo } from '@/lib/api/return-path';
 
 function DashboardShell({
   isOnboarding,
@@ -26,6 +27,9 @@ function DashboardShell({
 }) {
   const { collapsed } = useSidebar();
   const pathname = usePathname();
+  // A change to the caller's role, or to what their role may do, reaches the
+  // screen they are on — whichever screen that is.
+  useMyAccessRealtime();
 
   return (
     <div className="flex min-h-screen bg-background">
@@ -71,7 +75,7 @@ function DashboardShell({
 }
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const { user, loading, backendUnreachable } = useAuth();
+  const { user, loading, backendUnreachable, signedOut } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
 
@@ -79,10 +83,19 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     // Only a real "not signed in" sends you to /login. If the API could not be
     // reached the session is unknown, not invalid — bouncing to a login form
     // that will also fail just hides the actual problem.
+    //
+    // Carrying the page along (`?next=`), so signing in returns there rather
+    // than to the dashboard — unless the session was ended on purpose. Read
+    // from `window` rather than useSearchParams, which would need a Suspense
+    // boundary around the whole shell.
     if (!loading && !user && !backendUnreachable) {
-      router.push('/login');
+      router.push(
+        signedOut
+          ? '/login'
+          : loginPathReturningTo(`${window.location.pathname}${window.location.search}`)
+      );
     }
-  }, [user, loading, backendUnreachable, router]);
+  }, [user, loading, backendUnreachable, signedOut, router]);
 
   if (loading) {
     return <PageLoader className="h-screen" />;
@@ -117,8 +130,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     <WorkspaceProvider>
       <SidebarProvider>
         <TooltipProvider>
-          {/* Background deadline reminder checker */}
-          <DeadlineReminderChecker />
           <DashboardShell isOnboarding={isOnboarding}>{children}</DashboardShell>
         </TooltipProvider>
       </SidebarProvider>

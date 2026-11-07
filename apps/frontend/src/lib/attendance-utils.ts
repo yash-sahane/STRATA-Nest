@@ -1,7 +1,9 @@
 ﻿import { resources } from '@/lib/api/client';
 import { query } from '@/lib/api/client';
 import { logger } from '@/lib/logger';
+import type { LeaveRequest } from '@/types';
 import {
+  businessDateOf,
   countWorkingDaysInMonth,
   formatDateOnly,
   getMonthDateRange,
@@ -49,20 +51,13 @@ export const ATTENDANCE_STATUS = {
 
 export type AttendanceStatus = keyof typeof ATTENDANCE_STATUS;
 
-// Work schedule configuration
-export const WORK_SCHEDULE = {
-  START_TIME: '08:30', // 8:30 AM
-  END_TIME: '17:00', // 5:00 PM
-  GRACE_PERIOD_MINUTES: 15, // 15 minutes grace period for late arrival
-  HALF_DAY_HOURS: 4, // Minimum hours for half-day
-  // Floor below which a CLOSED day earns no credit. Mirrors
-  // WORK_SCHEDULE.MIN_CREDIT_HOURS in the API's attendance-compute.ts — the two
-  // must agree or the badge on screen contradicts the stored status.
-  MIN_CREDIT_HOURS: 1,
-  FULL_DAY_HOURS: 8, // Expected hours for full day
-  WORKING_DAYS: [1, 2, 3, 4, 5] as number[], // Monday to Friday (base)
-  ALTERNATE_SATURDAY_WEEKS: [1, 3], // Week 1 and 3 have Saturday working
-};
+/*
+ * There is deliberately no work schedule in this file. A copy of the API's
+ * start time and grace period used to live here, and the Today badge graded the
+ * arrival a second time from it — on the browser's clock, against hours the
+ * workspace can now set for itself. Whether a day was late, and by how much, is
+ * read off the record the server filed (`status`, `lateMinutes`).
+ */
 
 // ============================================================================
 // Date and Time Utilities
@@ -76,11 +71,29 @@ export function getCurrentDate(): string {
 }
 
 /**
- * Get current time in HH:MM format
+ * The one time-of-day format the attendance screens show: 12-hour, "09:24 PM".
+ *
+ * The Today card's clock was built by hand as 24-hour "21:23" while the
+ * check-in right under it, and every time on the Team tab, came out of
+ * `formatTime` as "09:24 PM" — two formats for the same kind of fact on one
+ * card. Both read this now.
+ */
+const TIME_OF_DAY: Intl.DateTimeFormatOptions = {
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: true,
+};
+
+/**
+ * The current time, in the attendance screens' format (see TIME_OF_DAY).
  */
 export function getCurrentTime(): string {
-  const now = new Date();
-  return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  return new Date().toLocaleTimeString('en-US', TIME_OF_DAY);
+}
+
+/** Milliseconds until the next whole minute on the clock. */
+export function msUntilNextMinute(now: number = Date.now()): number {
+  return 60_000 - (now % 60_000);
 }
 
 /**
@@ -89,14 +102,6 @@ export function getCurrentTime(): string {
 export function isToday(date: string): boolean {
   const today = getCurrentDate();
   return date === today;
-}
-
-/**
- * Parse time string (HH:MM) to minutes since midnight
- */
-export function timeToMinutes(time: string): number {
-  const [hours, minutes] = time.split(':').map(Number);
-  return hours * 60 + minutes;
 }
 
 /**
@@ -122,25 +127,6 @@ export function calculateWorkHours(checkInTime: string, checkOutTime: string): n
   const checkOut = new Date(checkOutTime);
   const hours = (checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60);
   return Number.isFinite(hours) && hours > 0 ? hours : 0;
-}
-
-// ============================================================================
-// Attendance Status Calculation
-// ============================================================================
-
-/**
- * Determine if check-in is late
- */
-export function isLateCheckIn(checkInTime: string): boolean {
-  const checkIn = new Date(checkInTime);
-  const hours = checkIn.getHours();
-  const minutes = checkIn.getMinutes();
-  const checkInMinutes = hours * 60 + minutes;
-
-  const startMinutes = timeToMinutes(WORK_SCHEDULE.START_TIME);
-  const graceMinutes = startMinutes + WORK_SCHEDULE.GRACE_PERIOD_MINUTES;
-
-  return checkInMinutes > graceMinutes;
 }
 
 // ============================================================================
@@ -262,15 +248,11 @@ export function getAttendanceStatusIcon(status: AttendanceStatus | string): stri
 }
 
 /**
- * Format time for display
+ * Format a recorded time for display — the attendance screens' one format
+ * (see TIME_OF_DAY), shared with the Today card's clock.
  */
 export function formatTime(dateTime: string): string {
-  const d = new Date(dateTime);
-  return d.toLocaleTimeString('en-US', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
-  });
+  return new Date(dateTime).toLocaleTimeString('en-US', TIME_OF_DAY);
 }
 
 /**
@@ -411,9 +393,11 @@ export function calculateAttendanceSummary(
     (r) => r.status === 'HALF_DAY' || r.status === 'Half Day'
   ).length;
 
-  const leaveDays =
-    leaveDaysInPeriod ||
-    attendanceRecords.filter((r) => r.status === 'ON_LEAVE' || r.status === 'On Leave').length;
+  // The caller's count, zero included. This used to be `leaveDaysInPeriod ||
+  // <every ON_LEAVE row in the month>`, which took a zero for "not given" — so
+  // leave approved for the END of the month was subtracted from the days
+  // already gone, and five attended days out of ten read as "100% — 5 of 5".
+  const leaveDays = leaveDaysInPeriod;
 
   const attendedDays = presentDays + lateDays + halfDays;
   const expectedDays = Math.max(0, workingDaysInPeriod - leaveDays);
@@ -476,7 +460,7 @@ export async function getUserLeaveDates(
     // allowlist); listAll still walks the pages because a long-running leave
     // history can exceed one page, and the clamp below keeps only the days
     // inside [startDate, endDate].
-    const response = await resources.listAll('leave_requests', [
+    const response = await resources.listAll<LeaveRequest>('leave_requests', [
       query.equal('userId', userId),
       query.equal('status', 'APPROVED'),
       // Leave overlaps if: leave.startDate <= endDate AND leave.endDate >= startDate
@@ -488,8 +472,11 @@ export async function getUserLeaveDates(
 
     const leaveDates = new Set<string>();
 
-    // For each approved leave, add all dates in the range
-    response.items.forEach((leave: any) => {
+    // For each approved leave, add all dates in the range — but not a half
+    // day's: the person works the other half and checks in for it, and the API
+    // files no ON_LEAVE day for one (materializeLeaveAttendance).
+    response.items.forEach((leave) => {
+      if (leave.type === 'HALF_DAY') return;
       const leaveStart = parseDateOnly(String(leave.startDate));
       const leaveEnd = parseDateOnly(String(leave.endDate));
       const rangeStart = parseDateOnly(startDate);
@@ -531,7 +518,9 @@ export async function getUserLeaveDates(
  */
 export function attendanceWindowStart(periodStart: string, joinedAt?: string): string {
   if (!joinedAt) return periodStart;
-  const joinedDay = String(joinedAt).slice(0, 10);
+  // The business day the membership began, not the UTC date the timestamp
+  // starts with — they differ for hours of every day (see businessDateOf).
+  const joinedDay = businessDateOf(String(joinedAt));
   // A malformed value must not silently widen the window back to the epoch.
   if (!/^\d{4}-\d{2}-\d{2}$/.test(joinedDay)) return periodStart;
   return joinedDay > periodStart ? joinedDay : periodStart;

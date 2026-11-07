@@ -1,11 +1,12 @@
 ﻿'use client';
 
 import * as React from 'react';
-import { useSearchParams, useRouter } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useClientRequirementsRealtime } from '@/hooks/use-realtime';
 import { useProjects } from '@/hooks/use-project';
+import { useFunctionalRequirements } from '@/hooks/use-functional-requirement';
 import { useClientRequirements } from '@/hooks/use-client-requirement';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -41,9 +42,12 @@ import { getPriorityConfig } from '@/lib/semantic/priority';
 import { InlineLoader, PageLoader } from '@/components/ui/page-loader';
 import { AIGenerateDialog } from '@/components/ai/ai-generate-dialog';
 import type { GeneratedHierarchy } from '@/lib/ai-generator';
-import { useIsAdmin, useHasPermission } from '@/hooks/use-permissions';
+import { useHasPermission } from '@/hooks/use-permissions';
 import { Permission } from '@/lib/permissions';
 import { logger } from '@/lib/logger';
+import { ProjectPicker } from '@/components/projects/project-picker';
+import { useProjectSelectionSync } from '@/hooks/use-project-selection-sync';
+import { useConsumeParam } from '@/hooks/use-tab-param';
 
 // Add permission for requirements (using epic permission as proxy since requirements follow similar hierarchy)
 // Note: In a production app, you might want to add specific requirement permissions
@@ -65,13 +69,17 @@ function RequirementsPageContent() {
   const { user } = useAuth();
   const { currentWorkspace } = useCurrentWorkspace();
   const { data: projects = [], isLoading: projectsLoading } = useProjects(currentWorkspace?.id);
-  const router = useRouter();
   const searchParams = useSearchParams();
-  const frIdFromUrl = searchParams.get('frId');
-  const reqIdFromUrl = searchParams.get('reqId');
+  const crIdFromUrl = searchParams.get('crId');
 
-  const isAdmin = useIsAdmin();
   const canCreateRequirement = useHasPermission(Permission.CREATE_REQUIREMENT);
+  // A generated plan is saved as requirements AND epics AND tasks, and the API
+  // checks all three (requirement:write, planning:write, task:create) before it
+  // calls the model. Offered on requirement:write alone, a custom role could run
+  // a generation only to be refused at the end.
+  const canCreateEpics = useHasPermission(Permission.CREATE_EPIC);
+  const canCreateTasks = useHasPermission(Permission.CREATE_TASK);
+  const canGenerate = canCreateRequirement && canCreateEpics && canCreateTasks;
   const canEditRequirement = useHasPermission(Permission.EDIT_REQUIREMENT);
   const canDeleteRequirement = useHasPermission(Permission.DELETE_REQUIREMENT);
 
@@ -85,28 +93,28 @@ function RequirementsPageContent() {
   const [aiGenerateDialogOpen, setAiGenerateDialogOpen] = React.useState(false);
   const [selectedRequirement, setSelectedRequirement] = React.useState<string | null>(null);
 
-  // Handle project selection: prioritize URL param, then localStorage, then first project
-  React.useEffect(() => {
-    const STORAGE_KEY = 'selected-project-id';
-    const urlProjectId = searchParams.get('projectId');
-    const savedProjectId = localStorage.getItem(STORAGE_KEY);
+  // How much of each is delivered: the functional requirements raised for it,
+  // and how many of those are done — the figure its dialog gives.
+  const { data: functionalRequirements = [] } = useFunctionalRequirements(selectedProjectId || undefined);
+  const deliveryOf = React.useMemo(() => {
+    const byRequirement = new Map<string, { total: number; done: number }>();
+    for (const fr of functionalRequirements) {
+      if (!fr.clientRequirementId) continue;
+      const entry = byRequirement.get(fr.clientRequirementId) ?? { total: 0, done: 0 };
+      entry.total += 1;
+      if (fr.status === 'DEPLOYED') entry.done += 1;
+      byRequirement.set(fr.clientRequirementId, entry);
+    }
+    return byRequirement;
+  }, [functionalRequirements]);
 
-    // Priority 1: URL parameter (from "View Requirements" button)
-    if (urlProjectId && projects.some((p) => p.id === urlProjectId)) {
-      setSelectedProjectId(urlProjectId);
-      localStorage.setItem(STORAGE_KEY, urlProjectId);
-    }
-    // Priority 2: localStorage (previously selected)
-    else if (savedProjectId && projects.some((p) => p.id === savedProjectId)) {
-      setSelectedProjectId(savedProjectId);
-    }
-    // Priority 3: First project as default
-    else if (projects.length > 0 && !selectedProjectId) {
-      const firstProjectId = projects[0].id;
-      setSelectedProjectId(firstProjectId);
-      localStorage.setItem(STORAGE_KEY, firstProjectId);
-    }
-  }, [projects, selectedProjectId, searchParams]);
+  // URL param from "View Requirements" (once) > remembered project > first project.
+  useProjectSelectionSync({
+    projects,
+    urlProjectId: searchParams.get('projectId'),
+    selectedProjectId,
+    setSelectedProjectId,
+  });
 
   // Save project selection to localStorage when changed
   const handleProjectChange = React.useCallback((projectId: string) => {
@@ -121,31 +129,14 @@ function RequirementsPageContent() {
     refetch,
   } = useClientRequirements(selectedProjectId);
 
-  // Global search emits `?reqId=` for its "requirement" hits, but that corpus is
-  // functional_requirements (use-global-search), not the client requirements this
-  // page lists — so the id can only ever be resolved on /functional-requirements.
+  // ?crId= (a link, a notification) opens that client requirement, and is spent
+  // once it is open — as on the functional-requirements page. router.replace left
+  // it on the address bar, and every refetch of the list reopened the dialog.
   React.useEffect(() => {
-    if (!reqIdFromUrl) return;
-    const params = new URLSearchParams(searchParams.toString());
-    params.delete('reqId');
-    params.set('frId', reqIdFromUrl);
-    router.replace(`/functional-requirements?${params.toString()}`);
-  }, [reqIdFromUrl, searchParams, router]);
-
-  // Open FR detail dialog if frId is in URL (from notification click)
-  React.useEffect(() => {
-    if (frIdFromUrl && requirements.length > 0) {
-      const requirement = requirements.find((r) => r.id === frIdFromUrl);
-      if (requirement) {
-        setSelectedRequirement(requirement.id);
-        // Clear the frId from URL after opening the dialog
-        const params = new URLSearchParams(searchParams.toString());
-        params.delete('frId');
-        const newUrl = params.toString() ? `/requirements?${params.toString()}` : '/requirements';
-        router.replace(newUrl);
-      }
-    }
-  }, [frIdFromUrl, requirements, searchParams, router]);
+    if (!crIdFromUrl || requirements.length === 0) return;
+    if (requirements.some((r) => r.id === crIdFromUrl)) setSelectedRequirement(crIdFromUrl);
+  }, [crIdFromUrl, requirements]);
+  useConsumeParam('crId', Boolean(crIdFromUrl) && selectedRequirement === crIdFromUrl);
 
   // Filter requirements
   const filteredRequirements = React.useMemo(() => {
@@ -198,19 +189,21 @@ function RequirementsPageContent() {
       <PageHeader
         className="sm:flex-wrap sm:[&>div:first-child]:grow sm:[&>div:first-child]:basis-60"
         icon={FileText}
-        title="Requirements"
-        description="Manage client and functional requirements"
+        title="Client Requirements"
+        description="What the client has asked for. Each one is broken down into epics and functional requirements."
         actions={
-          (canCreateRequirement || isAdmin) && (
+          (canCreateRequirement) && (
             <>
-              <Button
-                variant="outline"
-                onClick={() => setAiGenerateDialogOpen(true)}
-                disabled={!selectedProjectId}
-              >
-                <Sparkles className="mr-2 h-4 w-4" />
-                Generate with AI
-              </Button>
+              {canGenerate && (
+                <Button
+                  variant="outline"
+                  onClick={() => setAiGenerateDialogOpen(true)}
+                  disabled={!selectedProjectId}
+                >
+                  <Sparkles className="mr-2 h-4 w-4" />
+                  Generate with AI
+                </Button>
+              )}
               <Button onClick={() => setCreateDialogOpen(true)} disabled={!selectedProjectId}>
                 <Plus className="mr-2 h-4 w-4" />
                 New Client Requirement
@@ -233,7 +226,7 @@ function RequirementsPageContent() {
           icon={FolderPlus}
           title="No projects yet"
           description="Create a project before capturing client requirements."
-          action={{ label: 'Go to Projects', onClick: () => router.push('/projects') }}
+          action={{ label: 'Go to Projects', href: '/projects' }}
         />
       )}
 
@@ -244,18 +237,12 @@ function RequirementsPageContent() {
           <CardTitle>Select Project</CardTitle>
         </CardHeader>
         <CardContent>
-          <Select value={selectedProjectId} onValueChange={handleProjectChange}>
-            <SelectTrigger aria-label="Select a project" className="w-full md:w-[400px]">
-              <SelectValue placeholder="Select a project..." />
-            </SelectTrigger>
-            <SelectContent>
-              {projects.map((project) => (
-                <SelectItem key={project.id} value={project.id}>
-                  {project.shortCode} - {project.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <ProjectPicker
+            projects={projects}
+            value={selectedProjectId}
+            onChange={handleProjectChange}
+            className="md:w-[400px]"
+          />
         </CardContent>
       </Card>
       )}
@@ -345,7 +332,7 @@ function RequirementsPageContent() {
                 </div>
                 <Select
                   value={statusFilter}
-                  onValueChange={(value) => setStatusFilter(value as any)}
+                  onValueChange={(value) => setStatusFilter(value as RequirementStatus | 'ALL')}
                 >
                   <SelectTrigger aria-label="Filter requirements by status" className="w-full md:w-[200px]">
                     <SelectValue placeholder="Status" />
@@ -362,7 +349,7 @@ function RequirementsPageContent() {
                 </Select>
                 <Select
                   value={priorityFilter}
-                  onValueChange={(value) => setPriorityFilter(value as any)}
+                  onValueChange={(value) => setPriorityFilter(value as RequirementPriority | 'ALL')}
                 >
                   <SelectTrigger aria-label="Filter requirements by priority" className="w-full md:w-[200px]">
                     <SelectValue placeholder="Priority" />
@@ -398,10 +385,14 @@ function RequirementsPageContent() {
                     icon={FileText}
                     title="No client requirements yet"
                     description="Capture your first client requirement to start the delivery chain."
-                    action={{
-                      label: 'Create First Requirement',
-                      onClick: () => setCreateDialogOpen(true),
-                    }}
+                    action={
+                      canCreateRequirement
+                        ? {
+                            label: 'New Client Requirement',
+                            onClick: () => setCreateDialogOpen(true),
+                          }
+                        : undefined
+                    }
                   />
                 ) : (
                   <EmptyState
@@ -419,6 +410,7 @@ function RequirementsPageContent() {
                         <TableHead>Client</TableHead>
                         <TableHead>Priority</TableHead>
                         <TableHead>Status</TableHead>
+                        <TableHead>Delivered</TableHead>
                         <TableHead>Created</TableHead>
                         <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
@@ -463,6 +455,16 @@ function RequirementsPageContent() {
                                 <StatusIcon className="h-3 w-3" />
                                 {status.label}
                               </Badge>
+                            </TableCell>
+                            <TableCell className="text-sm">
+                              {(() => {
+                                const raised = deliveryOf.get(requirement.id);
+                                return raised && raised.total > 0 ? (
+                                  `${raised.done} of ${raised.total} done`
+                                ) : (
+                                  <span className="text-muted-foreground">Nothing raised yet</span>
+                                );
+                              })()}
                             </TableCell>
                             <TableCell className="text-muted-foreground">
                               {formatDate(requirement.createdAt)}
@@ -518,8 +520,8 @@ function RequirementsPageContent() {
         open={!!selectedRequirement}
         onOpenChange={(open: boolean) => !open && setSelectedRequirement(null)}
         projectId={selectedProjectId}
-        canEdit={canEditRequirement || isAdmin}
-        canDelete={canDeleteRequirement || isAdmin}
+        canEdit={canEditRequirement}
+        canDelete={canDeleteRequirement}
       />
     </div>
   );

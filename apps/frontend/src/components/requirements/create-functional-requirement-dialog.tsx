@@ -1,5 +1,6 @@
 'use client';
 
+import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -30,9 +31,12 @@ import {
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
-import { useCreateFunctionalRequirement } from '@/hooks/use-functional-requirement';
-import type { ClientRequirement, FunctionalRequirement, Epic } from '@/types'; // ✅ NEW: Import Epic type
+import {
+  useCreateFunctionalRequirement,
+  useUpdateFunctionalRequirement,
+} from '@/hooks/use-functional-requirement';
+import { basedOnFor, changedFields } from '@/lib/utils/changed-fields';
+import type { ClientRequirement, EditBasedOn, FunctionalRequirement, Epic } from '@/types';
 
 const formSchema = z.object({
   title: z.string().min(3, 'Title must be at least 3 characters').max(200),
@@ -42,7 +46,6 @@ const formSchema = z.object({
   complexity: z.enum(['LOW', 'MEDIUM', 'HIGH', 'VERY_HIGH']),
   epicId: z.string().min(1, 'Epic is required'), // ✅ FIXED: Epic is mandatory
   parentRequirementId: z.string().optional(),
-  isReusable: z.boolean().default(false),
 });
 
 type FormData = z.infer<typeof formSchema>;
@@ -53,11 +56,34 @@ interface CreateFunctionalRequirementDialogProps {
   projectId: string;
   projectCode: string;
   workspaceId: string;
-  userId: string;
   clientRequirements: ClientRequirement[];
   functionalRequirements: FunctionalRequirement[];
   epics: Epic[]; // ✅ NEW: Epics for mapping
+  /**
+   * Present: edit THIS requirement instead of creating one.
+   *
+   * There was no way to. Once created, a requirement's title, description,
+   * type, priority, complexity, epic and parent were fixed — the detail dialog
+   * writes only its sprint and assignees — so a typo or a wrong epic meant
+   * deleting it and starting again, which also cut its tasks loose.
+   */
+  requirement?: FunctionalRequirement | null;
+  /** The epic a new requirement is added to, when it is added from one. */
+  defaultEpicId?: string;
 }
+
+/** The form's fields as a requirement holds them, or the blanks of a new one. */
+const valuesFor = (requirement?: FunctionalRequirement | null): FormData => ({
+  title: requirement?.title ?? '',
+  description: requirement?.description ?? '',
+  type: (requirement?.type as FormData['type']) ?? 'FUNCTIONAL',
+  // '' is what an AI-generated requirement carries: shown as Medium, and only
+  // written back if the person actually changes it.
+  priority: (requirement?.priority as FormData['priority']) || 'MEDIUM',
+  complexity: (requirement?.complexity as FormData['complexity']) ?? 'MEDIUM',
+  epicId: requirement?.epicId ?? '',
+  parentRequirementId: requirement?.parentRequirementId ?? '',
+});
 
 export function CreateFunctionalRequirementDialog({
   open,
@@ -65,27 +91,92 @@ export function CreateFunctionalRequirementDialog({
   projectId,
   projectCode,
   workspaceId,
-  userId,
   functionalRequirements,
   epics, // ✅ NEW: Receive epics
+  requirement = null,
+  defaultEpicId = '',
 }: CreateFunctionalRequirementDialogProps) {
   const createRequirement = useCreateFunctionalRequirement();
+  const updateRequirement = useUpdateFunctionalRequirement();
+  const editing = requirement;
+  const saving = createRequirement.isPending || updateRequirement.isPending;
 
   const form = useForm<FormData>({
     resolver: zodResolver(formSchema),
-    defaultValues: {
-      title: '',
-      description: '',
-      type: 'FUNCTIONAL',
-      priority: 'MEDIUM',
-      complexity: 'MEDIUM',
-      epicId: '',
-      parentRequirementId: '',
-      isReusable: false,
-    },
+    defaultValues: valuesFor(null),
   });
 
+  // What the requirement held when THIS dialog opened: the baseline both the
+  // diff and the conflict check are taken against. Seeded once per opening, by
+  // id — the row itself is refetched whenever anybody touches it, and re-seeding
+  // on that would wipe what was being typed and move the baseline under it.
+  const baseline = React.useRef<FunctionalRequirement | null>(null);
+  const seededFor = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (!open) {
+      seededFor.current = null;
+      return;
+    }
+    const key = editing?.id ?? 'new';
+    if (seededFor.current === key) return;
+    seededFor.current = key;
+    baseline.current = editing;
+    form.reset(editing ? valuesFor(editing) : { ...valuesFor(null), epicId: defaultEpicId });
+  }, [open, editing, form, defaultEpicId]);
+
+  const saveEdit = async (values: FormData): Promise<boolean> => {
+    const original = baseline.current;
+    if (!original) return false;
+    const before = valuesFor(original);
+    const submitted: Record<string, unknown> = {
+      title: values.title.trim(),
+      description: values.description ?? '',
+      type: values.type,
+      priority: values.priority,
+      complexity: values.complexity,
+      epicId: values.epicId,
+      parentRequirementId: values.parentRequirementId || '',
+    };
+    // Compared against what the FORM showed, so a field left alone is not sent.
+    const shown: Record<string, unknown> = {
+      title: before.title,
+      description: before.description ?? '',
+      type: before.type,
+      priority: before.priority,
+      complexity: before.complexity,
+      epicId: before.epicId,
+      parentRequirementId: before.parentRequirementId || '',
+    };
+    const updates = changedFields(shown, submitted);
+    // A requirement belongs to the client requirement its epic does. It was
+    // copied from the epic once, at creation, and nothing kept it in step.
+    if (updates.epicId !== undefined) {
+      updates.clientRequirementId =
+        epics.find((epic) => epic.id === values.epicId)?.requirementId || '';
+    }
+    if (Object.keys(updates).length === 0) return true;
+    await updateRequirement.mutateAsync({
+      requirementId: original.id,
+      projectId,
+      updates: {
+        ...updates,
+        basedOn: basedOnFor(original as unknown as Record<string, unknown>, updates),
+      } as EditBasedOn<Partial<FunctionalRequirement>>,
+    });
+    return true;
+  };
+
   const onSubmit = async (values: FormData) => {
+    if (editing) {
+      try {
+        if (await saveEdit(values)) onOpenChange(false);
+      } catch {
+        // The mutation toasts the reason (a conflict names the field); the form
+        // stays open with everything the person typed.
+      }
+      return;
+    }
+
     // ✅ FIX: Get client requirement id from the selected epic's requirementId
     const selectedEpic = epics.find((e) => e.id === values.epicId);
     const clientReqId = selectedEpic?.requirementId || '';
@@ -95,7 +186,6 @@ export function CreateFunctionalRequirementDialog({
         projectId,
         projectCode,
         workspaceId,
-        createdBy: userId,
         title: values.title,
         description: values.description || '',
         type: values.type,
@@ -105,7 +195,6 @@ export function CreateFunctionalRequirementDialog({
         epicId: values.epicId, // ✅ FIXED: Epic is now mandatory
         clientRequirementId: clientReqId, // ✅ FIX: Derived from epic's linked client requirement
         parentRequirementId: values.parentRequirementId, // For sub-requirements
-        reusable: values.isReusable || false,
       });
     } catch {
       // The mutation's onError already toasted. Swallow the rejection so it does
@@ -121,7 +210,10 @@ export function CreateFunctionalRequirementDialog({
   // parentRequirementId. The old predicate used clientRequirementId, which every
   // FR created through this dialog has, so the picker was always empty and
   // nesting was unreachable.
-  const parentRequirements = functionalRequirements.filter((fr) => !fr.parentRequirementId);
+  const parentRequirements = functionalRequirements.filter(
+    // ...and never the requirement being edited: it cannot be its own parent.
+    (fr) => !fr.parentRequirementId && fr.id !== editing?.id
+  );
 
   return (
     <Dialog
@@ -133,14 +225,20 @@ export function CreateFunctionalRequirementDialog({
     >
       <DialogContent size="xl" className="max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Create Functional Requirement</DialogTitle>
+          <DialogTitle>
+            {editing ? 'Edit Functional Requirement' : 'Create Functional Requirement'}
+          </DialogTitle>
           <DialogDescription>
-            Define technical specifications derived from client requirements
+            {editing
+              ? `${editing.hierarchyId} — change what it says and where it sits. Its sprint and assignees are set on the requirement itself.`
+              : 'What the team will build to meet a client requirement. Tasks are created from it.'}
           </DialogDescription>
         </DialogHeader>
 
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+          {/* Wrapped so the handler is built when the form is submitted, not on
+              every render: saving an edit reads the baseline ref. */}
+          <form onSubmit={(event) => form.handleSubmit(onSubmit)(event)} className="space-y-4">
             {/* Title */}
             <FormField
               control={form.control}
@@ -330,25 +428,6 @@ export function CreateFunctionalRequirementDialog({
               )}
             />
 
-            {/* Reusable Checkbox */}
-            <FormField
-              control={form.control}
-              name="isReusable"
-              render={({ field }) => (
-                <FormItem className="flex flex-row items-start space-x-3 space-y-0">
-                  <FormControl>
-                    <Checkbox checked={field.value} onCheckedChange={field.onChange} />
-                  </FormControl>
-                  <div className="space-y-1 leading-none">
-                    <FormLabel>Reusable Requirement</FormLabel>
-                    <FormDescription>
-                      Mark as reusable to use across multiple projects
-                    </FormDescription>
-                  </div>
-                </FormItem>
-              )}
-            />
-
             {/* Actions */}
             <DialogFooter className="pt-4">
               <Button
@@ -361,8 +440,14 @@ export function CreateFunctionalRequirementDialog({
               >
                 Cancel
               </Button>
-              <Button type="submit" disabled={createRequirement.isPending || epics.length === 0}>
-                {createRequirement.isPending ? 'Creating...' : 'Create Requirement'}
+              <Button type="submit" disabled={saving || epics.length === 0}>
+                {editing
+                  ? saving
+                    ? 'Saving...'
+                    : 'Save Changes'
+                  : saving
+                    ? 'Creating...'
+                    : 'Create Functional Requirement'}
               </Button>
             </DialogFooter>
           </form>

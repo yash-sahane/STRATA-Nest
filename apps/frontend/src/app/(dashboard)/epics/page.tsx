@@ -1,10 +1,9 @@
 'use client';
 
 import * as React from 'react';
-import { useSearchParams, useRouter } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import { useCreateActionParam } from '@/hooks/use-create-action-param';
 import { useEpicsRealtime } from '@/hooks/use-realtime';
-import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useProjects } from '@/hooks/use-project';
 import { deriveEpicMetrics, useEpics } from '@/hooks/use-epic';
@@ -13,13 +12,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { Plus, Target, CheckCircle2, Clock, TrendingUp, Calendar } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { CreateEpicDialog } from '@/components/epic/create-epic-dialog';
@@ -29,20 +21,22 @@ import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
 import { getEpicStatusConfig } from '@/lib/semantic/status';
 import { InlineLoader } from '@/components/ui/page-loader';
-import { useIsAdmin, useHasPermission } from '@/hooks/use-permissions';
+import { useHasPermission } from '@/hooks/use-permissions';
 import { Permission } from '@/lib/permissions';
+import { ProjectPicker } from '@/components/projects/project-picker';
+import { useProjectSelectionSync } from '@/hooks/use-project-selection-sync';
+import { useConsumeParam } from '@/hooks/use-tab-param';
+
+const CREATE_CARRIES = ['requirementId'];
 
 function EpicsPageContent() {
-  const { user } = useAuth();
   const { currentWorkspace } = useCurrentWorkspace();
   const { data: projects = [] } = useProjects(currentWorkspace?.id);
-  const router = useRouter();
   const searchParams = useSearchParams();
   const projectIdFromUrl = searchParams.get('projectId');
   const epicIdFromUrl = searchParams.get('epicId');
 
   // Permission checks
-  const isAdmin = useIsAdmin();
   const canCreateEpic = useHasPermission(Permission.CREATE_EPIC);
   const canDeleteEpic = useHasPermission(Permission.DELETE_EPIC);
   const canEditEpic = useHasPermission(Permission.EDIT_EPIC);
@@ -58,9 +52,18 @@ function EpicsPageContent() {
   // and reopening Edit re-seeded them. Resolving it out of `epics` on every
   // render means the dialog always renders the row the cache holds.
   const [selectedEpicId, setSelectedEpicId] = React.useState<string | null>(null);
-  // The command palette's "Create New Epic" navigates here with ?action=create.
+  // The command palette's "New Epic" navigates here with ?action=create.
   // Gated on a project the same way the "New Epic" button is — an epic needs one.
-  useCreateActionParam(() => setCreateDialogOpen(true), !!selectedProjectId);
+  // ?action=create&requirementId=… — raised from a client requirement.
+  const [createFor, setCreateFor] = React.useState('');
+  useCreateActionParam(
+    (asked) => {
+      setCreateFor(asked.get('requirementId') ?? '');
+      setCreateDialogOpen(true);
+    },
+    !!selectedProjectId,
+    CREATE_CARRIES
+  );
 
   const { data: epics = [], isLoading, isError, refetch } = useEpics(selectedProjectId);
   const { data: tasks = [], isLoading: tasksLoading } = useTasks(selectedProjectId);
@@ -71,41 +74,21 @@ function EpicsPageContent() {
   );
 
   // Restore project selection from URL or localStorage
-  React.useEffect(() => {
-    const STORAGE_KEY = 'selected-project-id';
+  // URL param (once) > remembered project > first project.
+  useProjectSelectionSync({
+    projects,
+    urlProjectId: projectIdFromUrl,
+    selectedProjectId,
+    setSelectedProjectId,
+  });
 
-    // Priority: URL param > localStorage > first project
-    if (projectIdFromUrl && projects.some((p) => p.id === projectIdFromUrl)) {
-      setSelectedProjectId(projectIdFromUrl);
-      localStorage.setItem(STORAGE_KEY, projectIdFromUrl);
-    } else {
-      const savedProjectId = localStorage.getItem(STORAGE_KEY);
-      if (savedProjectId && projects.some((p) => p.id === savedProjectId)) {
-        // Restore saved project if it still exists
-        setSelectedProjectId(savedProjectId);
-      } else if (projects.length > 0 && !selectedProjectId) {
-        // Default to first project if no saved selection
-        const firstProjectId = projects[0].id;
-        setSelectedProjectId(firstProjectId);
-        localStorage.setItem(STORAGE_KEY, firstProjectId);
-      }
-    }
-  }, [projects, selectedProjectId, projectIdFromUrl]);
-
-  // Open epic dialog if epicId is in URL (from notification click)
+  // ?epicId= opens that epic, and is spent once it is open (useConsumeParam):
+  // router.replace left it on the address bar, and a refetch reopened the dialog.
   React.useEffect(() => {
-    if (epicIdFromUrl && epics.length > 0) {
-      const epic = epics.find((e) => e.id === epicIdFromUrl);
-      if (epic) {
-        setSelectedEpicId(epic.id);
-        // Clear the epicId from URL after opening the dialog
-        const params = new URLSearchParams(searchParams.toString());
-        params.delete('epicId');
-        const newUrl = params.toString() ? `/epics?${params.toString()}` : '/epics';
-        router.replace(newUrl);
-      }
-    }
-  }, [epicIdFromUrl, epics, searchParams, router]);
+    if (!epicIdFromUrl || epics.length === 0) return;
+    if (epics.some((e) => e.id === epicIdFromUrl)) setSelectedEpicId(epicIdFromUrl);
+  }, [epicIdFromUrl, epics]);
+  useConsumeParam('epicId', Boolean(epicIdFromUrl) && selectedEpicId === epicIdFromUrl);
 
   // Save project selection to localStorage when changed
   const handleProjectChange = React.useCallback((projectId: string) => {
@@ -129,7 +112,7 @@ function EpicsPageContent() {
       else tasksByEpic.set(task.epicId, [task]);
     }
     return new Map<string, ReturnType<typeof deriveEpicMetrics>>(
-      epics.map((epic) => [epic.id, deriveEpicMetrics(tasksByEpic.get(epic.id) ?? [])] as const)
+      epics.map((epic) => [epic.id, deriveEpicMetrics(epic, tasksByEpic.get(epic.id) ?? [])] as const)
     );
   }, [epics, tasks]);
 
@@ -156,9 +139,9 @@ function EpicsPageContent() {
       <PageHeader
         icon={Target}
         title="Epics"
-        description="Large features spanning multiple sprints"
+        description="The features that deliver your client requirements, each broken into functional requirements"
         actions={
-          (canCreateEpic || isAdmin) && (
+          (canCreateEpic) && (
             <Button onClick={() => setCreateDialogOpen(true)} disabled={!selectedProjectId}>
               <Plus className="mr-2 h-4 w-4" />
               New Epic
@@ -173,18 +156,12 @@ function EpicsPageContent() {
           <CardTitle>Select Project</CardTitle>
         </CardHeader>
         <CardContent>
-          <Select value={selectedProjectId} onValueChange={handleProjectChange}>
-            <SelectTrigger aria-label="Select a project" className="w-full md:w-[400px]">
-              <SelectValue placeholder="Select a project..." />
-            </SelectTrigger>
-            <SelectContent>
-              {projects.map((project) => (
-                <SelectItem key={project.id} value={project.id}>
-                  {project.shortCode} - {project.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <ProjectPicker
+            projects={projects}
+            value={selectedProjectId}
+            onChange={handleProjectChange}
+            className="md:w-[400px]"
+          />
         </CardContent>
       </Card>
 
@@ -253,15 +230,15 @@ function EpicsPageContent() {
                   title="No epics yet"
                   description="Create your first epic to group related functional requirements."
                   action={
-                    canCreateEpic || isAdmin
-                      ? { label: 'Create First Epic', onClick: () => setCreateDialogOpen(true) }
+                    canCreateEpic
+                      ? { label: 'New Epic', onClick: () => setCreateDialogOpen(true) }
                       : undefined
                   }
                 />
               </div>
             ) : (
               epics.map((epic) => {
-                const metrics = metricsByEpic.get(epic.id) ?? deriveEpicMetrics([]);
+                const metrics = metricsByEpic.get(epic.id) ?? deriveEpicMetrics(epic, []);
                 const status = getEpicStatusConfig(metrics.status);
 
                 return (
@@ -347,11 +324,14 @@ function EpicsPageContent() {
       {/* Create Dialog */}
       <CreateEpicDialog
         open={createDialogOpen}
-        onOpenChange={setCreateDialogOpen}
+        onOpenChange={(next) => {
+          setCreateDialogOpen(next);
+          if (!next) setCreateFor('');
+        }}
+        defaultRequirementId={createFor}
         projectId={selectedProjectId}
         projectCode={selectedProject?.shortCode || ''}
         workspaceId={currentWorkspace?.id || ''}
-        userId={user?.id || ''}
       />
 
       {/* Detail Dialog */}
@@ -362,8 +342,8 @@ function EpicsPageContent() {
           onOpenChange={(open: boolean) => !open && setSelectedEpicId(null)}
           projectId={selectedProjectId}
           tasks={tasks.filter((t) => t.epicId === selectedEpic.id)}
-          canDelete={canDeleteEpic || isAdmin}
-          canEdit={canEditEpic || isAdmin}
+          canDelete={canDeleteEpic}
+          canEdit={canEditEpic}
         />
       )}
     </div>

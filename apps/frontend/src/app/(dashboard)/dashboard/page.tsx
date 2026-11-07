@@ -6,14 +6,17 @@ import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useProjects } from '@/hooks/use-project';
 import { useWorkspaceTasks } from '@/hooks/use-task';
+import { useWorkspaceSprints } from '@/hooks/use-sprint';
+import { isAssignedTo } from '@/lib/my-tasks';
+import { getTaskStatusConfig } from '@/lib/semantic/status';
+import Link from 'next/link';
 import { useTeamMembers } from '@/hooks/use-team';
 import { AttendanceWidget } from '@/components/attendance/attendance-widget';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
-import { RowActivator } from '@/components/ui/row-activator';
+import { RowLink } from '@/components/ui/row-activator';
 import { PageLoader } from '@/components/ui/page-loader';
 import { ErrorState } from '@/components/ui/error-state';
 import { PageHeader } from '@/components/layout/page-header';
@@ -29,8 +32,10 @@ import {
 } from 'lucide-react';
 import { formatDate, parseWireDate } from '@/lib/utils';
 import { plural } from '@/lib/plural';
-import type { Task } from '@/types';
 import { EmptyState } from '@/components/ui/empty-state';
+import { useTasksRealtime, useProjectsRealtime } from '@/hooks/use-realtime';
+import { useHasPermission } from '@/hooks/use-permissions';
+import { Permission } from '@/lib/permissions';
 
 const DAY_MS = 1000 * 60 * 60 * 24;
 
@@ -129,6 +134,10 @@ export default function DashboardPage() {
     isError: tasksError,
     refetch: refetchTasks,
   } = useWorkspaceTasks(currentWorkspace?.id);
+  // The first screen anybody sees, and the one left open all day: a task
+  // assigned or finished elsewhere has to change these figures as it happens.
+  useTasksRealtime(currentWorkspace?.id);
+  useProjectsRealtime(currentWorkspace?.id);
 
   // The workspace roster, not the union of project.memberIds: memberIds is a
   // per-project list nothing keeps in sync with membership (the create form
@@ -139,16 +148,28 @@ export default function DashboardPage() {
     currentWorkspace?.id
   );
 
+  const seesTeamDeadlines = useHasPermission(Permission.VIEW_TEAM_ANALYTICS);
+
+  const { data: workspaceSprints = [] } = useWorkspaceSprints(currentWorkspace?.id);
+  const activeSprints = React.useMemo(
+    () => workspaceSprints.filter((sprint) => sprint.status === 'ACTIVE').slice(0, 3),
+    [workspaceSprints]
+  );
+
   // Calculate real stats
   const stats = React.useMemo(() => {
-    const activeProjects = projects.filter(
-      (p) => p.status === 'ACTIVE' || p.status === 'PLANNING'
-    ).length;
+    // Active means active. This counted projects still being planned as well,
+    // so the card disagreed with the one of the same name on Analytics.
+    const activeProjects = projects.filter((p) => p.status === 'ACTIVE').length;
+    const planningProjects = projects.filter((p) => p.status === 'PLANNING').length;
     const completedTasks = allTasks.filter((t) => t.status === 'DONE').length;
-    const myTasks = allTasks.filter((t) => t.assigneeIds?.includes(user?.id || '')).length;
+    // Open ones — what the list under "My Tasks" shows. The card counted
+    // finished tasks too, so it read 14 above a list of 3.
+    const myTasks = allTasks.filter((t) => isAssignedTo(t, user?.id) && t.status !== 'DONE').length;
 
     return {
       activeProjects,
+      planningProjects,
       completedTasks,
       totalTasks: allTasks.length,
       myTasks,
@@ -156,17 +177,20 @@ export default function DashboardPage() {
     };
   }, [projects, allTasks, teamMembers, user]);
 
-  // Get my tasks
+  // Get my tasks: soonest due first, undated last.
   const myTasks = React.useMemo(() => {
     return allTasks
-      .filter((t) => t.assigneeIds?.includes(user?.id || ''))
+      .filter((t) => isAssignedTo(t, user?.id))
       .filter((t) => t.status !== 'DONE')
       .sort((a, b) => {
-        if (a.dueDate && b.dueDate) {
-          // parseWireDate, matching the `formatDate` each row prints.
-          return parseWireDate(a.dueDate).getTime() - parseWireDate(b.dueDate).getTime();
-        }
-        return 0;
+        // Undated last, explicitly. The comparator returned 0 whenever either side
+        // had no date, which made an undated task "equal" to every dated one: the
+        // order was no longer an order, so where the dated ones landed depended on
+        // the input, and slice(0, 5) could keep an undated task over the most
+        // urgent one.
+        if (!a.dueDate || !b.dueDate) return Number(!a.dueDate) - Number(!b.dueDate);
+        // parseWireDate, matching the `formatDate` each row prints.
+        return parseWireDate(a.dueDate).getTime() - parseWireDate(b.dueDate).getTime();
       })
       .slice(0, 5);
   }, [allTasks, user]);
@@ -181,6 +205,10 @@ export default function DashboardPage() {
   const deadlines = React.useMemo(() => {
     const tasksWithDueDates = allTasks
       .filter((t) => t.dueDate && t.status !== 'DONE')
+      // Whose deadlines. Everybody was shown the workspace's five nearest, so a
+      // developer's dashboard was mostly other people's due dates. Somebody
+      // answerable for the team sees the team's; everyone else sees their own.
+      .filter((t) => seesTeamDeadlines || isAssignedTo(t, user?.id))
       // parseWireDate on both sides, like the badge and the printed date:
       // `new Date` reads a date-only value as UTC midnight, so sorting by it
       // could order two same-week rows differently from the day counts they
@@ -193,29 +221,13 @@ export default function DashboardPage() {
 
       return {
         id: task.id,
+        projectId: task.projectId,
         title: task.title,
         projectName: project?.name || 'Unknown',
         dueDate: task.dueDate!,
       };
     });
-  }, [allTasks, projects]);
-
-  const getStatusBadge = (status: Task['status']) => {
-    const config: Record<
-      Task['status'],
-      { label: string; variant: 'default' | 'secondary' | 'outline' | 'destructive' }
-    > = {
-      BACKLOG: { label: 'Backlog', variant: 'secondary' },
-      TODO: { label: 'To Do', variant: 'outline' },
-      IN_PROGRESS: { label: 'In Progress', variant: 'default' },
-      REVIEW: { label: 'Review', variant: 'default' },
-      DONE: { label: 'Done', variant: 'default' },
-    };
-    // The API is the source of truth for statuses; a value this build doesn't
-    // know about must render as itself, not crash the whole dashboard on
-    // `undefined.variant`.
-    return config[status] ?? { label: String(status), variant: 'outline' as const };
-  };
+  }, [allTasks, projects, seesTeamDeadlines, user]);
 
   if (workspacesLoading || projectsLoading || tasksLoading || membersLoading) {
     return <PageLoader message="Loading your dashboard..." />;
@@ -261,18 +273,21 @@ export default function DashboardPage() {
 
       {/* Stats Grid */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <Card className="hover-lift">
+        <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Active Projects</CardTitle>
             <FolderKanban className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{stats.activeProjects}</div>
-            <p className="text-xs text-muted-foreground">{projects.length} total projects</p>
+            <p className="text-xs text-muted-foreground">
+              {stats.planningProjects > 0 ? `${stats.planningProjects} in planning · ` : ''}
+              {projects.length} in all
+            </p>
           </CardContent>
         </Card>
 
-        <Card className="hover-lift">
+        <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Tasks Completed</CardTitle>
             <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
@@ -283,18 +298,18 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
 
-        <Card className="hover-lift">
+        <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">My Tasks</CardTitle>
+            <CardTitle className="text-sm font-medium">My Open Tasks</CardTitle>
             <GitBranch className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{stats.myTasks}</div>
-            <p className="text-xs text-muted-foreground">Assigned to you</p>
+            <p className="text-xs text-muted-foreground">Assigned to you, not yet done</p>
           </CardContent>
         </Card>
 
-        <Card className="hover-lift">
+        <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Team Members</CardTitle>
             <Users className="h-4 w-4 text-muted-foreground" />
@@ -314,17 +329,66 @@ export default function DashboardPage() {
         </TabsList>
 
         <TabsContent value="overview" className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-2">
-            {/* Attendance Widget */}
-            <AttendanceWidget />
+          {/* Two columns, each as tall as its own content. The three cards used
+              to share one grid, so the check-in card was stretched to the height
+              of the deadlines list beside it — a block of empty card under its
+              button — and Quick Actions wrapped onto a row of its own below.
+              The left column now stacks check-in and Quick Actions, and
+              items-start keeps either column from stretching to the other. */}
+          <div className="grid gap-4 md:grid-cols-2 md:items-start">
+            <div className="flex min-w-0 flex-col gap-4">
+              <AttendanceWidget />
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Target className="h-5 w-5" />
+                    Quick Actions
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  {[
+                    { label: 'View Projects', href: '/projects', icon: FolderKanban },
+                    { label: 'View All Tasks', href: '/tasks', icon: CheckCircle2 },
+                    { label: 'View Sprints', href: '/sprints', icon: GitBranch },
+                    { label: 'Attendance', href: '/attendance', icon: Clock },
+                  ].map(({ label, href, icon: Icon }) => (
+                    <Button key={href} asChild className="w-full justify-start" variant="outline">
+                      <Link href={href}>
+                        <Icon className="mr-2 h-4 w-4" />
+                        {label}
+                        <ArrowRight className="ml-auto h-4 w-4" />
+                      </Link>
+                    </Button>
+                  ))}
+                  {/* The sprints running now: the board most people open first. */}
+                  {activeSprints.map((sprint) => (
+                    <Button key={sprint.id} asChild className="w-full justify-start" variant="outline">
+                      <Link href={`/sprints/${sprint.id}/board`}>
+                        <GitBranch className="mr-2 h-4 w-4" />
+                        <span className="truncate">
+                          {sprint.name}
+                          <span className="text-muted-foreground"> · {projects.find((p) => p.id === sprint.projectId)?.name ?? 'board'}</span>
+                        </span>
+                        <ArrowRight className="ml-auto h-4 w-4" />
+                      </Link>
+                    </Button>
+                  ))}
+                </CardContent>
+              </Card>
+            </div>
 
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Calendar className="h-5 w-5" />
-                  Deadlines
+                  {seesTeamDeadlines ? 'Team Deadlines' : 'My Deadlines'}
                 </CardTitle>
-                <CardDescription>Overdue and upcoming, soonest first</CardDescription>
+                <CardDescription>
+                  {seesTeamDeadlines
+                    ? 'Overdue and upcoming across the workspace, soonest first'
+                    : 'Your overdue and upcoming tasks, soonest first'}
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
                 {deadlines.length === 0 ? (
@@ -334,12 +398,13 @@ export default function DashboardPage() {
                     const badge = deadlineBadge(daysUntilDue(deadline.dueDate, todayStart));
 
                     return (
-                      <div
+                      <Link
                         key={deadline.id}
-                        className="flex items-center justify-between gap-3 rounded-lg border p-3 transition-colors hover:bg-accent"
+                        href={`/tasks?projectId=${deadline.projectId}&taskId=${deadline.id}`}
+                        className="flex items-center justify-between gap-3 rounded-lg border p-3 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         <div className="min-w-0">
-                          <p className="truncate font-medium">{deadline.title}</p>
+                          <p className="truncate font-medium" title={deadline.title}>{deadline.title}</p>
                           <p className="text-sm text-muted-foreground">
                             {deadline.projectName} &middot; {formatDate(deadline.dueDate)}
                           </p>
@@ -347,57 +412,10 @@ export default function DashboardPage() {
                         <Badge className="shrink-0" variant={badge.variant}>
                           {badge.label}
                         </Badge>
-                      </div>
+                      </Link>
                     );
                   })
                 )}
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Target className="h-5 w-5" />
-                  Quick Actions
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2">
-                <Button
-                  className="w-full justify-start"
-                  variant="outline"
-                  onClick={() => router.push('/projects')}
-                >
-                  <FolderKanban className="mr-2 h-4 w-4" />
-                  View Projects
-                  <ArrowRight className="ml-auto h-4 w-4" />
-                </Button>
-                <Button
-                  className="w-full justify-start"
-                  variant="outline"
-                  onClick={() => router.push('/tasks')}
-                >
-                  <CheckCircle2 className="mr-2 h-4 w-4" />
-                  View All Tasks
-                  <ArrowRight className="ml-auto h-4 w-4" />
-                </Button>
-                <Button
-                  className="w-full justify-start"
-                  variant="outline"
-                  onClick={() => router.push('/sprints')}
-                >
-                  <GitBranch className="mr-2 h-4 w-4" />
-                  View Sprints
-                  <ArrowRight className="ml-auto h-4 w-4" />
-                </Button>
-                <Button
-                  className="w-full justify-start"
-                  variant="outline"
-                  onClick={() => router.push('/attendance')}
-                >
-                  <Clock className="mr-2 h-4 w-4" />
-                  Attendance
-                  <ArrowRight className="ml-auto h-4 w-4" />
-                </Button>
               </CardContent>
             </Card>
           </div>
@@ -407,7 +425,7 @@ export default function DashboardPage() {
           <Card>
             <CardHeader>
               <CardTitle>My Tasks</CardTitle>
-              <CardDescription>Tasks assigned to you across all projects</CardDescription>
+              <CardDescription>Your open tasks across all projects, soonest due first</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               {myTasks.length === 0 ? (
@@ -415,13 +433,13 @@ export default function DashboardPage() {
               ) : (
                 myTasks.map((task) => {
                   const project = projects.find((p) => p.id === task.projectId);
-                  const status = getStatusBadge(task.status);
+                  const status = getTaskStatusConfig(task.status);
 
                   return (
                     <div
                       key={task.id}
                       className="flex items-center justify-between rounded-lg border p-4 transition-colors hover:bg-accent cursor-pointer"
-                      onClick={() => router.push(`/tasks?projectId=${task.projectId}`)}
+                      onClick={() => router.push(`/tasks?projectId=${task.projectId}&taskId=${task.id}`)}
                     >
                       <div className="flex items-center gap-3">
                         {/* A bare <Checkbox /> used to sit here: no `checked`, no
@@ -433,16 +451,18 @@ export default function DashboardPage() {
                             make, so a one-click tick here would fail for most
                             users on most tasks. The row opens the task instead. */}
                         <div>
-                          <RowActivator
+                          <RowLink
                             label={`Open task: ${task.title}`}
-                            onActivate={() => router.push(`/tasks?projectId=${task.projectId}`)}
+                            href={`/tasks?projectId=${task.projectId}&taskId=${task.id}`}
                             className="font-medium"
                           >
                             {task.title}
-                          </RowActivator>
+                          </RowLink>
                           <div className="mt-1 flex items-center gap-2">
                             <Badge variant="outline">{task.hierarchyId}</Badge>
-                            <Badge variant={status.variant}>{status.label}</Badge>
+                            <Badge variant={status.badgeVariant} className={status.badgeClassName}>
+                              {status.label}
+                            </Badge>
                             <span className="text-xs text-muted-foreground">{project?.name}</span>
                           </div>
                         </div>

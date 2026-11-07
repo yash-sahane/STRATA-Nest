@@ -82,19 +82,15 @@ const SPRINT_STATUS: Record<string, SemanticTone> = {
   PLANNING: 'neutral',
   ACTIVE: 'success',
   COMPLETED: 'info',
-  CANCELLED: 'destructive',
 };
 
 const REQUIREMENT_STATUS: Record<string, SemanticTone> = {
   DRAFT: 'neutral',
-  PROPOSED: 'neutral',
   // Awaiting a decision — "needs attention", same tone as REVIEW elsewhere.
   SUBMITTED: 'warning',
   APPROVED: 'info',
   IN_PROGRESS: 'info',
-  ON_HOLD: 'warning',
   COMPLETED: 'success',
-  REJECTED: 'destructive',
   ARCHIVED: 'neutral',
 };
 
@@ -105,6 +101,18 @@ function titleCase(value: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+/**
+ * A stored enum value as people read it: `IN_PROGRESS` -> "In Progress".
+ *
+ * For the places that print a status or a type with no tone to go with it. They
+ * each did their own `.replace('_', ' ')`, which left the value in capitals
+ * ("IN PROGRESS") beside badges elsewhere that said "In Progress" — and, with
+ * the non-global form, only ever replaced the FIRST underscore.
+ */
+export function humanizeEnum(value: string | null | undefined): string {
+  return value ? titleCase(String(value)) : '';
+}
+
 /** Time entries move PENDING -> APPROVED | REJECTED, owned by the API's
  *  approve/reject endpoints (self-approval is refused server-side). */
 const TIME_ENTRY_STATUS: Record<string, SemanticTone> = {
@@ -113,13 +121,33 @@ const TIME_ENTRY_STATUS: Record<string, SemanticTone> = {
   REJECTED: 'destructive',
 };
 
-function makeResolver(map: Record<string, SemanticTone>) {
+/**
+ * What a functional requirement's stored status MEANS, in the words a person
+ * would use. The stored names are a lifecycle nobody operates: nothing here
+ * approves, implements, tests or deploys a requirement. The status is worked
+ * out from its tasks, so "Approved" was "has tasks, none started" — Ready, not
+ * "Planned", which it read while listed under "Not in a Sprint" — "Implemented"
+ * was "a task is in progress" — work still being built — and "Tested" was "every
+ * task is done". "Deployed" is the one a person sets, by signing the
+ * requirement off. The stored values are unchanged; this is only what is shown.
+ */
+const FUNCTIONAL_REQUIREMENT_LABELS: Record<string, string> = {
+  APPROVED: 'Ready',
+  IMPLEMENTED: 'In Progress',
+  TESTED: 'Tasks Done',
+  DEPLOYED: 'Done',
+};
+
+/** `TODO` title-cases to "Todo", beside columns and tiles that say "To Do". */
+const TODO_LABEL: Record<string, string> = { TODO: 'To Do' };
+
+function makeResolver(map: Record<string, SemanticTone>, labels: Record<string, string> = {}) {
   return (status: string | null | undefined): StatusConfig => {
     const key = String(status ?? '').toUpperCase();
     const tone = map[key] ?? 'neutral';
     const style = toneStyle[tone];
     return {
-      label: titleCase(key || 'Unknown'),
+      label: labels[key] ?? titleCase(key || 'Unknown'),
       tone,
       badgeVariant: style.badgeVariant,
       badgeClassName: style.badgeClassName,
@@ -141,9 +169,12 @@ export const PROJECT_STATUSES = Object.keys(PROJECT_STATUS);
 export const SPRINT_STATUSES = Object.keys(SPRINT_STATUS);
 export const REQUIREMENT_STATUSES = Object.keys(REQUIREMENT_STATUS);
 
-export const getTaskStatusConfig = makeResolver(TASK_STATUS);
-export const getEpicStatusConfig = makeResolver(EPIC_STATUS);
-export const getFunctionalRequirementStatusConfig = makeResolver(FUNCTIONAL_REQUIREMENT_STATUS);
+export const getTaskStatusConfig = makeResolver(TASK_STATUS, TODO_LABEL);
+export const getEpicStatusConfig = makeResolver(EPIC_STATUS, TODO_LABEL);
+export const getFunctionalRequirementStatusConfig = makeResolver(
+  FUNCTIONAL_REQUIREMENT_STATUS,
+  FUNCTIONAL_REQUIREMENT_LABELS,
+);
 export const getProjectStatusConfig = makeResolver(PROJECT_STATUS);
 export const getSprintStatusConfig = makeResolver(SPRINT_STATUS);
 export const getRequirementStatusConfig = makeResolver(REQUIREMENT_STATUS);

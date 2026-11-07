@@ -60,6 +60,8 @@ interface CreateSprintDialogProps {
     endDate: string;
   }) => void | Promise<void>;
   isLoading?: boolean;
+  /** A completed sprint: its goal and dates are its record, and only its name changes. */
+  recordLocked?: boolean;
   initialData?: {
     name: string;
     goal?: string;
@@ -74,6 +76,7 @@ export function CreateSprintDialog({
   onSubmit,
   isLoading,
   initialData,
+  recordLocked = false,
 }: CreateSprintDialogProps) {
   const form = useForm<FormData>({
     resolver: zodResolver(formSchema),
@@ -126,9 +129,11 @@ export function CreateSprintDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent size="lg">
         <DialogHeader>
-          <DialogTitle>{initialData ? 'Edit Sprint' : 'Create New Sprint'}</DialogTitle>
+          <DialogTitle>{initialData ? 'Edit Sprint' : 'Create Sprint'}</DialogTitle>
           <DialogDescription>
-            Plan your sprint with clear goals and timelines
+            {recordLocked
+              ? "This sprint is complete: its goal and dates are its record. Only its name can change."
+              : 'Plan your sprint with clear goals and timelines'}
           </DialogDescription>
         </DialogHeader>
 
@@ -158,6 +163,7 @@ export function CreateSprintDialog({
                     <Textarea
                       placeholder="What do you want to achieve in this sprint?"
                       rows={3}
+                      disabled={recordLocked}
                       {...field}
                     />
                   </FormControl>
@@ -169,7 +175,7 @@ export function CreateSprintDialog({
               )}
             />
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <FormField
                 control={form.control}
                 name="startDate"
@@ -181,13 +187,14 @@ export function CreateSprintDialog({
                         <FormControl>
                           <Button
                             variant="outline"
+                            disabled={recordLocked}
                             className={cn(
                               'w-full pl-3 text-left font-normal',
                               !field.value && 'text-muted-foreground'
                             )}
                           >
                             {field.value ? (
-                              format(field.value, 'PPP')
+                              format(field.value, 'MMM d, yyyy')
                             ) : (
                               <span>Pick a date</span>
                             )}
@@ -231,13 +238,14 @@ export function CreateSprintDialog({
                         <FormControl>
                           <Button
                             variant="outline"
+                            disabled={recordLocked}
                             className={cn(
                               'w-full pl-3 text-left font-normal',
                               !field.value && 'text-muted-foreground'
                             )}
                           >
                             {field.value ? (
-                              format(field.value, 'PPP')
+                              format(field.value, 'MMM d, yyyy')
                             ) : (
                               <span>Pick a date</span>
                             )}

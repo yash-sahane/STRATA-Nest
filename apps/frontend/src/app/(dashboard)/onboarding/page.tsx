@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import * as React from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -9,15 +10,15 @@ import { Textarea } from '@/components/ui/textarea';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCreateWorkspace } from '@/hooks/use-workspace';
-import { Building2, Shield, AlertTriangle } from 'lucide-react';
+import { Building2, Shield } from 'lucide-react';
 import { PageLoader } from '@/components/ui/page-loader';
-import { useToast } from '@/hooks/use-toast';
-import { useRouter } from 'next/navigation';
+import { NoAccess } from '@/components/ui/no-access';
+import { WorkspaceManagerFields, NO_MANAGER_CHOICE, managerOf, managerChoiceComplete, type ManagerChoice } from '@/components/workspace/workspace-manager-fields';
+import { TempPasswordNotice, type IssuedCredential } from '@/components/team/temp-password-notice';
+import { toast } from 'sonner';
 
 export default function OnboardingPage() {
   const { user } = useAuth();
-  const { toast } = useToast();
-  const router = useRouter();
   const createWorkspace = useCreateWorkspace();
   const isAdmin = user?.isAdmin === true;
 
@@ -25,6 +26,10 @@ export default function OnboardingPage() {
     name: '',
     description: '',
   });
+  const [managerChoice, setManagerChoice] = React.useState<ManagerChoice>(NO_MANAGER_CHOICE);
+  // The temporary password of an account made for the new workspace's manager,
+  // when mail cannot carry it — shown here, once, before moving on.
+  const [issued, setIssued] = React.useState<IssuedCredential[]>([]);
 
   // No redirect effect for non-admins: WorkspaceGuard only sends admins here, so
   // the only way a non-admin lands on this route is by typing it, and bouncing
@@ -35,32 +40,35 @@ export default function OnboardingPage() {
     e.preventDefault();
 
     if (!createForm.name.trim()) {
-      toast({
-        title: 'Error',
-        description: 'Workspace name is required',
-        variant: 'destructive',
-      });
+      toast.error('Give the workspace a name');
       return;
     }
 
     if (!isAdmin) {
-      toast({
-        title: 'Error',
-        description: 'Only administrators can create workspaces',
-        variant: 'destructive',
-      });
+      toast.error('Workspace not created', { description: 'Only administrators can create workspaces' });
       return;
     }
 
     try {
-      await createWorkspace.mutateAsync({
+      const created = await createWorkspace.mutateAsync({
         // Trimmed, matching the guard above. Submitting the raw value stored
         // "  Acme  " for a name the check had already normalised, and the API's
         // @IsNotEmpty accepts leading/trailing space.
         name: createForm.name.trim(),
         description: createForm.description.trim(),
         ownerId: user?.id || '',
+        manager: managerOf(managerChoice),
       });
+      if (created.manager?.temporaryPassword) {
+        setIssued([
+          {
+            name: created.manager.name,
+            email: created.manager.email,
+            temporaryPassword: created.manager.temporaryPassword,
+          },
+        ]);
+        return;
+      }
 
       // Success/error toasts belong to the mutation — toasting again here
       // stacked two of each. A full document navigation (not router.push) so
@@ -79,22 +87,14 @@ export default function OnboardingPage() {
   if (!isAdmin) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-linear-to-br from-background to-muted p-4">
-        <Card className="w-full max-w-md">
-          <CardContent className="pt-6">
-            <div className="text-center space-y-4">
-              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-destructive/10">
-                <AlertTriangle className="h-8 w-8 text-destructive-text" />
-              </div>
-              <h2 className="text-2xl font-bold">Access Denied</h2>
-              <p className="text-muted-foreground">
-                Only administrators can create workspaces. Please contact your administrator.
-              </p>
-              <Button onClick={() => router.push('/dashboard')} variant="outline">
-                Go to Dashboard
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+        <NoAccess
+          what="create a workspace"
+          explanation="Workspaces are created by an administrator of this installation. Ask one to create the workspace you need, or to add you to one that already exists."
+        >
+          <Button asChild variant="outline">
+            <Link href="/dashboard">Go to Dashboard</Link>
+          </Button>
+        </NoAccess>
       </div>
     );
   }
@@ -155,6 +155,12 @@ export default function OnboardingPage() {
                 </p>
               </div>
 
+              <WorkspaceManagerFields
+                value={managerChoice}
+                onChange={setManagerChoice}
+                idPrefix="onboarding"
+              />
+
               <div className="rounded-lg border bg-muted/50 p-4">
                 <h4 className="font-medium mb-2">What happens next?</h4>
                 <ul className="text-sm text-muted-foreground space-y-1">
@@ -177,11 +183,23 @@ export default function OnboardingPage() {
                 </ul>
               </div>
 
+              <TempPasswordNotice
+                credentials={issued}
+                onDismiss={() => {
+                  setIssued([]);
+                  window.location.href = '/dashboard';
+                }}
+              />
+
               <Button
                 type="submit"
                 className="w-full"
                 size="lg"
-                disabled={createWorkspace.isPending}
+                disabled={
+                  createWorkspace.isPending ||
+                  issued.length > 0 ||
+                  !managerChoiceComplete(managerChoice)
+                }
               >
                 {createWorkspace.isPending ? (
                   <>

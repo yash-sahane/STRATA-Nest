@@ -38,6 +38,33 @@
 /** `undefined`, `null` and `''` all mean "not set" in these payloads. */
 const unset = (v: unknown): boolean => v == null || v === '';
 
+/**
+ * An ISO-8601 date-time that names its zone: what the API sends for an instant
+ * (`2026-11-12T18:30:00.000000Z`) and what `toISOString()` makes (`…00.000Z`).
+ * A date with no time, or any other text, is not one — a title such as "1" would
+ * parse as a date.
+ */
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/;
+
+/** The instant a Date or an ISO date-time string names, in ms; null for anything else. */
+function instantOf(v: unknown): number | null {
+  if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v.getTime();
+  if (typeof v !== 'string' || !ISO_INSTANT.test(v)) return null;
+  // Down to milliseconds first: past three fraction digits is outside what the
+  // standard date format promises every browser will parse.
+  const ms = Date.parse(v.replace(/(\.\d{3})\d+/, '$1'));
+  return Number.isNaN(ms) ? null : ms;
+}
+
+/**
+ * An instant spelled the way the API spells one (6-digit fraction, `Z`), so the
+ * API's comparison — of strings — agrees with this one. Anything else unchanged.
+ */
+function asApiValue(v: unknown): unknown {
+  const ms = instantOf(v);
+  return ms === null ? v : new Date(ms).toISOString().replace(/\.(\d{3})Z$/, '.$1000Z');
+}
+
 /** Values compared by content, so a Date and its ISO string do not read as different. */
 function sameValue(a: unknown, b: unknown): boolean {
   if (a === b) return true;
@@ -46,6 +73,14 @@ function sameValue(a: unknown, b: unknown): boolean {
   // save and clear an epic somebody else had just assigned, which is the very bug this
   // exists to prevent. The same holds for an absent description against an empty one.
   if (unset(a) && unset(b)) return true;
+  // Two spellings of one instant are one value. The task form submits its due date
+  // as `toISOString()` (`…00.000Z`) against the API's `…00.000000Z`; compared as
+  // text, every save "changed" the due date — a save that changed nothing wrote and
+  // logged one, and an edit to the title alone was refused as a clash whenever a
+  // colleague had moved the due date, then overwrote their date on the next save.
+  const at = instantOf(a);
+  const bt = instantOf(b);
+  if (at !== null && bt !== null) return at === bt;
   if (a instanceof Date || b instanceof Date) {
     const at = a instanceof Date ? a.getTime() : new Date(a as string).getTime();
     const bt = b instanceof Date ? b.getTime() : new Date(b as string).getTime();
@@ -100,6 +135,12 @@ export function changedFields<T extends Record<string, unknown>>(
  * dialog was seeded from — so both sides of the comparison are in the same shape. A key
  * missing from `original` is sent as `null`, which the API reads as "there was nothing
  * here", the same as `''` and `undefined`.
+ *
+ * An instant is re-spelled the way the API renders one. The API compares these as
+ * strings, and a baseline does not always hold the API's own spelling: the board's
+ * optimistic update writes a saved due date into the cache as `toISOString()`, so the
+ * next edit opened before the refetch sent `…00.000Z` against `…00.000000Z` and was
+ * refused — "somebody else changed the due date" — for a date nobody had touched.
  */
 export function basedOnFor<T extends Record<string, unknown>>(
   original: Partial<T> | null | undefined,
@@ -107,7 +148,9 @@ export function basedOnFor<T extends Record<string, unknown>>(
 ): Record<string, unknown> {
   const baseline: Record<string, unknown> = {};
   for (const key of Object.keys(changes)) {
-    baseline[key] = (original as Record<string, unknown> | null | undefined)?.[key] ?? null;
+    baseline[key] = asApiValue(
+      (original as Record<string, unknown> | null | undefined)?.[key] ?? null,
+    );
   }
   return baseline;
 }

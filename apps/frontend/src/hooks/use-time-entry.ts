@@ -10,21 +10,32 @@ import { logger } from '@/lib/logger';
 
 /**
  * A PATCH body for one entry — exactly the fields UpdateTimeEntryDto honours.
- * Anything else (status, duration, taskId) is dropped by the server's
- * whitelisting pipe or recomputed, so it has no business being in the body.
- *
- * `billableRate` accepts `null` on purpose: an absent key means "leave the
- * stored rate alone", so an explicit `null` is the ONLY way to clear one —
- * `undefined` is dropped by JSON.stringify and the server never sees it.
+ * The duration is the server's, from the window.
  */
 export type TimeEntryUpdate = {
   startTime?: string;
   endTime?: string;
   description?: string;
   isBillable?: boolean;
-  billableRate?: number | null;
   tags?: string[];
 };
+
+/**
+ * The running timer as `GET /active_timers` answers for it: the timer, plus
+ * whether it can still become an entry. A timer outlives what it was started
+ * for — its owner can lose the right to log time in its workspace, its task
+ * can be deleted — and these say which, so a screen offers what still works.
+ */
+export interface RunningTimer extends ActiveTimer {
+  workspaceId?: string;
+  /** False once stopping it would be refused: it can only be discarded. */
+  canLog?: boolean;
+  /** Its task has been deleted, so no task card exists to stop it from. */
+  taskMissing?: boolean;
+}
+
+/** One entry covers at most a day; the API refuses a timer run longer than that. */
+export const MAX_ENTRY_SECONDS = 24 * 60 * 60;
 
 // ============================================
 // QUERIES
@@ -89,24 +100,81 @@ export function useTimeEntries(userId?: string, filters?: {
 }
 
 /**
- * Get time entries for a specific task
+ * The caller's own entries in a workspace that START within a day either side
+ * of `day` ('YYYY-MM-DD') — every entry a window typed in for that day could
+ * overlap, since none covers more than 24 hours. The time-entry dialog checks
+ * a window against these before Save, as the API does on it.
+ *
+ * Keyed under ['time-entries', userId] so every mutation that refreshes the
+ * caller's timesheet refreshes this too.
  */
-export function useTaskTimeEntries(taskId?: string) {
+export function useTimeEntriesAround(userId?: string, workspaceId?: string, day?: string) {
   return useQuery({
-    queryKey: ['time-entries', 'task', taskId],
+    queryKey: ['time-entries', userId, 'around', workspaceId, day],
     queryFn: async () => {
-      if (!taskId) return [];
-
-      // Logged time lives in `time_entries`; `active_timers` holds the caller's
-      // single running timer and carries no duration/isBillable/status.
+      const [y, m, d] = String(day).split('-').map(Number);
+      const from = new Date(y, m - 1, d - 1);
+      const to = new Date(y, m - 1, d + 2);
       const response = await resources.listAll('time_entries', [
-        query.equal('taskId', taskId),
-        query.orderDesc('createdAt'),
-      ]
-      );
-
+        query.equal('userId', userId as string),
+        query.equal('workspaceId', workspaceId as string),
+        query.greaterThanEqual('startTime', from.toISOString()),
+        query.lessThanEqual('startTime', to.toISOString()),
+      ]);
       return response.items as unknown as TimeEntry[];
     },
+    enabled: !!userId && !!workspaceId && !!day,
+  });
+}
+
+/**
+ * Whether a window lands on time an entry records as worked — the API's rule
+ * (overlapsWorkedTime in time-tracking.services.ts), so the dialog refuses
+ * exactly what the server would. A paused timer's entry covers more window than
+ * it records and where the pause fell is not stored, so only overlap beyond
+ * that gap counts; whole minutes, so windows that merely touch do not clash.
+ */
+export function overlapsWorkedTime(
+  existing: Pick<TimeEntry, 'startTime' | 'endTime' | 'duration'>,
+  start: Date,
+  end: Date
+): boolean {
+  const existingStart = new Date(existing.startTime).getTime();
+  const existingEnd = new Date(existing.endTime).getTime();
+  if (Number.isNaN(existingStart) || Number.isNaN(existingEnd)) return false;
+  const overlapMs = Math.min(existingEnd, end.getTime()) - Math.max(existingStart, start.getTime());
+  if (overlapMs <= 0) return false;
+  const gapMinutes = Math.max(0, (existingEnd - existingStart) / 60_000 - (existing.duration || 0));
+  return overlapMs / 60_000 - gapMinutes >= 1;
+}
+
+/** Everybody's logged time on one task, as `GET /time_entries/task-summary` answers. */
+export interface TaskTimeSummary {
+  taskId: string;
+  totalMinutes: number;
+  billableMinutes: number;
+  approvedMinutes: number;
+  entryCount: number;
+  /** How many people the time is from. */
+  people: number;
+  mine: { totalMinutes: number; entryCount: number };
+}
+
+/**
+ * How long a task has taken, counting everybody.
+ *
+ * The entry list gives a member only their OWN entries — an entry is personal
+ * — so a card built on it showed each person their own minutes as the task's
+ * total. Keyed under 'time-entries' so every mutation that already refreshes
+ * the entry lists refreshes this.
+ */
+export function useTaskTimeSummary(taskId?: string) {
+  return useQuery({
+    queryKey: ['time-entries', 'task-summary', taskId],
+    queryFn: async (): Promise<TaskTimeSummary> =>
+      (await restClient.get('/api/v1/time_entries/task-summary/', {
+        params: { taskId },
+      })) as TaskTimeSummary,
     enabled: !!taskId,
   });
 }
@@ -114,7 +182,16 @@ export function useTaskTimeEntries(taskId?: string) {
 /**
  * Get active timer for a user
  */
-export function useActiveTimer(userId?: string) {
+export function useActiveTimer(
+  userId?: string,
+  /**
+   * `poll: false` for a reader that is mounted everywhere (the header chip):
+   * it is kept current by `useActiveTimerRealtime` instead of by asking again
+   * every thirty seconds from every open tab.
+   */
+  options: { poll?: boolean } = {}
+) {
+  const poll = options.poll !== false;
   return useQuery({
     queryKey: ['active-timer', userId],
     queryFn: async () => {
@@ -125,11 +202,27 @@ export function useActiveTimer(userId?: string) {
 
       if (response.items.length === 0) return null;
 
-      return response.items[0] as unknown as ActiveTimer;
+      return response.items[0] as unknown as RunningTimer;
     },
     enabled: !!userId,
     staleTime: 1000 * 10, // 10 seconds
-    refetchInterval: 1000 * 30, // Refetch every 30 seconds to keep timer updated
+    // Every 30 seconds, for a reader that asked to be kept updated this way.
+    refetchInterval: poll ? 1000 * 30 : false,
+  });
+}
+
+/** Who approves time in this workspace. */
+export function useTimeApprovers(workspaceId?: string) {
+  return useQuery({
+    queryKey: ['timeApprovers', workspaceId],
+    queryFn: async (): Promise<Array<{ userId: string; name: string }>> => {
+      if (!workspaceId) return [];
+      return (await restClient.get('/api/v1/time_entries/approvers/', {
+        params: { workspaceId },
+      })) as Array<{ userId: string; name: string }>;
+    },
+    enabled: !!workspaceId,
+    staleTime: 5 * 60 * 1000,
   });
 }
 
@@ -171,37 +264,36 @@ export function useCreateTimeEntry() {
   return useMutation({
     mutationFn: async (data: {
       workspaceId: string;
+      /** Whose list to refresh; the server stamps the entry with the caller. */
       userId: string;
-      userName: string;
-      userEmail: string;
       taskId?: string;
-      taskTitle?: string;
-      taskHierarchyId?: string;
       projectId?: string;
-      projectName?: string;
       description: string;
       startTime: string;
       endTime: string;
-      duration: number;
       isBillable: boolean;
-      /** `null` for "no rate" — see TimeEntryUpdate. */
-      billableRate?: number | null;
       tags?: string[];
     }) => {
-      const timeEntry = await resources.create('time_entries', 'unique()',
-        {
-          ...data,
-          type: 'MANUAL',
-          status: 'PENDING',
-          tags: data.tags ?? [],
-        }
-      );
+      // Exactly what CreateTimeEntryDto takes. Who logged it, its duration and
+      // what its task and project are called are the server's to write.
+      const timeEntry = await resources.create('time_entries', {
+        workspaceId: data.workspaceId,
+        taskId: data.taskId,
+        projectId: data.projectId,
+        description: data.description,
+        startTime: data.startTime,
+        endTime: data.endTime,
+        isBillable: data.isBillable,
+        tags: data.tags ?? [],
+      });
 
       return timeEntry as unknown as TimeEntry;
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['time-entries', variables.userId] });
-      queryClient.invalidateQueries({ queryKey: ['time-entries', 'task', variables.taskId] });
+      // The task's own total is ['time-entries','task-summary',taskId]; the key
+      // this used to name matched no query, so "Total Logged" never moved.
+      queryClient.invalidateQueries({ queryKey: ['time-entries', 'task-summary', variables.taskId] });
       toast.success('Time entry created successfully');
     },
     onError: (error: unknown) => {
@@ -220,41 +312,50 @@ export function useStartTimer() {
   return useMutation({
     mutationFn: async (data: {
       userId: string;
+      /** The workspace a timer on no task is for; a task's own is read by the server. */
+      workspaceId?: string;
+      /** Log the running timer's time and start this one in its place. */
+      replace?: boolean;
       taskId?: string;
-      taskTitle?: string;
-      taskHierarchyId?: string;
       projectId?: string;
       description: string;
-      type?: 'TIMER' | 'POMODORO';
-      pomodoroSettings?: ActiveTimer['pomodoroSettings'];
     }) => {
-      // Check if there's already an active timer
-      const existingTimers = await resources.list('active_timers', [query.equal('userId', data.userId)]
-      );
-
-      // Delete existing timer if any (the server allows only one per user)
-      if (existingTimers.items.length > 0) {
-        await resources.remove('active_timers', existingTimers.items[0].id
-        );
-      }
-
       // Server-owned lifecycle: startTime comes from the server clock, and
-      // pause/resume accumulate paused time the client cannot write.
+      // pause/resume accumulate paused time the client cannot write. A timer
+      // already running is the server's to settle too: it refuses, or — with
+      // `replace` — logs that time first. This used to DELETE whatever timer
+      // was running before starting, so a second tab or device quietly threw
+      // away hours that were never filed.
       const timer = await restClient.post('/api/v1/active_timers/start/', {
+        workspaceId: data.workspaceId,
+        replace: data.replace ?? false,
         taskId: data.taskId,
-        taskTitle: data.taskTitle,
-        taskHierarchyId: data.taskHierarchyId,
         projectId: data.projectId,
         description: data.description,
-        type: data.type || 'TIMER',
-        ...(data.pomodoroSettings ? { pomodoroSettings: data.pomodoroSettings } : {}),
       });
 
-      return timer as unknown as ActiveTimer;
+      return timer as unknown as ActiveTimer & {
+        /** What became of the timer this one replaced — the server's own words. */
+        replaced?: { logged: boolean; message: string };
+      };
     },
-    onSuccess: (_, variables) => {
+    onSuccess: (timer, variables) => {
       queryClient.invalidateQueries({ queryKey: ['active-timer', variables.userId] });
-      toast.success('Timer started');
+      if (timer.replaced) {
+        queryClient.invalidateQueries({ queryKey: ['time-entries'] });
+        // Said as the server decided it. This always claimed the previous time
+        // "was logged" — and a timer whose workspace its owner can no longer log
+        // time in is discarded instead, which nobody should learn from a total.
+        if (timer.replaced.logged) {
+          toast.success('Timer switched', { description: timer.replaced.message });
+        } else {
+          toast.warning('Timer started — the previous one was not logged', {
+            description: timer.replaced.message,
+          });
+        }
+      } else {
+        toast.success('Timer started');
+      }
     },
     onError: (error: unknown) => {
       logger.error('Failed to start timer', { error });
@@ -303,28 +404,67 @@ export function useStopTimer() {
       workspaceId: string;
       taskId?: string;
       isBillable: boolean;
-      billableRate?: number;
+      /**
+       * When the work actually stopped, for a timer left running past it (ISO).
+       * Absent, the server's clock ends the run.
+       */
+      endTime?: string;
     }) => {
       // The server closes the timer: it computes the duration from its own
       // clock minus the accumulated paused time, creates the time entry and
       // deletes the timer in one transaction.
-      const timeEntry = await restClient.post('/api/v1/active_timers/stop/', {
+      const result = await restClient.post('/api/v1/active_timers/stop/', {
         workspaceId: data.workspaceId,
         isBillable: data.isBillable,
-        ...(data.billableRate !== undefined ? { billableRate: data.billableRate } : {}),
+        ...(data.endTime ? { endTime: data.endTime } : {}),
       });
 
-      return timeEntry as unknown as TimeEntry;
+      // A run under a minute comes back as `{ discarded, message }` instead of
+      // an entry (see discardedTimerResponse on the API).
+      return result as unknown as TimeEntry | { discarded: true; message: string };
     },
-    onSuccess: (_, variables) => {
+    onSuccess: (result, variables) => {
       queryClient.invalidateQueries({ queryKey: ['active-timer', variables.userId] });
       queryClient.invalidateQueries({ queryKey: ['time-entries', variables.userId] });
-      queryClient.invalidateQueries({ queryKey: ['time-entries', 'task', variables.taskId] });
-      toast.success('Timer stopped and time entry created');
+      // The task's own total is ['time-entries','task-summary',taskId]; the key
+      // this used to name matched no query, so "Total Logged" never moved.
+      queryClient.invalidateQueries({ queryKey: ['time-entries', 'task-summary', variables.taskId] });
+      // "Time entry created" was said for a run the server had just discarded.
+      if ('discarded' in result) toast.info(result.message);
+      else toast.success('Timer stopped and time entry created');
     },
     onError: (error: unknown) => {
       logger.error('Failed to stop timer', { error });
       toast.error((error instanceof Error ? error.message : String(error)) || 'Failed to stop timer');
+    },
+  });
+}
+
+/**
+ * Throw the running timer away, logging nothing.
+ *
+ * The way out for a timer that cannot be stopped into an entry — its owner can
+ * no longer log time in its workspace, or its task is gone — and for one that
+ * was simply started by mistake. The API asks for no workspace permission here:
+ * a person's own clock is always theirs to stop.
+ */
+export function useDiscardTimer() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (data: { id: string; userId: string }) => {
+      await restClient.delete(`/api/v1/active_timers/${data.id}/`);
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['active-timer', variables.userId] });
+      toast.success('Timer discarded', { description: 'Nothing was logged.' });
+    },
+    onError: (error: unknown, variables) => {
+      // Most likely it was stopped or switched from another tab already: show
+      // the timer as it is now rather than the one this screen remembered.
+      queryClient.invalidateQueries({ queryKey: ['active-timer', variables.userId] });
+      logger.error('Failed to discard timer', { error });
+      toast.error((error instanceof Error ? error.message : String(error)) || 'Failed to discard timer');
     },
   });
 }

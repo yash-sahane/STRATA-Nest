@@ -1,3 +1,4 @@
+import { toast } from 'sonner';
 import { ApiError } from './rest-client';
 
 /**
@@ -30,25 +31,33 @@ function describe(error: unknown, fallback: string): string {
  * The form stays open behind this in every caller, so the title can talk about the save
  * rather than warning about lost input.
  */
-export function saveFailureToast(error: unknown, fallback: string) {
+export function describeSaveFailure(
+  error: unknown,
+  fallback: string
+): { title: string; description?: string } {
   const type = error instanceof ApiError ? error.type : '';
   if (type === CHANGED_WHILE_EDITING) {
     return {
       title: 'Not saved — somebody else edited this field first',
       description: describe(error, fallback),
-      variant: 'destructive' as const,
     };
   }
   if (type === DELETED) {
-    return {
-      title: 'Not saved — this no longer exists',
-      description: describe(error, fallback),
-      variant: 'destructive' as const,
-    };
+    return { title: 'Not saved — this no longer exists', description: describe(error, fallback) };
   }
-  return {
-    title: 'Error',
-    description: describe(error, fallback),
-    variant: 'destructive' as const,
-  };
+  // Titled by what failed — "Failed to update task" — with the server's reason
+  // under it. Every other failure was titled "Error", which says neither.
+  const reason = describe(error, '');
+  return { title: fallback, description: reason && reason !== fallback ? reason : undefined };
+}
+
+/** Show the toast for a failed save — see describeSaveFailure. */
+export function showSaveFailure(error: unknown, fallback: string): void {
+  const { title, description } = describeSaveFailure(error, fallback);
+  toast.error(title, { description });
+}
+
+/** A save refused because somebody else changed one of the same fields first. */
+export function isEditConflict(error: unknown): boolean {
+  return error instanceof ApiError && error.type === CHANGED_WHILE_EDITING;
 }

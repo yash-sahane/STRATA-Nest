@@ -3,8 +3,10 @@
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/providers/auth-provider';
+import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useQueryClient } from '@tanstack/react-query';
-import { subscribeToCollection, getRealtimeEventType, REALTIME_CONFIG } from '@/lib/api/realtime';
+import { subscribeToCollection, getRealtimeEventType } from '@/lib/api/realtime';
+import { COLLECTIONS } from '@/lib/api/config';
 import type { ApiModels } from '@/lib/api/client';
 import {
   useUnreadNotifications,
@@ -13,6 +15,7 @@ import {
   useMarkAllNotificationsAsRead,
   useDeleteNotification,
   useDeleteAllNotifications,
+  useNotificationCount,
 } from '@/hooks/use-notification';
 import { useConfirm } from '@/components/providers/confirm-provider';
 import { Button } from '@/components/ui/button';
@@ -50,58 +53,37 @@ import {
 import { formatDistanceToNow } from 'date-fns';
 import type { Notification, NotificationType } from '@/types';
 import { cn } from '@/lib/utils';
-import { toast } from '@/hooks/use-toast';
+import { toast } from 'sonner';
 
-const getNotificationIcon = (type: NotificationType) => {
-  switch (type) {
-    case 'TASK_ASSIGNED':
-    case 'TASK_UPDATED':
-      return CheckCircle2;
-    case 'TASK_REVIEW_REQUESTED':
-      return ClipboardCheck;
-    case 'TASK_REVIEWED_DONE':
-      return CheckCircle2;
-    case 'SPRINT_READY_TO_CLOSE':
-      return Flag;
-    case 'TASK_COMMENT':
-    case 'MENTION':
-      return MessageSquare;
-    case 'SPRINT_EVENT':
-      return GitBranch;
-    case 'LEAVE_REQUEST':
-    case 'LEAVE_APPROVED':
-    case 'LEAVE_REJECTED':
-      return Calendar;
-    case 'ATTENDANCE_ALERT':
-      return AlertCircle;
-    default:
-      return Bell;
+/**
+ * Icon and colour by the types the server actually sends, normalised the way
+ * routing is (`leave_approved` and `LEAVE_APPROVED` are one type). The old maps
+ * were keyed on names nothing produced — LEAVE_REQUEST, TASK_COMMENT,
+ * SPRINT_EVENT, ATTENDANCE_ALERT — so nearly every notice got the grey bell.
+ */
+const normalisedType = (type: NotificationType | string): string => String(type ?? '').trim().toUpperCase();
+
+const getNotificationIcon = (type: NotificationType | string) => {
+  const t = normalisedType(type);
+  if (t === 'TASK_REVIEW_REQUESTED') return ClipboardCheck;
+  if (t === 'TASK_COMMENT_ADDED') return MessageSquare;
+  if (t === 'SPRINT_READY_TO_CLOSE') return Flag;
+  if (t.startsWith('SPRINT_')) return GitBranch;
+  if (t === 'TASK_OVERDUE' || t === 'TASK_DELETED' || t === 'ATTENDANCE_CORRECTED') return AlertCircle;
+  if (t.startsWith('TASK_') || t.startsWith('FR_') || t.startsWith('EPIC_') || t.startsWith('REQUIREMENT_')) {
+    return CheckCircle2;
   }
+  if (t.startsWith('LEAVE_') || t.startsWith('TIME_ENTRY_')) return Calendar;
+  return Bell;
 };
 
-const getNotificationColor = (type: NotificationType) => {
-  switch (type) {
-    case 'TASK_ASSIGNED':
-      return 'text-blue-500';
-    case 'TASK_REVIEW_REQUESTED':
-      return 'text-purple-500';
-    case 'TASK_REVIEWED_DONE':
-      return 'text-green-700 dark:text-green-500';
-    case 'SPRINT_READY_TO_CLOSE':
-      return 'text-green-700 dark:text-green-500';
-    case 'TASK_COMMENT':
-    case 'MENTION':
-      return 'text-purple-500';
-    case 'SPRINT_EVENT':
-      return 'text-green-700 dark:text-green-500';
-    case 'LEAVE_APPROVED':
-      return 'text-green-700 dark:text-green-500';
-    case 'LEAVE_REJECTED':
-    case 'ATTENDANCE_ALERT':
-      return 'text-red-500';
-    default:
-      return 'text-gray-500';
-  }
+const getNotificationColor = (type: NotificationType | string) => {
+  const t = normalisedType(type);
+  if (/(_REJECTED|_REMOVED|TASK_OVERDUE|TASK_DELETED)$/.test(t) || t === 'TASK_OVERDUE') return 'text-red-500';
+  if (/(_APPROVED|_DONE|SPRINT_COMPLETED|SPRINT_READY_TO_CLOSE)$/.test(t)) return 'text-green-700 dark:text-green-500';
+  if (t === 'TASK_REVIEW_REQUESTED' || t === 'TASK_COMMENT_ADDED') return 'text-purple-500';
+  if (t.startsWith('TASK_') || t.startsWith('SPRINT_') || t.startsWith('FR_')) return 'text-blue-500';
+  return 'text-gray-500';
 };
 
 /**
@@ -113,6 +95,10 @@ const getNotificationColor = (type: NotificationType) => {
  * every row was role="button" with a pointer cursor whether or not there was
  * anywhere to go.
  */
+/** Notifications shown per step of "Show older", and the most one request returns (MAX_PAGE_SIZE). */
+const PAGE = 50;
+const MAX_LISTED = 1000;
+
 function navigationUrlFor(notification: Notification): string | null {
   const { relatedEntityId, projectId } = notification;
 
@@ -131,6 +117,12 @@ function navigationUrlFor(notification: Notification): string | null {
   const type = (notification.type ?? '').trim().toUpperCase();
   const relatedEntityType = (notification.relatedEntityType ?? '').trim().toUpperCase();
 
+  // Asked by TYPE first where the type alone decides it. A new leave request
+  // carries relatedEntityType LEAVE, which the branch below never matched, so
+  // "New leave request" opened the approver's OWN leave — the queue a tab away.
+  if (type === 'LEAVE_REQUESTED') return '/leave?tab=team-leaves';
+  if (type === 'TIME_ENTRY_SUBMITTED') return '/time-tracking?tab=approvals';
+
   // The entity types the server really emits. Kept ahead of the legacy switch
   // below so the real cases are the ones a reader sees first.
   if (relatedEntityType === 'WORKSPACE') {
@@ -139,10 +131,18 @@ function navigationUrlFor(notification: Notification): string | null {
     return '/workspaces';
   }
   if (relatedEntityType === 'JOIN_REQUEST') {
-    return '/workspaces';
+    // Somebody ASKED to join: the reader is a manager, and the request is
+    // decided in Team > Join Requests. The other two (approved / declined) are
+    // addressed to the requester, for whom the workspace list is the answer.
+    return type === 'JOIN_REQUEST_RECEIVED' ? '/team?tab=requests' : '/workspaces';
   }
   if (relatedEntityType === 'LEAVE_REQUEST') {
-    return '/leave';
+    // A request waiting on the reader is decided under Team Leaves; a decision
+    // on their own request is read under My Leaves.
+    // A request waiting on the reader, or one withdrawn from their queue.
+    return type === 'LEAVE_REQUESTED' || type === 'LEAVE_CANCELLED'
+      ? '/leave?tab=team-leaves'
+      : '/leave';
   }
   if (relatedEntityType === 'TIME_ENTRY') {
     return '/time-tracking';
@@ -158,6 +158,9 @@ function navigationUrlFor(notification: Notification): string | null {
     if (projectId && relatedEntityId) {
       return `/tasks?projectId=${projectId}&taskId=${relatedEntityId}`;
     }
+    // Several tasks at once (a project copied with work for the reader): that
+    // project's board, not whichever board /tasks last showed.
+    if (projectId) return `/tasks?projectId=${projectId}`;
     return '/tasks';
   }
 
@@ -185,8 +188,13 @@ function navigationUrlFor(notification: Notification): string | null {
     return '/functional-requirements';
   }
 
-  // Requirement notifications
+  // Requirement notifications — opened on the requirement itself, which the
+  // page names `frId` (it carried only the project, so the reader landed on the
+  // list and had to find it).
   if (type.startsWith('REQUIREMENT_')) {
+    if (projectId && relatedEntityId) {
+      return `/requirements?projectId=${projectId}&crId=${relatedEntityId}`;
+    }
     if (projectId) {
       return `/requirements?projectId=${projectId}`;
     }
@@ -194,11 +202,19 @@ function navigationUrlFor(notification: Notification): string | null {
   }
 
   // Leave-related notifications
+  if (type === 'LEAVE_BALANCE_ADJUSTED') {
+    // The figure that changed is on the Balance tab.
+    return '/leave?tab=balance';
+  }
   if (type.startsWith('LEAVE_')) {
     return '/leave';
   }
 
   // Attendance-related notifications
+  if (type === 'ATTENDANCE_CORRECTED') {
+    // A day that was restated is looked up on the calendar, not on "Today".
+    return '/attendance?tab=calendar';
+  }
   if (type.startsWith('ATTENDANCE_')) {
     return '/attendance';
   }
@@ -267,7 +283,7 @@ function NotificationItem({ notification, onDelete, onClick }: NotificationItemP
         'flex gap-3 p-3 rounded-lg transition-colors group relative',
         // Only claim to be clickable when activating it does something.
         doesSomething && 'cursor-pointer hover:bg-accent',
-        !notification.isRead && 'bg-blue-50/50 dark:bg-blue-950/20'
+        !notification.isRead && 'bg-info/10'
       )}
       // NOT role="button". This row contains the delete button below it, and an
       // interactive ancestor of an interactive element is what axe reports as
@@ -316,7 +332,7 @@ function NotificationItem({ notification, onDelete, onClick }: NotificationItemP
       <Button
         variant="ghost"
         size="icon"
-        className="absolute top-1 right-1 h-6 w-6 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+        className="absolute top-1 right-1 h-6 w-6 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
         aria-label={`Delete notification: ${notification.title}`}
         onClick={(e) => {
           e.stopPropagation();
@@ -346,6 +362,7 @@ function NotificationItem({ notification, onDelete, onClick }: NotificationItemP
 export function NotificationCenter() {
   const router = useRouter();
   const { user } = useAuth();
+  const { currentWorkspaceId, workspaces, setCurrentWorkspaceId } = useCurrentWorkspace();
   const queryClient = useQueryClient();
   const { data: unreadNotifications } = useUnreadNotifications(user?.id);
   const markAsRead = useMarkNotificationAsRead();
@@ -355,24 +372,32 @@ export function NotificationCenter() {
   const confirm = useConfirm();
 
   const [open, setOpen] = React.useState(false);
-  // Only the badge count is needed until the menu is opened, so the 50-row list
-  // is deferred until there is something to show it in.
+  // The newest page, and more on request: the list stopped at 50 while the
+  // badge counted every unread one, so the oldest unread could never be seen.
+  const [limit, setLimit] = React.useState(PAGE);
+  // Only the badge count is needed until the menu is opened, so the list is
+  // deferred until there is something to show it in.
   const {
     data: allNotifications,
     isLoading: notificationsLoading,
+    isFetching: notificationsFetching,
     isError: notificationsError,
     refetch: refetchNotifications,
-  } = useNotifications(user?.id, open);
+  } = useNotifications(user?.id, open, limit);
+  const { data: totalNotifications = 0 } = useNotificationCount(user?.id, open);
+
+  const pendingToasts = React.useRef<string[]>([]);
+  const toastTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Real-time subscription for notifications
   React.useEffect(() => {
     if (!user?.id) return;
 
     const subscription = subscribeToCollection(
-      REALTIME_CONFIG.COLLECTIONS.NOTIFICATIONS,
+      COLLECTIONS.NOTIFICATIONS,
       (response: ApiModels.RealtimeEvent<Record<string, unknown>>) => {
         const eventType = getRealtimeEventType(response.event);
-        const payload = response.payload as any;
+        const payload = response.payload;
 
         // Only process notifications for this user
         if (payload.userId === user.id) {
@@ -381,17 +406,21 @@ export function NotificationCenter() {
           // 'unread' at index 1, so ['notifications', userId] never matched it.
           queryClient.invalidateQueries({ queryKey: ['notifications'] });
 
-          // Show toast for new notifications
+          // Show toast for new notifications — once per burst. Each notice
+          // used to raise its own toast, so a change that told the reader ten
+          // things at once stacked ten cards over the screen.
           if (eventType === 'create') {
-            // 'info', not the default: this is an inbound announcement, not a
-            // confirmation of something the viewer did, and payload.title can
-            // read 'Leave Request Rejected' — which must not land on a green
-            // success card (the shim maps 'default' to sonnerToast.success).
-            toast({
-              title: 'New Notification',
-              description: payload.title || 'You have a new notification',
-              variant: 'info',
-            });
+            pendingToasts.current.push(String(payload.title || 'New notification'));
+            if (toastTimer.current !== null) clearTimeout(toastTimer.current);
+            toastTimer.current = setTimeout(() => {
+              const titles = pendingToasts.current;
+              pendingToasts.current = [];
+              toastTimer.current = null;
+              // 'info', not the default: this is an inbound announcement, not a
+              // confirmation of something the viewer did, and a title can read
+              // 'Leave Request Rejected' — which must not land on a green card.
+              toast.info(titles.length === 1 ? 'New notification' : `${titles.length} new notifications`, { description: titles.length === 1 ? titles[0] : `Latest: ${titles[titles.length - 1]}` });
+            }, 600);
           }
         }
       }
@@ -423,11 +452,13 @@ export function NotificationCenter() {
 
   const handleDeleteAll = async () => {
     if (!user || !allNotifications || allNotifications.length === 0) return;
-    const unread = allNotifications.filter((n) => !n.isRead).length;
+    // The real numbers: the list holds a page, the server deletes every one.
+    const total = Math.max(totalNotifications, allNotifications.length);
+    const unread = unreadCount;
     const confirmed = await confirm({
       title: 'Clear all notifications?',
       description:
-        `This permanently deletes all ${allNotifications.length} notifications` +
+        `This permanently deletes all ${total} notifications` +
         (unread > 0 ? `, including ${unread} you haven't read` : '') +
         ", and can't be undone.",
       confirmText: 'Clear all',
@@ -451,6 +482,17 @@ export function NotificationCenter() {
     // Navigate based on notification type
     const url = navigationUrlFor(notification);
     if (url) {
+      // The bell lists every workspace's notifications, but each destination
+      // shows the SELECTED workspace — so a notification from another one opened
+      // the right screen over the wrong data (a join request for workspace B on
+      // workspace A's queue). Go to the workspace it came from first.
+      if (
+        notification.workspaceId &&
+        notification.workspaceId !== currentWorkspaceId &&
+        workspaces?.some((w) => w.id === notification.workspaceId)
+      ) {
+        setCurrentWorkspaceId(notification.workspaceId);
+      }
       router.push(url);
       setOpen(false);
     }
@@ -543,14 +585,31 @@ export function NotificationCenter() {
                 </Button>
               </div>
             ) : allNotifications && allNotifications.length > 0 ? (
-              allNotifications.map((notification) => (
-                <NotificationItem
-                  key={notification.id}
-                  notification={notification}
-                  onDelete={handleDelete}
-                  onClick={handleNotificationClick}
-                />
-              ))
+              <>
+                {allNotifications.map((notification) => (
+                  <NotificationItem
+                    key={notification.id}
+                    notification={notification}
+                    onDelete={handleDelete}
+                    onClick={handleNotificationClick}
+                  />
+                ))}
+                {/* The rest, a page at a time, up to what one request returns. */}
+                {totalNotifications > allNotifications.length && limit < MAX_LISTED && (
+                  <div className="flex justify-center pt-1 pb-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setLimit((current) => Math.min(current + PAGE, MAX_LISTED))}
+                      disabled={notificationsFetching}
+                    >
+                      {notificationsFetching
+                        ? 'Loading…'
+                        : `Show older (${totalNotifications - allNotifications.length} more)`}
+                    </Button>
+                  </div>
+                )}
+              </>
             ) : (
               <div className="flex flex-col items-center justify-center py-12 text-center">
                 <Bell className="h-12 w-12 text-muted-foreground mb-3" />

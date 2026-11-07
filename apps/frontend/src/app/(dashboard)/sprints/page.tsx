@@ -1,5 +1,6 @@
 'use client';
 
+import { getSprintStatusConfig } from '@/lib/semantic/status';
 import * as React from 'react';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
@@ -9,30 +10,28 @@ import { useTasks } from '@/hooks/use-task';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { RowActivator } from '@/components/ui/row-activator';
+import { RowLink } from '@/components/ui/row-activator';
 import { Progress } from '@/components/ui/progress';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import { Plus, Calendar, Target, PlayCircle, CheckCircle2, Users, Pencil, Trash2 } from 'lucide-react';
+import { Plus, Calendar, Target, PlayCircle, CheckCircle2, Users, Pencil, Trash2, AlertTriangle } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { CreateSprintDialog } from '@/components/sprints/create-sprint-dialog';
 import { PageHeader } from '@/components/layout/page-header';
 import { useConfirm } from '@/components/providers/confirm-provider';
+import { sprintFigures, sprintSchedule } from '@/lib/sprint-figures';
+import { plural } from '@/lib/plural';
 import { useHasPermission } from '@/hooks/use-permissions';
 import { Permission } from '@/lib/permissions';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PageLoader, InlineLoader } from '@/components/ui/page-loader';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useCreateActionParam } from '@/hooks/use-create-action-param';
 import { basedOnFor, changedFields } from '@/lib/utils/changed-fields';
 import type { EditBasedOn, Sprint } from '@/types';
+import { ProjectPicker } from '@/components/projects/project-picker';
+import { useProjectSelectionSync } from '@/hooks/use-project-selection-sync';
+import { useSprintsRealtime, useTasksRealtime } from '@/hooks/use-realtime';
 
 export default function SprintsPage() {
   const router = useRouter();
@@ -41,9 +40,9 @@ export default function SprintsPage() {
 
   const [selectedProjectId, setSelectedProjectId] = React.useState<string>('');
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
-  // The command palette's "Create New Sprint" navigates here with ?action=create.
+  // The command palette's "New Sprint" navigates here with ?action=create.
   useCreateActionParam(() => setCreateDialogOpen(true), !!selectedProjectId);
-  const [editingSprint, setEditingSprint] = React.useState<any>(null);
+  const [editingSprint, setEditingSprint] = React.useState<Sprint | null>(null);
 
   const canCreateSprint = useHasPermission(Permission.CREATE_SPRINT);
   const canEditSprint = useHasPermission(Permission.EDIT_SPRINT);
@@ -56,6 +55,10 @@ export default function SprintsPage() {
     isError: sprintsError,
     refetch: refetchSprints,
   } = useSprints(selectedProjectId);
+  // Somebody else starting, completing or planning a sprint shows up here
+  // without a reload — the list used to be a snapshot of when it was opened.
+  useSprintsRealtime(selectedProjectId);
+  useTasksRealtime(selectedProjectId);
   const { data: tasks } = useTasks(selectedProjectId);
 
   const createSprint = useCreateSprint();
@@ -65,21 +68,17 @@ export default function SprintsPage() {
   const startSprint = useStartSprint();
   const completeSprint = useCompleteSprint();
 
-  // Restore project selection from localStorage or set first project as default
-  React.useEffect(() => {
-    const STORAGE_KEY = 'selected-project-id';
-    const savedProjectId = localStorage.getItem(STORAGE_KEY);
-
-    if (savedProjectId && projects?.some(p => p.id === savedProjectId)) {
-      // Restore saved project if it still exists
-      setSelectedProjectId(savedProjectId);
-    } else if (projects && projects.length > 0 && !selectedProjectId) {
-      // Default to first project if no saved selection
-      const firstProjectId = projects[0].id;
-      setSelectedProjectId(firstProjectId);
-      localStorage.setItem(STORAGE_KEY, firstProjectId);
-    }
-  }, [projects, selectedProjectId]);
+  // Remembered project, else the first — and never one from another workspace.
+  const projectList = React.useMemo(() => projects ?? [], [projects]);
+  // ?projectId= from a sprint's own pages ("Sprints"), so the list comes back
+  // on the project the sprint belongs to.
+  const searchParams = useSearchParams();
+  useProjectSelectionSync({
+    projects: projectList,
+    urlProjectId: searchParams.get('projectId'),
+    selectedProjectId,
+    setSelectedProjectId,
+  });
 
   // Save project selection to localStorage when changed
   const handleProjectChange = React.useCallback((projectId: string) => {
@@ -94,17 +93,20 @@ export default function SprintsPage() {
 
   const getSprintStats = (sprintId: string) => {
     const sprintTasks = tasks?.filter((t) => t.sprintId === sprintId) || [];
-    const totalTasks = sprintTasks.length;
-    const completedTasks = sprintTasks.filter((t) => t.status === 'DONE').length;
-
-    const progress = totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0;
-
+    // The same figures as the sprint's own board and Analytics (sprintFigures).
+    const figures = sprintFigures(sprints?.find((s) => s.id === sprintId), sprintTasks);
     return {
-      totalTasks,
-      completedTasks,
-      progress,
+      totalTasks: figures.total,
+      completedTasks: figures.completed,
+      progress: figures.completionRate,
+      /** Tasks still in it — what the API checks before deleting a closed sprint. */
+      attachedTasks: sprintTasks.length,
     };
   };
+
+  // A project runs one sprint at a time (the API refuses a second), so the Start
+  // button on the others says why instead of failing when pressed.
+  const activeSprint = sprints?.find((s) => s.status === 'ACTIVE');
 
   const handleCreateSprint = async (data: {
     name: string;
@@ -155,9 +157,10 @@ export default function SprintsPage() {
         // one of them the API refuses the save and names it, this function rethrows,
         // `setEditingSprint(null)` below is skipped, and the dialog stays open holding
         // what was typed.
-        updates: { ...updates, basedOn: basedOnFor(editingSprint, updates) } as EditBasedOn<
-          Partial<Sprint>
-        >,
+        updates: {
+          ...updates,
+          basedOn: basedOnFor(editingSprint as unknown as Record<string, unknown>, updates),
+        } as EditBasedOn<Partial<Sprint>>,
       });
     }
 
@@ -196,25 +199,22 @@ export default function SprintsPage() {
 
   const handleCompleteSprint = async (sprintId: string) => {
     const stats = getSprintStats(sprintId);
-    // Without these the SPRINT_COMPLETED notification block is never entered,
-    // so nobody is told the sprint closed.
-    const teamMemberIds = Array.from(
-      new Set(
-        (tasks ?? [])
-          .filter((t) => t.sprintId === sprintId)
-          .flatMap((t) => t.assignedTo ?? [])
-          .filter(Boolean)
-      )
-    );
+    const sprint = sprints?.find((s) => s.id === sprintId);
+    const unfinished = stats.totalTasks - stats.completedTasks;
 
+    // Closing a sprint cannot be undone, and it moves other people's work: one
+    // click used to do both without a word. Say what is about to happen first.
+    const confirmed = await confirm({
+      title: `Complete ${sprint?.name ?? 'this sprint'}?`,
+      description:
+        unfinished > 0
+          ? `${stats.completedTasks} of ${stats.totalTasks} tasks are done. The ${unfinished} unfinished ${unfinished === 1 ? 'task leaves' : 'tasks leave'} the sprint, with ${unfinished === 1 ? 'its requirement' : 'their requirements'}, to be planned into another one. A completed sprint cannot be reopened.`
+          : `All ${stats.totalTasks} tasks are done. A completed sprint cannot be reopened.`,
+      confirmText: 'Complete Sprint',
+    });
+    if (!confirmed) return;
     try {
-      await completeSprint.mutateAsync({
-        sprintId,
-        projectId: selectedProjectId,
-        teamMemberIds,
-        completedTasks: stats.completedTasks,
-        totalTasks: stats.totalTasks,
-      });
+      await completeSprint.mutateAsync({ sprintId, projectId: selectedProjectId });
     } catch {
       /* handled by the mutation's onError toast */
     }
@@ -235,20 +235,6 @@ export default function SprintsPage() {
     [editingSprint]
   );
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      // 600/700 rather than 500: these carry white text, and the 500 shades sit
-      // at 3.1-3.8:1 against it -- under the 4.5:1 floor for badge-sized text.
-      case 'PLANNING':
-        return 'bg-gray-600';
-      case 'ACTIVE':
-        return 'bg-green-700';
-      case 'COMPLETED':
-        return 'bg-blue-600';
-      default:
-        return 'bg-gray-600';
-    }
-  };
 
   const getStatusIcon = (status: string) => {
     switch (status) {
@@ -287,7 +273,7 @@ export default function SprintsPage() {
           icon={Calendar}
           title="No projects yet"
           description="Create a project first to start planning sprints."
-          action={{ label: 'Go to Projects', onClick: () => router.push('/projects') }}
+          action={{ label: 'Go to Projects', href: '/projects' }}
         />
       </div>
     );
@@ -302,18 +288,12 @@ export default function SprintsPage() {
         description="Plan and manage your agile sprints"
         actions={
           <>
-            <Select value={selectedProjectId} onValueChange={handleProjectChange}>
-              <SelectTrigger aria-label="Select a project" className="w-[200px]">
-                <SelectValue placeholder="Select project" />
-              </SelectTrigger>
-              <SelectContent>
-                {projects?.map((project) => (
-                  <SelectItem key={project.id} value={project.id}>
-                    {project.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <ProjectPicker
+              projects={projects ?? []}
+              value={selectedProjectId}
+              onChange={handleProjectChange}
+              className="w-full sm:w-[240px]"
+            />
             {canCreateSprint && (
               <Button onClick={() => setCreateDialogOpen(true)}>
                 <Plus className="mr-2 h-4 w-4" />
@@ -334,6 +314,10 @@ export default function SprintsPage() {
           {sprints.map((sprint) => {
             const stats = getSprintStats(sprint.id);
             const StatusIcon = getStatusIcon(sprint.status);
+            // Still running past its last day. The card said only "Active", so a
+            // sprint three weeks over read exactly like one on schedule.
+            const endedDaysAgo =
+              sprint.status === 'ACTIVE' ? sprintSchedule(sprint).endedDaysAgo : 0;
 
             return (
               <Card
@@ -348,21 +332,24 @@ export default function SprintsPage() {
                           path to the same board, and a sibling of the card's own
                           action buttons rather than their ancestor. */}
                       <CardTitle className="text-lg">
-                        <RowActivator
-                          label={`Open sprint board: ${sprint.name}`}
-                          onActivate={() => router.push(`/sprints/${sprint.id}/board`)}
-                        >
+                        <RowLink label={`Open sprint board: ${sprint.name}`} href={`/sprints/${sprint.id}/board`}>
                           {sprint.name}
-                        </RowActivator>
+                        </RowLink>
                       </CardTitle>
                       <CardDescription className="flex items-center gap-2">
                         <Calendar className="h-3 w-3" />
                         {formatSprintDate(sprint.startDate)} - {formatSprintDate(sprint.endDate)}
                       </CardDescription>
+                      {endedDaysAgo > 0 && (
+                        <p className="flex items-center gap-1 text-xs font-medium text-warning-text">
+                          <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden="true" />
+                          Overdue — ended {plural(endedDaysAgo, 'day')} ago
+                        </p>
+                      )}
                     </div>
-                    <Badge className={`${getStatusColor(sprint.status)} text-white`}>
+                    <Badge variant={getSprintStatusConfig(sprint.status).badgeVariant}>
                       <StatusIcon className="h-3 w-3 mr-1" />
-                      {sprint.status}
+                      {getSprintStatusConfig(sprint.status).label}
                     </Badge>
                   </div>
                 </CardHeader>
@@ -397,6 +384,13 @@ export default function SprintsPage() {
                     </div>
                   </div>
 
+                  {canEditSprint && sprint.status === 'PLANNING' && activeSprint && (
+                    <p className="text-xs text-muted-foreground">
+                      Complete &ldquo;{activeSprint.name}&rdquo; before starting this one — a project
+                      runs one sprint at a time.
+                    </p>
+                  )}
+
                   {/* Actions */}
                   <div className="flex gap-2 pt-2 flex-wrap">
                     {canEditSprint && sprint.status === 'PLANNING' && (
@@ -404,6 +398,7 @@ export default function SprintsPage() {
                         size="sm"
                         variant="default"
                         className="flex-1"
+                        disabled={Boolean(activeSprint)}
                         onClick={(e) => {
                           e.stopPropagation();
                           handleStartSprint(sprint.id);
@@ -427,14 +422,13 @@ export default function SprintsPage() {
                         Complete Sprint
                       </Button>
                     )}
-                    {/* Edit/Delete are NOT status-gated on the server, so don't
-                        gate them here — an ACTIVE or COMPLETED sprint created by
-                        mistake was otherwise uneditable and undeletable. */}
+                    {/* Edit for every sprint — a completed one keeps its goal and
+                        dates and renames only, as the API allows. */}
                     {canEditSprint && (
                       <Button
                         size="sm"
                         variant="outline"
-                        aria-label="Edit sprint"
+                        aria-label={`Edit ${sprint.name}`}
                         onClick={(e) => {
                           e.stopPropagation();
                           setEditingSprint(sprint);
@@ -443,7 +437,10 @@ export default function SprintsPage() {
                         <Pencil className="h-4 w-4" />
                       </Button>
                     )}
-                    {canDeleteSprint && (
+                    {/* A completed sprint that holds finished work is history,
+                        and the API keeps it. */}
+                    {canDeleteSprint &&
+                      !(sprint.status === 'COMPLETED' && getSprintStats(sprint.id).attachedTasks > 0) && (
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Button
@@ -470,7 +467,7 @@ export default function SprintsPage() {
                         router.push(`/sprints/${sprint.id}/backlog`);
                       }}
                     >
-                      Backlog
+                      Plan
                     </Button>
                     <Button
                       size="sm"
@@ -499,7 +496,7 @@ export default function SprintsPage() {
           }
           action={
             canCreateSprint
-              ? { label: 'Create Sprint', onClick: () => setCreateDialogOpen(true) }
+              ? { label: 'New Sprint', onClick: () => setCreateDialogOpen(true) }
               : undefined
           }
         />
@@ -520,6 +517,7 @@ export default function SprintsPage() {
           onSubmit={handleUpdateSprint}
           isLoading={updateSprint.isPending}
           initialData={editingSprintInitialData}
+          recordLocked={editingSprint.status === 'COMPLETED'}
         />
       )}
     </div>

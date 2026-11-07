@@ -76,7 +76,7 @@ export function DeleteWorkspaceDialog({ open, onOpenChange, workspace }: DeleteW
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle className="flex items-center gap-2 text-red-600 dark:text-red-400">
+          <AlertDialogTitle className="flex items-center gap-2 text-destructive-text">
             <AlertTriangle className="h-5 w-5" />
             Delete Workspace
           </AlertDialogTitle>

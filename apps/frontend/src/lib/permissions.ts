@@ -3,19 +3,18 @@
  * Defines role hierarchy and permission matrix
  */
 
-// Role hierarchy (higher number = more permissions)
-export const ROLE_HIERARCHY = {
-  MANAGER: 100,
-  ASSISTANT_MANAGER: 80,
-  SOFTWARE_DEVELOPER: 60,
-  TESTER: 50,
-  DEVELOPER_INTERN: 40,
-  CONTENT_ENGINEER: 40,
-  MEMBER: 20,
-} as const;
+/** The seven roles every workspace has. Custom roles are defined per workspace. */
+export const BUILT_IN_ROLES = [
+  'MANAGER',
+  'ASSISTANT_MANAGER',
+  'SOFTWARE_DEVELOPER',
+  'TESTER',
+  'DEVELOPER_INTERN',
+  'CONTENT_ENGINEER',
+  'MEMBER',
+] as const;
 
-/** The seven roles this module has a permission matrix for. */
-export type BuiltInRole = keyof typeof ROLE_HIERARCHY;
+export type BuiltInRole = (typeof BUILT_IN_ROLES)[number];
 
 /**
  * A role as it actually arrives from the server: a free string.
@@ -52,6 +51,15 @@ export enum Permission {
   EDIT_ANY_TASK = 'EDIT_ANY_TASK',
   DELETE_TASK = 'DELETE_TASK',
   ASSIGN_TASK = 'ASSIGN_TASK',
+  // The REVIEW -> DONE transition. Its own entry because the API gates it on
+  // `task:write`, not on the `task:update` that lets a delivery role move a card
+  // anywhere else: gating it on EDIT_ANY_TASK let a developer drop a card onto
+  // Done, watch it move, and then watch the server put it back.
+  COMPLETE_TASK = 'COMPLETE_TASK',
+
+  // File permissions. Reading is part of every membership; attaching and
+  // deleting take the API's `file:write`.
+  UPLOAD_FILE = 'UPLOAD_FILE',
 
   // Epic permissions
   VIEW_EPICS = 'VIEW_EPICS',
@@ -127,165 +135,18 @@ const MEMBERSHIP_FLOOR: Permission[] = [
   Permission.VIEW_ANALYTICS,
 ];
 
-/**
- * Member baseline — mirrors READ_ONLY in the API's role matrix
- * (apps/api/src/modules/authz/permissions.ts): every read, plus submitting
- * one's own HR records. The API maps MEMBER to exactly this set, so anything
- * extra here renders a control whose submit returns 403. The four delivery
- * roles extend it with task writes — see DELIVERY below.
- *
- * REQUEST_LEAVE is the one non-read in it: `POST /leave_requests` is
- * `@RequirePermission(hr:write)`, so it follows that key (see
- * API_PERMISSION_MAP) rather than sitting on the membership floor above.
- */
-const READ_ONLY: Permission[] = [...MEMBERSHIP_FLOOR, Permission.REQUEST_LEAVE];
-
-/**
- * Delivery roles: the member baseline plus the right to change a task.
- *
- * Mirrors DELIVERY in the API matrix (apps/api/src/modules/authz/permissions.ts),
- * where these four roles hold `task:update` — edit, move, progress, assign and
- * link an EXISTING task. Creating one, deleting one, managing labels and the
- * final DONE transition all still require `task:write`, which they do not have,
- * so CREATE_TASK and DELETE_TASK are deliberately absent here.
- */
-const DELIVERY: Permission[] = [
-  ...READ_ONLY,
-  Permission.EDIT_OWN_TASK,
-  Permission.EDIT_ANY_TASK,
-  Permission.ASSIGN_TASK,
-];
-
-// Permission matrix: Role -> Permissions. Kept in step with the API matrix —
-// the API is the enforcement point, so a role must never be granted more here.
-export const ROLE_PERMISSIONS: Record<BuiltInRole, Permission[]> = {
-  MANAGER: [
-    // All permissions
-    Permission.VIEW_PROJECTS,
-    Permission.CREATE_PROJECT,
-    Permission.EDIT_PROJECT,
-    Permission.DELETE_PROJECT,
-    Permission.MANAGE_PROJECT_SETTINGS,
-
-    Permission.VIEW_TASKS,
-    Permission.CREATE_TASK,
-    Permission.EDIT_OWN_TASK,
-    Permission.EDIT_ANY_TASK,
-    Permission.DELETE_TASK,
-    Permission.ASSIGN_TASK,
-
-    Permission.VIEW_EPICS,
-    Permission.CREATE_EPIC,
-    Permission.EDIT_EPIC,
-    Permission.DELETE_EPIC,
-
-    Permission.VIEW_REQUIREMENTS,
-    Permission.CREATE_REQUIREMENT,
-    Permission.EDIT_REQUIREMENT,
-    Permission.DELETE_REQUIREMENT,
-
-    Permission.VIEW_FUNCTIONAL_REQUIREMENTS,
-    Permission.CREATE_FUNCTIONAL_REQUIREMENT,
-    Permission.EDIT_FUNCTIONAL_REQUIREMENT,
-    Permission.DELETE_FUNCTIONAL_REQUIREMENT,
-
-    Permission.VIEW_SPRINTS,
-    Permission.CREATE_SPRINT,
-    Permission.EDIT_SPRINT,
-    Permission.DELETE_SPRINT,
-
-    Permission.VIEW_TEAM,
-    Permission.INVITE_MEMBER,
-    Permission.EDIT_MEMBER,
-    Permission.REMOVE_MEMBER,
-
-    Permission.VIEW_WORKSPACE,
-    Permission.EDIT_WORKSPACE,
-    Permission.DELETE_WORKSPACE,
-    Permission.MANAGE_WORKSPACE_SETTINGS,
-
-    Permission.REQUEST_LEAVE,
-    Permission.APPROVE_LEAVE,
-    Permission.REJECT_LEAVE,
-    Permission.APPROVE_TIME,
-
-    Permission.VIEW_ANALYTICS,
-    Permission.VIEW_TEAM_ANALYTICS,
-  ],
-
-  // The API grants ASSISTANT_MANAGER everything except workspace:delete.
-  ASSISTANT_MANAGER: [
-    Permission.VIEW_PROJECTS,
-    Permission.CREATE_PROJECT,
-    Permission.EDIT_PROJECT,
-    Permission.DELETE_PROJECT,
-    Permission.MANAGE_PROJECT_SETTINGS,
-
-    Permission.VIEW_TASKS,
-    Permission.CREATE_TASK,
-    Permission.EDIT_OWN_TASK,
-    Permission.EDIT_ANY_TASK,
-    Permission.DELETE_TASK,
-    Permission.ASSIGN_TASK,
-
-    Permission.VIEW_EPICS,
-    Permission.CREATE_EPIC,
-    Permission.EDIT_EPIC,
-    Permission.DELETE_EPIC,
-
-    Permission.VIEW_REQUIREMENTS,
-    Permission.CREATE_REQUIREMENT,
-    Permission.EDIT_REQUIREMENT,
-    Permission.DELETE_REQUIREMENT,
-
-    Permission.VIEW_FUNCTIONAL_REQUIREMENTS,
-    Permission.CREATE_FUNCTIONAL_REQUIREMENT,
-    Permission.EDIT_FUNCTIONAL_REQUIREMENT,
-    Permission.DELETE_FUNCTIONAL_REQUIREMENT,
-
-    Permission.VIEW_SPRINTS,
-    Permission.CREATE_SPRINT,
-    Permission.EDIT_SPRINT,
-    Permission.DELETE_SPRINT,
-
-    Permission.VIEW_TEAM,
-    Permission.INVITE_MEMBER,
-    Permission.EDIT_MEMBER,
-    Permission.REMOVE_MEMBER,
-
-    Permission.VIEW_WORKSPACE,
-    Permission.EDIT_WORKSPACE,
-    Permission.MANAGE_WORKSPACE_SETTINGS,
-
-    Permission.REQUEST_LEAVE,
-    Permission.APPROVE_LEAVE,
-    Permission.REJECT_LEAVE,
-    Permission.APPROVE_TIME,
-
-    Permission.VIEW_ANALYTICS,
-    Permission.VIEW_TEAM_ANALYTICS,
-  ],
-
-  SOFTWARE_DEVELOPER: DELIVERY,
-  TESTER: DELIVERY,
-  DEVELOPER_INTERN: DELIVERY,
-  CONTENT_ENGINEER: DELIVERY,
-  MEMBER: READ_ONLY,
-};
-
-/** Whether `role` is one of the seven this module has a matrix for. */
+/** Whether `role` is one of the seven built-in roles. */
 export function isBuiltInRole(role: string): role is BuiltInRole {
-  return Object.prototype.hasOwnProperty.call(ROLE_PERMISSIONS, role);
+  return (BUILT_IN_ROLES as readonly string[]).includes(role);
 }
 
 /**
- * The API's permission keys — the strings a custom `WorkspaceRole.permissions`
- * array actually holds — mapped to the coarser actions this module models.
+ * The API's permission keys mapped to the coarser actions this module models.
  *
- * `WorkspaceAccessService.permissionsOfRole` resolves a membership against
- * exactly that array, so this is the client's translation of the server's own
- * answer. Keys with no UI counterpart (`role:manage`, `invite:manage`,
- * `join:manage`, `hr:read`, `file:*`, `notification:*`, `activity:*`,
+ * The keys are the server's answer (GET /auth/me/access — every membership's
+ * effective keys, implied ones included), so this is only a translation: the
+ * browser keeps no role matrix of its own. Keys with no UI counterpart (`role:manage`, `invite:manage`,
+ * `join:manage`, `hr:read`, `file:read`, `notification:*`, `activity:*`,
  * `integration:*`) are deliberately absent: nothing in this enum gates on them.
  *
  * Null prototype, as in the API matrix: the keys arrive from the server, and on
@@ -316,6 +177,10 @@ const API_PERMISSION_MAP: Record<string, Permission[]> = Object.assign(
       Permission.DELETE_FUNCTIONAL_REQUIREMENT,
     ],
     'planning:read': [Permission.VIEW_EPICS, Permission.VIEW_SPRINTS],
+    // VIEW_TEAM_ANALYTICS rides with planning: Team Performance is the view of
+    // the people a planner hands work to. It is a presentation choice, not a
+    // read rule — the tasks it is drawn from are every member's to read — so it
+    // follows the job it serves rather than an HR permission.
     'planning:write': [
       Permission.CREATE_EPIC,
       Permission.EDIT_EPIC,
@@ -323,24 +188,19 @@ const API_PERMISSION_MAP: Record<string, Permission[]> = Object.assign(
       Permission.CREATE_SPRINT,
       Permission.EDIT_SPRINT,
       Permission.DELETE_SPRINT,
-    ],
-    'task:read': [Permission.VIEW_TASKS],
-    // Split exactly as the API splits it: `task:write` is create / delete /
-    // label / the DONE transition, while changing an existing card is
-    // `task:update`. Collapsing the two would offer a delivery role a Delete.
-    'task:write': [Permission.CREATE_TASK, Permission.DELETE_TASK],
-    'task:update': [Permission.EDIT_OWN_TASK, Permission.EDIT_ANY_TASK, Permission.ASSIGN_TASK],
-    'hr:write': [Permission.REQUEST_LEAVE],
-    // VIEW_TEAM_ANALYTICS rides with leave:approve because that is the key the
-    // server actually scopes OTHER PEOPLE's records on: `scopeQueryToCaller` in
-    // leave.services.ts widens a list past the caller's own rows only for a
-    // principal holding it. It is what makes the two built-in manager roles —
-    // and only them — hold it in the matrix above.
-    'leave:approve': [
-      Permission.APPROVE_LEAVE,
-      Permission.REJECT_LEAVE,
       Permission.VIEW_TEAM_ANALYTICS,
     ],
+    'task:read': [Permission.VIEW_TASKS],
+    // Split exactly as the API splits it: `task:create` files a new task,
+    // `task:write` deletes and signs off (and implies the other two), and
+    // changing an existing card is `task:update`. Collapsing them would offer a
+    // delivery role a Delete.
+    'task:create': [Permission.CREATE_TASK],
+    'task:write': [Permission.CREATE_TASK, Permission.DELETE_TASK, Permission.COMPLETE_TASK],
+    'task:update': [Permission.EDIT_OWN_TASK, Permission.EDIT_ANY_TASK, Permission.ASSIGN_TASK],
+    'file:write': [Permission.UPLOAD_FILE],
+    'hr:write': [Permission.REQUEST_LEAVE],
+    'leave:approve': [Permission.APPROVE_LEAVE, Permission.REJECT_LEAVE],
     'time:approve': [Permission.APPROVE_TIME],
   },
 );
@@ -353,92 +213,11 @@ const API_PERMISSION_MAP: Record<string, Permission[]> = Object.assign(
  * `WorkspaceAccessService.permissions` answers with for a platform admin.
  */
 export function permissionsFromKeys(keys: readonly string[]): Permission[] {
-  if (keys.includes('*')) return [...ROLE_PERMISSIONS.MANAGER];
+  // A platform administrator passes every check server-side.
+  if (keys.includes('*')) return Object.values(Permission);
   const resolved = new Set<Permission>(MEMBERSHIP_FLOOR);
   for (const key of keys) {
     for (const permission of API_PERMISSION_MAP[key] ?? []) resolved.add(permission);
   }
   return [...resolved];
-}
-
-/**
- * Resolve a role name to its permission list — TOTAL, for any string.
- *
- * Mirrors `WorkspaceAccessService.permissionsOfRole` term for term: the
- * built-in matrix wins (a custom row of a built-in name is inert server-side,
- * which is why the API refuses to create one), else the role's own permission
- * keys, else the READ_ONLY floor for a name nothing resolves — not `[]`, which
- * would hide every screen, and not MANAGER, because the client must never
- * render an affordance the server will refuse.
- *
- * `grantedKeys` is the custom role's `permissions` array, which the client now
- * reads from `/api/v1/workspace_roles` (see `useMyRoleDefinitions`). Resolving
- * WITHOUT it was the bug: every custom-role member was answered with the floor,
- * so a role holding `member:invite` — which the API authorises, `POST
- * /users/invite` as that principal returning 201 — rendered no Invite button
- * anywhere in the UI.
- *
- * Own-property test, so no Object.prototype key ('constructor', '__proto__')
- * can masquerade as a role.
- */
-export function permissionsOfRole(
-  role: Role,
-  grantedKeys?: readonly string[] | null,
-): Permission[] {
-  if (isBuiltInRole(role)) return ROLE_PERMISSIONS[role];
-  if (grantedKeys && grantedKeys.length > 0) return permissionsFromKeys(grantedKeys);
-  return READ_ONLY;
-}
-
-/**
- * Check if a role has a specific permission
- */
-export function hasPermission(role: Role, permission: Permission): boolean {
-  return permissionsOfRole(role).includes(permission);
-}
-
-/**
- * Check if a role has any of the specified permissions
- */
-export function hasAnyPermission(role: Role, permissions: Permission[]): boolean {
-  return permissions.some((permission) => hasPermission(role, permission));
-}
-
-/**
- * Check if a role has all of the specified permissions
- */
-export function hasAllPermissions(role: Role, permissions: Permission[]): boolean {
-  return permissions.every((permission) => hasPermission(role, permission));
-}
-
-/**
- * Check if a role is admin (Manager or Assistant Manager)
- */
-export function isAdmin(role: Role): boolean {
-  return role === 'MANAGER' || role === 'ASSISTANT_MANAGER';
-}
-
-/**
- * Check if a role is manager only
- */
-export function isManager(role: Role): boolean {
-  return role === 'MANAGER';
-}
-
-/**
- * Get all permissions for a role
- */
-export function getRolePermissions(role: Role): Permission[] {
-  return permissionsOfRole(role);
-}
-
-/**
- * Compare role hierarchy (returns true if role1 >= role2).
- * An unrecognised (custom) role ranks at the member floor — see
- * `permissionsOfRole`; an undefined lookup previously made every comparison NaN,
- * which is false in BOTH directions.
- */
-export function hasHigherOrEqualRole(role1: Role, role2: Role): boolean {
-  const rank = (r: Role) => (isBuiltInRole(r) ? ROLE_HIERARCHY[r] : ROLE_HIERARCHY.MEMBER);
-  return rank(role1) >= rank(role2);
 }

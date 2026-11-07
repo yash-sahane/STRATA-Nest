@@ -23,7 +23,11 @@ const TabsList = React.forwardRef<
       // /settings at 768px, the first tab was cut by 51px with scrollLeft already 0 and
       // 55px of scroll available in the wrong direction. Safe alignment centres while
       // there is room and falls back to flex-start the moment there is not.
-      'inline-flex h-10 max-w-full items-center justify-center-safe overflow-x-auto rounded-md bg-muted p-1 text-muted-foreground',
+      // overflow-y-hidden: `overflow-x: auto` turns overflow-y to auto as well, so a
+      // trigger 2px taller than the strip's 32px inner height — "Approvals" with its
+      // count badge on /time-tracking is 34px — grew a vertical scrollbar with ▲▼
+      // arrows beside the tabs. The strip only ever scrolls sideways.
+      'inline-flex h-10 max-w-full items-center justify-center-safe overflow-x-auto overflow-y-hidden rounded-md bg-muted p-1 text-muted-foreground',
       className
     )}
     {...props}

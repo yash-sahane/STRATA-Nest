@@ -1,21 +1,14 @@
 'use client';
 
+import Link from 'next/link';
 import * as React from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import { useCreateActionParam } from '@/hooks/use-create-action-param';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { TaskBoard } from '@/components/tasks/task-board';
-import { CreateTaskDialog } from '@/components/tasks/create-task-dialog';
 import { TaskDetailsDialog } from '@/components/tasks/task-details-dialog';
-import { EditTaskDialog } from '@/components/tasks/edit-task-dialog';
+import { TaskFormDialog, type TaskFormValues } from '@/components/tasks/task-form-dialog';
 import { PageHeader } from '@/components/layout/page-header';
 import { ErrorState } from '@/components/ui/error-state';
 import { InlineLoader, PageLoader } from '@/components/ui/page-loader';
@@ -25,11 +18,16 @@ import {
   useUpdateTask,
   useUpdateTaskStatus,
   useDeleteTask,
-  useReorderTasks,
+  normalizeTask,
 } from '@/hooks/use-task';
+import { isLabel, labelText } from '@/components/tasks/task-display';
+import { isEditConflict } from '@/lib/api/mutation-error';
 import { useProjects } from '@/hooks/use-project';
+import { useTaskReview } from '@/hooks/use-task-review';
+import { isAssignedTo } from '@/lib/my-tasks';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
+import { useTabParam } from '@/hooks/use-tab-param';
 import { useEpics } from '@/hooks/use-epic';
 import { useFunctionalRequirements } from '@/hooks/use-functional-requirement';
 import { useSprints } from '@/hooks/use-sprint';
@@ -38,6 +36,7 @@ import { Input } from '@/components/ui/input';
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuCheckboxItem,
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -56,9 +55,13 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import type { Task, TaskStatus } from '@/types';
-import { useIsAdmin, useHasPermission, useHasPermissionResolved } from '@/hooks/use-permissions';
+import { useHasPermission, useHasPermissionResolved } from '@/hooks/use-permissions';
 import { Permission } from '@/lib/permissions';
 import { basedOnFor, changedFields } from '@/lib/utils/changed-fields';
+import { ProjectPicker } from '@/components/projects/project-picker';
+import { resources } from '@/lib/api/client';
+import { toast } from 'sonner';
+import { positionBefore, sortTasks as sortTasksBy } from '@/lib/task-sort';
 
 // The two halves of the Manual-order notice, shared by the banner and the live
 // region that announces it, so they can never drift apart.
@@ -68,34 +71,78 @@ const MANUAL_ORDER_NOTICE = 'Sorted by Manual order so your arrangement stays pu
 // if nothing says it is coming.
 const MANUAL_ORDER_NOTICE_DETAIL = 'Every column now shows its saved order.';
 
+/**
+ * Whose tasks the board shows.
+ *
+ * This page was "My Tasks" under a sidebar link that says "Tasks", and it is the
+ * only screen with the task editor — so a task you neither created nor were
+ * assigned could not be opened, reassigned or deleted by anybody, a manager
+ * included. "All tasks" is the whole project; "My tasks" stays the default.
+ */
+const TASK_SCOPES = ['mine', 'all'] as const;
+type TaskScope = (typeof TASK_SCOPES)[number];
+
+const TASK_CREATE_CARRIES = ['frId'];
+
 function TasksPageContent() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const { user } = useAuth();
   const { currentWorkspace } = useCurrentWorkspace();
   const projectIdFromUrl = searchParams.get('projectId');
   const taskIdFromUrl = searchParams.get('taskId');
+  // In the URL (`?scope=all`), so a link to a colleague's task can say so.
+  const [scope, setScope] = useTabParam<TaskScope>(TASK_SCOPES, 'mine', 'scope');
 
   // Permission checks - only managers/assistant managers can edit/delete tasks
-  const isAdmin = useIsAdmin();
   // Tri-state on purpose: `undefined` while the membership request is in
   // flight, so the DONE gate never refuses on an unresolved answer. The server
   // (TasksService.patchStatus) is the enforcement point either way.
-  const doneGate = useHasPermissionResolved(Permission.EDIT_ANY_TASK);
+  const doneGate = useHasPermissionResolved(Permission.COMPLETE_TASK);
   const canMarkDone = doneGate.isLoading ? undefined : doneGate.allowed;
+  // Every permission below resolves from the same membership request.
+  const permissionsLoading = doneGate.isLoading;
   const canEditAnyTask = useHasPermission(Permission.EDIT_ANY_TASK);
   const canDeleteTask = useHasPermission(Permission.DELETE_TASK);
-  const canCreateTask = useHasPermission(Permission.CREATE_TASK);
+  const createGate = useHasPermissionResolved(Permission.CREATE_TASK);
+  const canCreateTask = createGate.allowed;
 
   const [selectedProjectId, setSelectedProjectId] = React.useState<string>(projectIdFromUrl || '');
   /** The id a link asked for that this workspace has no such project for. */
   const [missingProjectId, setMissingProjectId] = React.useState<string | null>(null);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = React.useState(false);
-  // The command palette's "Create New Task" navigates here with ?action=create.
-  useCreateActionParam(() => setIsCreateDialogOpen(true));
+  // The command palette's "New Task" navigates here with ?action=create; a
+  // functional requirement's "Add a task" adds &frId=… to it.
+  const [createForFr, setCreateForFr] = React.useState('');
+  // Answered once the permission is known: `?action=create` opened the form for
+  // anybody, and the save was then refused for somebody who may not create tasks.
+  useCreateActionParam(
+    (asked) => {
+      if (!createGate.allowed) {
+        toast.info('You cannot create tasks in this workspace.', {
+          description: 'Your role here can work on tasks but not add them.',
+        });
+        return;
+      }
+      setCreateForFr(asked.get('frId') ?? '');
+      setIsCreateDialogOpen(true);
+    },
+    // Not before the workspace is known: with no workspace yet the permission
+    // reads "no" without loading, and the link was refused on every cold load.
+    Boolean(currentWorkspace?.id) && !createGate.isLoading,
+    TASK_CREATE_CARRIES
+  );
   const [isDetailsDialogOpen, setIsDetailsDialogOpen] = React.useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = React.useState(false);
   const [selectedTask, setSelectedTask] = React.useState<Task | null>(null);
+  /**
+   * What the open edit is measured against, when that is not `selectedTask`.
+   * After a save is refused because somebody else changed a field, the form
+   * keeps every word that was typed, and the next save is measured against the
+   * task as the server now holds it: saving again replaces their change, as the
+   * refusal said it would. Measured against the opening snapshot instead, the
+   * same save was refused for ever.
+   */
+  const [editBaseline, setEditBaseline] = React.useState<Task | null>(null);
   const [searchQuery, setSearchQuery] = React.useState('');
   const [deleteTaskId, setDeleteTaskId] = React.useState<string | null>(null);
   // Multi-field sorting: array of { field, direction } objects
@@ -150,9 +197,9 @@ function TasksPageContent() {
   const { data: sprints = [] } = useSprints(selectedProjectId || undefined);
   const createTask = useCreateTask();
   const updateTask = useUpdateTask();
+  const review = useTaskReview();
   const updateTaskStatus = useUpdateTaskStatus();
   const deleteTask = useDeleteTask();
-  const reorderTasks = useReorderTasks();
 
   // `?taskId` ADDRESSES the open task; it is not a one-shot command like
   // `?action=create` (see useCreateActionParam, which is right to consume its
@@ -189,10 +236,56 @@ function TasksPageContent() {
     if (autoOpenedTaskId.current === taskIdFromUrl) return;
     const task = tasks.find((t) => t.id === taskIdFromUrl);
     if (!task) return;
+    // `&edit=1` is the sprint board handing a task over to this page's editor —
+    // the only one there is. A one-shot command, so it is spent on arrival; the
+    // editor still only opens for somebody allowed to use it.
+    const url = new URL(window.location.href);
+    const wantsEdit = url.searchParams.get('edit') === '1';
+    // Which dialog a hand-over opens depends on a permission, and on a hard load
+    // the tasks can arrive before the membership has: wait for the answer rather
+    // than read "not yet" as "no" and open the read-only view.
+    if (wantsEdit && permissionsLoading) return;
     autoOpenedTaskId.current = taskIdFromUrl;
     setSelectedTask(task);
-    setIsDetailsDialogOpen(true);
-  }, [taskIdFromUrl, tasks]);
+    if (wantsEdit) {
+      url.searchParams.delete('edit');
+      window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+    }
+    if (wantsEdit && (canEditAnyTask)) setIsEditDialogOpen(true);
+    else setIsDetailsDialogOpen(true);
+  }, [taskIdFromUrl, tasks, canEditAnyTask, permissionsLoading]);
+
+  /**
+   * A `?taskId` that is not on this board. The board shows one project, so a
+   * link from anywhere that did not name the project — an older link, a
+   * dependency in another project, the header's timer — opened this project's
+   * board with nothing open. Ask the task itself where it lives and go there;
+   * and when it is gone, say so rather than open nothing.
+   */
+  const resolvedForeignTask = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (!taskIdFromUrl || isLoadingTasks || !selectedProjectId) return;
+    if (tasks.some((task) => task.id === taskIdFromUrl)) return;
+    if (resolvedForeignTask.current === taskIdFromUrl) return;
+    resolvedForeignTask.current = taskIdFromUrl;
+    resources.get('tasks', taskIdFromUrl).then(
+      (task) => {
+        const elsewhere = (task as { projectId?: string } | null)?.projectId;
+        if (!elsewhere || elsewhere === selectedProjectId) return;
+        setSelectedProjectId(elsewhere);
+        localStorage.setItem('selected-project-id', elsewhere);
+        const params = new URLSearchParams(window.location.search);
+        params.set('projectId', elsewhere);
+        window.history.replaceState(null, '', `/tasks?${params.toString()}`);
+      },
+      () => {
+        toast.error('That task no longer exists', {
+          description: 'It may have been deleted. The board it belonged to is shown instead.',
+        });
+        setTaskParam(null);
+      }
+    );
+  }, [taskIdFromUrl, isLoadingTasks, selectedProjectId, tasks, setTaskParam]);
 
   // `?projectId` is an entry point (bookmark, refresh, deep link, back button),
   // not a live binding. Re-applying it on every render fought the selector: the
@@ -231,12 +324,25 @@ function TasksPageContent() {
     return projects?.find((p) => p.id === selectedProjectId);
   }, [projects, selectedProjectId]);
 
-  // Extract all unique labels from existing tasks
+  // The open task as the board holds it NOW, for the details dialog. It was
+  // handed the snapshot taken when the card was clicked, so a dependency added
+  // or removed from inside the dialog — or anybody's change, arriving live —
+  // did not show until it was closed and opened again. (The sprint board has
+  // always read its open task this way.) The edit dialog keeps the snapshot on
+  // purpose: a refetch must not wipe what is being typed (see editBaseline).
+  const liveSelectedTask = React.useMemo(
+    () => (selectedTask ? (tasks.find((task) => task.id === selectedTask.id) ?? selectedTask) : null),
+    [tasks, selectedTask]
+  );
+
+  // Extract all unique labels from existing tasks — the ones that are labels:
+  // a stored value that is not a string is no label to offer, and handing one to
+  // the form crashed it on open.
   const existingLabels = React.useMemo(() => {
     const allLabels = new Set<string>();
     tasks.forEach((task) => {
       if (task.labels && Array.isArray(task.labels)) {
-        task.labels.forEach((label) => allLabels.add(label));
+        task.labels.filter(isLabel).forEach((label) => allLabels.add(label));
       }
     });
     return Array.from(allLabels);
@@ -267,139 +373,54 @@ function TasksPageContent() {
     return map;
   }, [sprints]);
 
-  // Filter tasks to show only those:
-  // 1. Assigned to current user OR created by current user
-  // 2. If task has a direct sprintId, only show if sprint is ACTIVE
-  // 3. If linked to an FR in a sprint, only show if sprint is ACTIVE
-  const myTasks = React.useMemo(() => {
-    if (!user) return tasks;
+  // "My tasks": assigned to me (isAssignedTo — the one meaning the dashboard
+  // uses too), AND workable now — in the backlog or the active sprint. A task (or its FR) sitting in a sprint that is
+  // still being planned, or already closed, is left out.
+  //
+  // That second rule used to be applied without a word, so tasks simply were not
+  // there and nothing said why. They are counted now (`parkedCount`) so the page
+  // can say how many it is holding back and offer the way to see them.
+  const { myTasks, parkedCount } = React.useMemo(() => {
+    if (!user) return { myTasks: tasks, parkedCount: 0 };
 
-    return tasks.filter((task) => {
-      const isAssignedToMe = task.assignedTo?.includes(user.id) || false;
-      const isCreatedByMe = task.createdBy === user.id;
+    let parked = 0;
+    const mine = tasks.filter((task) => {
+      if (!isAssignedTo(task, user.id)) return false;
 
-      // First check user assignment
-      if (!isAssignedToMe && !isCreatedByMe) return false;
-
-      // If task has a direct sprintId, check if that sprint is ACTIVE
-      if (task.sprintId) {
-        const sprintStatus = sprintStatusMap.get(task.sprintId);
-        // Hide tasks in sprints that are PLANNING or COMPLETED
-        if (sprintStatus && sprintStatus !== 'ACTIVE') {
-          return false;
-        }
+      const sprintStatus = task.sprintId ? sprintStatusMap.get(task.sprintId) : null;
+      const frSprintStatus = task.functionalRequirementId
+        ? frSprintStatusMap.get(task.functionalRequirementId)
+        : null;
+      // A task in no sprint, under a requirement whose sprint has CLOSED, is
+      // follow-up work in the backlog: the API files a new task under a
+      // delivered requirement that way rather than refuse it. Counted as parked
+      // in "a sprint that has already closed", it vanished from the list of the
+      // very person who had just been given it.
+      const followUp = !task.sprintId && frSprintStatus === 'COMPLETED';
+      const inInactiveSprint =
+        (sprintStatus && sprintStatus !== 'ACTIVE') ||
+        (frSprintStatus && frSprintStatus !== 'ACTIVE' && !followUp);
+      if (inInactiveSprint) {
+        parked += 1;
+        return false;
       }
-
-      // If task is linked to an FR, check if the FR's sprint is active
-      if (task.functionalRequirementId) {
-        const frSprintStatus = frSprintStatusMap.get(task.functionalRequirementId);
-
-        // If FR is in a sprint that is NOT active (PLANNING or COMPLETED), hide the task
-        if (frSprintStatus && frSprintStatus !== 'ACTIVE') {
-          return false;
-        }
-      }
-
       return true;
     });
+    return { myTasks: mine, parkedCount: parked };
   }, [tasks, user, frSprintStatusMap, sprintStatusMap]);
 
-  // Priority order for sorting (higher number = higher priority)
-  const priorityOrder: Record<string, number> = React.useMemo(
-    () => ({
-      CRITICAL: 4,
-      HIGH: 3,
-      MEDIUM: 2,
-      LOW: 1,
-    }),
-    []
-  );
+  // The whole project under "All tasks" — every status, every sprint, everybody's.
+  const scopedTasks = scope === 'all' ? tasks : myTasks;
 
-  // Status order for sorting (based on workflow)
-  const statusOrder: Record<string, number> = React.useMemo(
-    () => ({
-      BACKLOG: 1,
-      TODO: 2,
-      IN_PROGRESS: 3,
-      REVIEW: 4,
-      DONE: 5,
-    }),
-    []
-  );
-
-  // Calculate urgency score based on due date
-  const getUrgencyScore = (task: Task): number => {
-    if (!task.dueDate) return 0; // No due date = lowest urgency
-    const now = new Date();
-    const dueDate = new Date(task.dueDate);
-    const daysUntilDue = Math.ceil((dueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-
-    if (daysUntilDue < 0) return 100; // Overdue = highest urgency
-    if (daysUntilDue === 0) return 90; // Due today
-    if (daysUntilDue === 1) return 80; // Due tomorrow
-    if (daysUntilDue <= 3) return 70; // Due within 3 days
-    if (daysUntilDue <= 7) return 50; // Due within a week
-    return Math.max(1, 30 - daysUntilDue); // Further out = lower urgency
-  };
-
-  // Compare function for a single field
-  const compareByField = React.useCallback(
-    (a: Task, b: Task, field: string): number => {
-      switch (field) {
-        case 'priority':
-          return (priorityOrder[a.priority] || 0) - (priorityOrder[b.priority] || 0);
-        case 'urgency':
-          return getUrgencyScore(a) - getUrgencyScore(b);
-        case 'dueDate': {
-          const dateA = a.dueDate ? new Date(a.dueDate).getTime() : Infinity;
-          const dateB = b.dueDate ? new Date(b.dueDate).getTime() : Infinity;
-          return dateA - dateB;
-        }
-        case 'status':
-          return (statusOrder[a.status] || 0) - (statusOrder[b.status] || 0);
-        case 'title':
-          return a.title.localeCompare(b.title);
-        case 'hierarchyId':
-          return a.hierarchyId.localeCompare(b.hierarchyId);
-        case 'createdAt':
-          return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-        case 'updatedAt':
-          return new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime();
-        case 'labels':
-          return (a.labels?.length || 0) - (b.labels?.length || 0);
-        case 'estimatedHours':
-          return (a.estimatedHours || 0) - (b.estimatedHours || 0);
-        case 'position':
-          // The hand-made board order. It has to be sortable here as well as in
-          // TaskBoard, because handleTaskMove renumbers against this order.
-          return a.position - b.position;
-        default:
-          return 0;
-      }
-    },
-    [priorityOrder, statusOrder]
-  );
-
-  // Multi-field sort function
+  // The order the board shows and a drop is renumbered against — one sort,
+  // shared with TaskBoard (lib/task-sort.ts).
   const sortTasks = React.useCallback(
-    (tasksToSort: Task[]): Task[] => {
-      if (sortCriteria.length === 0) return tasksToSort;
-
-      return [...tasksToSort].sort((a, b) => {
-        for (const criterion of sortCriteria) {
-          const comparison = compareByField(a, b, criterion.field);
-          if (comparison !== 0) {
-            return criterion.direction === 'asc' ? comparison : -comparison;
-          }
-        }
-        return 0;
-      });
-    },
-    [sortCriteria, compareByField]
+    (tasksToSort: Task[]): Task[] => sortTasksBy(tasksToSort, sortCriteria),
+    [sortCriteria]
   );
 
   const filteredTasks = React.useMemo(() => {
-    let result = myTasks;
+    let result = scopedTasks;
 
     // Apply search filter (includes labels)
     if (searchQuery) {
@@ -410,12 +431,11 @@ function TasksPageContent() {
         if (task.hierarchyId.toLowerCase().includes(query)) return true;
         if (task.description?.toLowerCase().includes(query)) return true;
 
-        // Check labels (search in label text)
+        // Check labels (search in label text). labelText reads "color:text" or
+        // plain text, and does not throw on a stored value that is not a string.
         if (task.labels && Array.isArray(task.labels)) {
           for (const label of task.labels) {
-            // Labels can be "color:text" format or just text
-            const labelText = label.includes(':') ? label.split(':')[1] : label;
-            if (labelText.toLowerCase().includes(query)) return true;
+            if (labelText(label).toLowerCase().includes(query)) return true;
           }
         }
 
@@ -425,13 +445,16 @@ function TasksPageContent() {
 
     // Apply sorting
     return sortTasks(result);
-  }, [myTasks, searchQuery, sortTasks]);
+  }, [scopedTasks, searchQuery, sortTasks]);
 
   // A drag can only ever be stored in `position`, so this is the one sort under
   // which the board can show a hand-made arrangement back to the user.
   const isManualOrder = sortCriteria.length === 1 && sortCriteria[0].field === 'position';
 
   // Toggle sort - add field to criteria or toggle its direction
+  // "Add to the current sort" in the menu: Shift+Click without the Shift key.
+  const [combineSorts, setCombineSorts] = React.useState(false);
+
   const handleSort = (field: string, addToExisting: boolean = false) => {
     // Any deliberate choice from the sort menu supersedes the automatic switch,
     // so the offer to undo it goes away — including a deliberate pick of Manual
@@ -532,33 +555,41 @@ function TasksPageContent() {
     window.history.pushState(null, '', `/tasks?${params.toString()}`);
   };
 
-  const handleCreateTask = async (values: any) => {
+  const handleCreateTask = async (values: TaskFormValues) => {
     if (!selectedProjectId || !selectedProject || !user || !currentWorkspace) return;
 
     await createTask.mutateAsync({
       workspaceId: currentWorkspace.id,
       projectId: selectedProjectId,
-      projectCode: selectedProject.shortCode,
       title: values.title,
       description: values.description,
       status: values.status,
       priority: values.priority,
-      createdBy: user.id,
-      createdByName: user.name, // ✅ Add creator name
-      assignedBy: user.id, // ✅ Who is assigning the task
-      assignedByName: user.name, // ✅ Assigner's name
       dueDate: values.dueDate?.toISOString(),
       estimatedHours: values.estimatedHours,
-      epicId: values.epicId && values.epicId !== 'none' ? values.epicId : undefined,
+      // Under a requirement the epic is the requirement's, and the server
+      // fills it in along with the sprint; only a free-standing task names one.
+      epicId:
+        values.functionalRequirementId && values.functionalRequirementId !== 'none'
+          ? undefined
+          : values.epicId && values.epicId !== 'none'
+            ? values.epicId
+            : undefined,
       functionalRequirementId:
         values.functionalRequirementId && values.functionalRequirementId !== 'none'
           ? values.functionalRequirementId
           : undefined,
+      // Its own sprint only when it is under no requirement — otherwise it
+      // joins the requirement's, which the server fills in.
+      sprintId:
+        !values.functionalRequirementId && values.sprintId ? values.sprintId : undefined,
       labels: values.labels || [],
-      assigneeIds: values.assignedTo || [], // Map assignedTo from form to assigneeIds for mutation
+      assigneeIds: values.assigneeIds || [],
     });
 
     setIsCreateDialogOpen(false);
+    // The requirement this one was added from is not the next task's too.
+    setCreateForFr('');
   };
 
   const handleTaskMove = async (
@@ -572,11 +603,9 @@ function TasksPageContent() {
     if (!movedTask) return;
 
     // The board renders a FILTERED subset, so the drop only names a card to land
-    // in front of. Anchor it in the full column — sorted the way the board just
-    // rendered it, NOT by position — and renumber from there: renumbering only
-    // the visible rows would overwrite the positions of hidden siblings, and
-    // anchoring in position order (what this used to do) put the card wherever
-    // the rendered order and the stored order happened to disagree.
+    // in front of. Find it in the full column — sorted the way the board just
+    // rendered it, NOT by position: anchoring in position order put the card
+    // wherever the rendered order and the stored order happened to disagree.
     const destinationColumn = sortTasks(
       tasks.filter((t) => t.status === newStatus && t.id !== taskId)
     );
@@ -618,7 +647,26 @@ function TasksPageContent() {
     // the drag crossed columns. Both paths take the same route now.
     const storeArrangement = isManualOrder || !dropMatchesSort;
     const needsManualOrder = !isManualOrder && storeArrangement;
-    const endPosition = destinationColumn.reduce((max, t) => Math.max(max, t.position), -1) + 1;
+
+    // Where it is stored: named by the card that will sit just below it ('' for
+    // the bottom) — one write, whatever the column holds; the API works out the
+    // number (see useUpdateTaskStatus). That card is the one in the slot it was
+    // let go in, counted in the column as it will be SHOWN: in its saved order,
+    // under Manual order, among the cards this view shows. Under Manual order
+    // that is simply the card it was dropped on. Under another sort, where the
+    // drop switches the column to its saved order (as the other four already
+    // are), the card keeps its place on screen while the rest rearrange. When
+    // the sort already honours the drop, nobody's stored order needs anything:
+    // the card is a new arrival in this column and is parked at the bottom,
+    // leaving a hand-made order that another user set from Manual order alone.
+    let placeBefore = '';
+    if (storeArrangement) {
+      const shown = filteredTasks.filter((t) => t.status === newStatus && t.id !== taskId);
+      const slot = beforeTaskId ? shown.findIndex((t) => t.id === beforeTaskId) : -1;
+      const saved = sortTasksBy(shown, [{ field: 'position', direction: 'asc' }]);
+      placeBefore = saved[slot >= 0 ? slot : saved.length]?.id ?? '';
+    }
+    const position = positionBefore(destinationColumn, placeBefore);
 
     const previousSort = sortCriteria;
     const restoreSort = () => {
@@ -638,51 +686,27 @@ function TasksPageContent() {
       setSortSwitchNotice({ previous: previousSort });
     }
 
-    let statusWritten = false;
-
     try {
       const updatedTask = await updateTaskStatus.mutateAsync({
         taskId,
         projectId: selectedProjectId,
-        status: newStatus,
-        // When the sort already honours the drop, nobody's stored order needs
-        // rewriting: the card is simply a new arrival in this column, so park
-        // it at the end rather than flattening a hand-made order that another
-        // user set from Manual order and that nobody is currently looking at.
-        position: storeArrangement ? insertAt : endPosition,
+        // Not for a move within the column: only its place changed, which the
+        // API neither re-checks nor records in the activity trail.
+        status: isReorderWithinColumn ? undefined : newStatus,
+        placeBefore,
+        position,
         canMarkDone,
       });
 
-      // The status change can be refused (e.g. DONE gating); skip renumbering
-      // then, and hand the user back the sort they were on.
-      if (updatedTask.status !== newStatus) {
-        restoreSort();
-        return;
-      }
-      statusWritten = true;
-      if (!storeArrangement) return;
-
-      destinationColumn.splice(insertAt, 0, movedTask);
-
-      const positionUpdates = destinationColumn
-        .map((t, index) => ({ taskId: t.id, position: index }))
-        .filter(
-          // The moved task's position was already persisted by the status update above.
-          (update, index) =>
-            destinationColumn[index].id !== taskId &&
-            destinationColumn[index].position !== update.position
-        );
-
-      if (positionUpdates.length > 0) {
-        await reorderTasks.mutateAsync({ tasks: positionUpdates, projectId: selectedProjectId });
-      }
+      // The status change can be refused (e.g. DONE gating); hand the user
+      // back the sort they were on.
+      if (updatedTask.status !== newStatus) restoreSort();
     } catch (error) {
       // The mutation hooks toast their own failures. All this owes the user is
       // not leaving the board on a sort they never asked for when the move that
-      // justified it never landed. Once the card HAS moved the manual order is
-      // real, so a failed sibling renumber keeps it. Rethrow either way —
-      // TaskBoard's drag handler is what swallows it.
-      if (!statusWritten) restoreSort();
+      // justified it never landed. Rethrow — TaskBoard's drag handler is what
+      // swallows it.
+      restoreSort();
       throw error;
     }
   };
@@ -699,6 +723,7 @@ function TasksPageContent() {
   // handover between them leaves `?taskId` alone — a refresh mid-edit reopens
   // the task (in details), which is the honest thing for the URL to promise.
   const handleTaskEdit = (task: Task) => {
+    setEditBaseline(null);
     setSelectedTask(task);
     setIsDetailsDialogOpen(false);
     setIsEditDialogOpen(true);
@@ -712,7 +737,10 @@ function TasksPageContent() {
 
   const closeEditDialog = (open: boolean) => {
     setIsEditDialogOpen(open);
-    if (!open) setTaskParam(null);
+    if (!open) {
+      setTaskParam(null);
+      setEditBaseline(null);
+    }
   };
 
   const handleTaskDelete = (taskId: string) => {
@@ -723,7 +751,7 @@ function TasksPageContent() {
     setTaskParam(null);
   };
 
-  const handleEditTask = async (values: any) => {
+  const handleEditTask = async (values: TaskFormValues) => {
     if (!selectedTask || !selectedProjectId) return;
 
     // Assembled in full, then narrowed to what actually changed.
@@ -753,50 +781,82 @@ function TasksPageContent() {
         // value straight through, so null is the clear.
         estimatedHours: values.estimatedHours ?? (null as unknown as number),
         epicId: values.epicId && values.epicId !== 'none' ? values.epicId : '',
+        // '' for "No functional requirement", like the epic above.
+        functionalRequirementId:
+          values.functionalRequirementId && values.functionalRequirementId !== 'none'
+            ? values.functionalRequirementId
+            : '',
+        // Its own sprint only when it is under no requirement — otherwise the
+        // requirement's (the server moves it), so it is not sent.
+        ...(values.functionalRequirementId && values.functionalRequirementId !== 'none'
+          ? {}
+          : { sprintId: values.sprintId && values.sprintId !== 'none' ? values.sprintId : '' }),
         labels: values.labels || [],
         assigneeIds: values.assigneeIds || [],
-        assignedTo: values.assigneeIds || [],
     };
 
     // `selectedTask` is the snapshot the dialog opened with, which is exactly the right
     // baseline: it is what A believed the task to be, so the diff is what A meant to
     // change. A field A never touched compares equal to its own original, is not sent at
-    // all, and therefore cannot overwrite a concurrent change to it.
+    // all, and therefore cannot overwrite a concurrent change to it. After a refusal the
+    // baseline is the task as the server then held it (see `editBaseline`).
+    const baseline = editBaseline?.id === selectedTask.id ? editBaseline : selectedTask;
     const updates = changedFields(
-      selectedTask as unknown as Record<string, unknown>,
+      baseline as unknown as Record<string, unknown>,
       submitted as Record<string, unknown>,
     );
 
     // Nothing changed: skip the round trip rather than writing the record back over
     // itself, which would bump `updatedAt` and log an audit entry for a non-event.
     if (Object.keys(updates).length > 0) {
-      await updateTask.mutateAsync({
-        taskId: selectedTask.id,
-        projectId: selectedProjectId,
-        canMarkDone,
-        // What the diff above cannot cover: two people editing the SAME field, where the
-        // later save would still win outright. `basedOn` is what those fields held in
-        // this snapshot; if somebody else has changed one, the API refuses the save and
-        // names it rather than quietly discarding their work.
-        updates: {
-          ...updates,
-          basedOn: basedOnFor(selectedTask as unknown as Record<string, unknown>, updates),
-        } as Parameters<typeof updateTask.mutateAsync>[0]['updates'],
-      });
+      try {
+        await updateTask.mutateAsync({
+          taskId: selectedTask.id,
+          projectId: selectedProjectId,
+          canMarkDone,
+          retriesOnConflict: true,
+          // What the diff above cannot cover: two people editing the SAME field, where the
+          // later save would still win outright. `basedOn` is what those fields held in
+          // this snapshot; if somebody else has changed one, the API refuses the save and
+          // names it rather than quietly discarding their work.
+          updates: {
+            ...updates,
+            basedOn: basedOnFor(baseline as unknown as Record<string, unknown>, updates),
+          } as Parameters<typeof updateTask.mutateAsync>[0]['updates'],
+        });
+      } catch (error) {
+        // Somebody else saved first. The form keeps what was typed; the next
+        // save is measured against the task as it now is (see editBaseline).
+        if (isEditConflict(error)) {
+          setEditBaseline(normalizeTask(await resources.get('tasks', selectedTask.id)));
+        }
+        throw error;
+      }
     }
 
     setIsEditDialogOpen(false);
     setSelectedTask(null);
+    setEditBaseline(null);
     setTaskParam(null);
+  };
+
+  /** A review step from the task dialog; the dialog's snapshot moves with it. */
+  const handleMoveStatus = async (task: Task, status: TaskStatus, note?: string) => {
+    await review.move?.(task, status, note);
+    setSelectedTask((current) => (current && current.id === task.id ? { ...current, status } : current));
   };
 
   const confirmDelete = async () => {
     if (!deleteTaskId || !selectedProjectId) return;
 
-    await deleteTask.mutateAsync({
-      taskId: deleteTaskId,
-      projectId: selectedProjectId,
-    });
+    try {
+      await deleteTask.mutateAsync({
+        taskId: deleteTaskId,
+        projectId: selectedProjectId,
+      });
+    } catch {
+      return; // the mutation's toast has said why; the confirmation stays open
+    }
 
     setDeleteTaskId(null);
   };
@@ -807,13 +867,17 @@ function TasksPageContent() {
         <PageHeader title="Tasks" description="Create a workspace first to manage tasks" />
         <Card>
           <CardHeader>
-            <CardTitle>No Workspace</CardTitle>
+            <CardTitle>No workspace selected</CardTitle>
             <CardDescription>
-              You need to create or join a workspace before you can manage tasks.
+              Join a workspace, or have one created for you, before you manage tasks.
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <Button onClick={() => router.push('/onboarding')}>Create Workspace</Button>
+            {/* Not "Create Workspace": that page is for administrators, and
+                everybody else who followed it met Access Denied. */}
+            <Button asChild>
+              <Link href="/workspaces">Go to Workspaces</Link>
+            </Button>
           </CardContent>
         </Card>
       </div>
@@ -824,35 +888,54 @@ function TasksPageContent() {
     <div className="space-y-6">
       {/* Header */}
       <PageHeader
-        title="My Tasks"
+        // The sidebar's own word for this page. It read "My Tasks" whichever
+        // tasks were on it; the scope switch below says which ones are.
+        title="Tasks"
         description={
-          // Not "(0 total)" while the count is unknown: neither the project list
-          // nor the task list has answered yet, so a zero here is a claim rather
-          // than a count.
-          projectsLoading || isLoadingTasks
-            ? 'Tasks assigned to you or created by you'
-            : `Tasks assigned to you or created by you (${myTasks.length} total)`
+          // No count while it is unknown: neither the project list nor the task
+          // list has answered yet, so a zero here is a claim rather than a count.
+          scope === 'all'
+            ? projectsLoading || isLoadingTasks
+              ? 'Every task in this project'
+              : `Every task in this project (${tasks.length} total)`
+            : projectsLoading || isLoadingTasks
+              ? 'Tasks assigned to you'
+              : `Tasks assigned to you, in the backlog or the active sprint (${myTasks.length} total)`
         }
       />
 
       {/* Filters and Actions */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+        <div
+          role="group"
+          aria-label="Which tasks to show"
+          className="flex shrink-0 rounded-md border p-0.5"
+        >
+          {(
+            [
+              ['mine', 'My tasks'],
+              ['all', 'All tasks'],
+            ] as const
+          ).map(([value, label]) => (
+            <Button
+              key={value}
+              type="button"
+              size="sm"
+              variant={scope === value ? 'secondary' : 'ghost'}
+              aria-pressed={scope === value}
+              onClick={() => setScope(value)}
+            >
+              {label}
+            </Button>
+          ))}
+        </div>
+
         <div className="w-full sm:w-64">
-          <Select value={selectedProjectId || ''} onValueChange={handleProjectChange}>
-            <SelectTrigger aria-label="Select a project">
-              <SelectValue placeholder="Select a project" />
-            </SelectTrigger>
-            <SelectContent>
-              {projects?.map((project) => (
-                <SelectItem key={project.id} value={project.id}>
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-xs">{project.shortCode}</span>
-                    <span>{project.name}</span>
-                  </div>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <ProjectPicker
+            projects={projects ?? []}
+            value={selectedProjectId || ''}
+            onChange={handleProjectChange}
+          />
         </div>
 
         <div className="flex-1 w-full sm:max-w-md">
@@ -882,7 +965,7 @@ function TasksPageContent() {
           {/* Sort Dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" className="gap-2">
+              <Button variant="outline" className="gap-2" aria-label={`Sort: ${getSortLabel()}`}>
                 <ArrowUpDown className="h-4 w-4" />
                 <span className="hidden sm:inline">{getSortLabel()}</span>
               </Button>
@@ -899,12 +982,17 @@ function TasksPageContent() {
               align="end"
               className="w-56 max-h-(--radix-dropdown-menu-content-available-height) overflow-y-auto"
             >
-              <DropdownMenuLabel>
-                Sort by{' '}
-                <span className="text-xs font-normal text-muted-foreground">
-                  (Shift+Click to add)
-                </span>
-              </DropdownMenuLabel>
+              <DropdownMenuLabel>Sort by</DropdownMenuLabel>
+              {/* Combining sorts was Shift+Click only — out of reach on a touch
+                  screen, and unsaid to a keyboard. */}
+              <DropdownMenuCheckboxItem
+                checked={combineSorts}
+                onCheckedChange={(checked) => setCombineSorts(checked === true)}
+                onSelect={(event) => event.preventDefault()}
+              >
+                Add to the current sort
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuSeparator />
 
               {/* Active sort criteria */}
               {sortCriteria.length > 0 && (
@@ -924,12 +1012,14 @@ function TasksPageContent() {
                         )}
                         {sortCriteria.length > 1 && (
                           <button
+                            type="button"
+                            aria-label={`Stop sorting by ${fieldLabels[criterion.field]}`}
                             onClick={(e) => {
                               e.preventDefault();
                               e.stopPropagation();
                               removeSortCriterion(criterion.field);
                             }}
-                            className="text-muted-foreground hover:text-destructive-text"
+                            className="inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:text-destructive-text"
                           >
                             ×
                           </button>
@@ -937,6 +1027,15 @@ function TasksPageContent() {
                       </div>
                     ))}
                   </div>
+                  {/* The ×s are for a mouse; this is the way a keyboard drops them. */}
+                  {sortCriteria.length > 1 && (
+                    <DropdownMenuItem
+                      onClick={() => setSortCriteria(sortCriteria.slice(0, 1))}
+                      className="text-xs"
+                    >
+                      Sort by {fieldLabels[sortCriteria[0].field]} only
+                    </DropdownMenuItem>
+                  )}
                   <DropdownMenuSeparator />
                 </>
               )}
@@ -957,7 +1056,7 @@ function TasksPageContent() {
               <DropdownMenuSeparator />
               <DropdownMenuGroup>
                 <DropdownMenuItem
-                  onClick={(e) => handleSort('priority', e.shiftKey)}
+                  onClick={(e) => handleSort('priority', e.shiftKey || combineSorts)}
                   className="gap-2"
                 >
                   {getSortCriterion('priority') ? (
@@ -972,7 +1071,7 @@ function TasksPageContent() {
                   Priority
                 </DropdownMenuItem>
                 <DropdownMenuItem
-                  onClick={(e) => handleSort('urgency', e.shiftKey)}
+                  onClick={(e) => handleSort('urgency', e.shiftKey || combineSorts)}
                   className="gap-2"
                 >
                   {getSortCriterion('urgency') ? (
@@ -987,7 +1086,7 @@ function TasksPageContent() {
                   Urgency (Due Date)
                 </DropdownMenuItem>
                 <DropdownMenuItem
-                  onClick={(e) => handleSort('dueDate', e.shiftKey)}
+                  onClick={(e) => handleSort('dueDate', e.shiftKey || combineSorts)}
                   className="gap-2"
                 >
                   {getSortCriterion('dueDate') ? (
@@ -1002,7 +1101,7 @@ function TasksPageContent() {
                   Due Date
                 </DropdownMenuItem>
                 <DropdownMenuItem
-                  onClick={(e) => handleSort('status', e.shiftKey)}
+                  onClick={(e) => handleSort('status', e.shiftKey || combineSorts)}
                   className="gap-2"
                 >
                   {getSortCriterion('status') ? (
@@ -1020,7 +1119,7 @@ function TasksPageContent() {
               <DropdownMenuSeparator />
               <DropdownMenuGroup>
                 <DropdownMenuItem
-                  onClick={(e) => handleSort('title', e.shiftKey)}
+                  onClick={(e) => handleSort('title', e.shiftKey || combineSorts)}
                   className="gap-2"
                 >
                   {getSortCriterion('title') ? (
@@ -1035,7 +1134,7 @@ function TasksPageContent() {
                   Title (A-Z)
                 </DropdownMenuItem>
                 <DropdownMenuItem
-                  onClick={(e) => handleSort('hierarchyId', e.shiftKey)}
+                  onClick={(e) => handleSort('hierarchyId', e.shiftKey || combineSorts)}
                   className="gap-2"
                 >
                   {getSortCriterion('hierarchyId') ? (
@@ -1050,7 +1149,7 @@ function TasksPageContent() {
                   Task id
                 </DropdownMenuItem>
                 <DropdownMenuItem
-                  onClick={(e) => handleSort('labels', e.shiftKey)}
+                  onClick={(e) => handleSort('labels', e.shiftKey || combineSorts)}
                   className="gap-2"
                 >
                   {getSortCriterion('labels') ? (
@@ -1068,7 +1167,7 @@ function TasksPageContent() {
               <DropdownMenuSeparator />
               <DropdownMenuGroup>
                 <DropdownMenuItem
-                  onClick={(e) => handleSort('createdAt', e.shiftKey)}
+                  onClick={(e) => handleSort('createdAt', e.shiftKey || combineSorts)}
                   className="gap-2"
                 >
                   {getSortCriterion('createdAt') ? (
@@ -1083,7 +1182,7 @@ function TasksPageContent() {
                   Created Date
                 </DropdownMenuItem>
                 <DropdownMenuItem
-                  onClick={(e) => handleSort('updatedAt', e.shiftKey)}
+                  onClick={(e) => handleSort('updatedAt', e.shiftKey || combineSorts)}
                   className="gap-2"
                 >
                   {getSortCriterion('updatedAt') ? (
@@ -1098,7 +1197,7 @@ function TasksPageContent() {
                   Updated Date
                 </DropdownMenuItem>
                 <DropdownMenuItem
-                  onClick={(e) => handleSort('estimatedHours', e.shiftKey)}
+                  onClick={(e) => handleSort('estimatedHours', e.shiftKey || combineSorts)}
                   className="gap-2"
                 >
                   {getSortCriterion('estimatedHours') ? (
@@ -1165,6 +1264,22 @@ function TasksPageContent() {
         </div>
       )}
 
+      {/* What "My tasks" is holding back, and how to see it. */}
+      {scope === 'mine' && parkedCount > 0 && !isLoadingTasks && selectedProjectId && (
+        <p className="text-sm text-muted-foreground">
+          {parkedCount === 1
+            ? '1 of your tasks is in a sprint that is still being planned or has already closed, so it is not shown here.'
+            : `${parkedCount} of your tasks are in sprints that are still being planned or have already closed, so they are not shown here.`}{' '}
+          <button
+            type="button"
+            className="font-medium text-foreground underline underline-offset-4"
+            onClick={() => setScope('all')}
+          >
+            Show all tasks
+          </button>
+        </p>
+      )}
+
       {/* Task Board */}
       {selectedProjectId ? (
         isLoadingTasks ? (
@@ -1177,8 +1292,9 @@ function TasksPageContent() {
             projectId={selectedProjectId}
             showMenu={true}
             sortCriteria={sortCriteria}
-            canEdit={canEditAnyTask || isAdmin}
-            canDelete={canDeleteTask || isAdmin}
+            canEdit={canEditAnyTask}
+            canDelete={canDeleteTask}
+            canComplete={canMarkDone}
             onTaskMove={handleTaskMove}
             onTaskClick={handleTaskClick}
             onTaskEdit={handleTaskEdit}
@@ -1221,29 +1337,36 @@ function TasksPageContent() {
       )}
 
       {/* Create Task Dialog */}
-      <CreateTaskDialog
+      <TaskFormDialog
         open={isCreateDialogOpen}
-        onOpenChange={setIsCreateDialogOpen}
+        onOpenChange={(next) => {
+          setIsCreateDialogOpen(next);
+          if (!next) setCreateForFr('');
+        }}
+        defaultFunctionalRequirementId={createForFr}
         onSubmit={handleCreateTask}
         isLoading={createTask.isPending}
         existingLabels={existingLabels}
         epics={epics}
         functionalRequirements={functionalRequirements}
+        sprints={sprints}
         workspaceId={currentWorkspace.id}
       />
 
       {/* Task Details Dialog */}
       <TaskDetailsDialog
-        task={selectedTask}
+        task={liveSelectedTask}
         open={isDetailsDialogOpen}
         onOpenChange={closeDetailsDialog}
-        onEdit={canEditAnyTask || isAdmin ? handleTaskEdit : undefined}
-        onDelete={canDeleteTask || isAdmin ? handleTaskDelete : undefined}
-        canEditDependencies={canEditAnyTask || isAdmin}
+        onEdit={canEditAnyTask ? handleTaskEdit : undefined}
+        onDelete={canDeleteTask ? handleTaskDelete : undefined}
+        canEditDependencies={canEditAnyTask}
+        onMoveStatus={review.move ? handleMoveStatus : undefined}
+        canSignOff={review.canSignOff}
       />
 
       {/* Edit Task Dialog */}
-      <EditTaskDialog
+      <TaskFormDialog
         task={selectedTask}
         open={isEditDialogOpen}
         onOpenChange={closeEditDialog}
@@ -1251,6 +1374,8 @@ function TasksPageContent() {
         isLoading={updateTask.isPending}
         existingLabels={existingLabels}
         epics={epics}
+        functionalRequirements={functionalRequirements}
+        sprints={sprints}
         workspaceId={currentWorkspace.id}
       />
 

@@ -21,6 +21,8 @@ interface DatePickerProps {
     buttonClassName?: string;
     /** Set false where the field is required and must never be emptied. */
     allowClear?: boolean;
+    /** For a <Label htmlFor>: the trigger is the control the label names. */
+    id?: string;
 }
 
 export function DatePicker({
@@ -31,6 +33,7 @@ export function DatePicker({
     className,
     buttonClassName,
     allowClear = true,
+    id,
 }: DatePickerProps) {
     const [open, setOpen] = React.useState(false);
 
@@ -57,16 +60,20 @@ export function DatePicker({
             <Popover open={open} onOpenChange={setOpen}>
                 <PopoverTrigger asChild>
                     <Button
+                        id={id}
                         variant="outline"
                         className={cn(
-                            'justify-start text-left font-normal',
+                            'w-full justify-start text-left font-normal',
                             !date && 'text-muted-foreground',
                             clearable && 'pr-9',
                             buttonClassName
                         )}
                     >
                         <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
-                        {date ? format(date, 'PPP') : <span>{placeholder}</span>}
+                        {/* The app's one way of writing a date (formatDate):
+                            'PPP' printed "October 18th, 2026" beside fields
+                            that said "Oct 18, 2026". */}
+                        <span className="truncate">{date ? format(date, 'MMM d, yyyy') : placeholder}</span>
                     </Button>
                 </PopoverTrigger>
                 {/* The opening month comes from `selected` inside Calendar. */}

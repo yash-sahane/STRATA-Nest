@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import * as React from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -6,11 +6,6 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
 import { ErrorState } from '@/components/ui/error-state';
-import {
-  NOTIFICATION_TEMPLATES,
-  NOTIFICATION_TYPES,
-  NotificationCategory,
-} from '@/lib/notification-utils';
 import { toast } from 'sonner';
 import { Bell, Mail } from 'lucide-react';
 import { logger } from '@/lib/logger';
@@ -19,6 +14,8 @@ import {
   useNotificationPreferences,
   useSaveNotificationPreferences,
 } from '@/hooks/use-notification';
+import { useAuth } from '@/components/providers/auth-provider';
+import type { NotificationType } from '@/types';
 
 interface NotificationPreference {
   type: string;
@@ -26,116 +23,273 @@ interface NotificationPreference {
   email: boolean;
 }
 
-/** Preferences used to live here and were read by nothing — delivery is decided
- *  server-side, because the notification is created by the ACTOR's browser and a
- *  toggle in the RECIPIENT's localStorage is structurally unreachable. The key is
- *  now cleared on mount so no stale copy lingers. */
-const LEGACY_STORAGE_KEY = 'notification-preferences';
+interface NotificationKind {
+  /** The key the server files the preference under: the notification's own type. */
+  type: NotificationType;
+  label: string;
+  description: string;
+  /** Whether a mail is ever sent for this type. Where none is, there is no
+   *  email switch to offer. */
+  email: boolean;
+}
 
-// Default preferences - all enabled
-const getDefaultPreferences = (): Record<string, NotificationPreference> => {
-  const prefs: Record<string, NotificationPreference> = {};
+/**
+ * Every notification the server sends, and nothing else.
+ *
+ * This page used to be generated from the client's old message templates, from
+ * the days when the browser wrote notifications itself. Half the rows were for
+ * things nothing produces any more ("Task Added to Sprint", "Mentions in
+ * Comments", "Missed Attendance", "Workspace Invitations") — switches wired to
+ * nothing — while the notifications people actually receive (a join request, a
+ * role change, a task sent for review, a deadline reminder) had no row at all
+ * and so could not be turned off.
+ *
+ * Mirrors the producers in apps/api/src/modules/notifications: the work
+ * subscriber, the membership/HR subscriber and the deadline reminders. Adding a
+ * notification there means adding its row here.
+ */
+const NOTIFICATION_GROUPS: Array<{ title: string; description: string; kinds: NotificationKind[] }> =
+  [
+    {
+      title: 'Tasks',
+      description: 'Work assigned to you, and what happens to it.',
+      kinds: [
+        {
+          type: 'TASK_ASSIGNED',
+          label: 'Task assigned to you',
+          description: 'When somebody assigns you a task',
+          email: true,
+        },
+        {
+          type: 'TASK_STATUS_CHANGED',
+          label: 'Task status changed',
+          description: 'When a task you are on moves to another status',
+          email: false,
+        },
+        {
+          type: 'TASK_PRIORITY_CHANGED',
+          label: 'Task priority changed',
+          description: 'When the priority of a task you are on changes',
+          email: false,
+        },
+        {
+          type: 'TASK_UNASSIGNED',
+          label: 'Taken off a task',
+          description: 'When somebody removes you from a task you were assigned to',
+          email: false,
+        },
+        {
+          type: 'TASK_COMMENT_ADDED',
+          label: 'Comment on a task',
+          description: 'When somebody comments on a task you are on, or one you raised',
+          email: false,
+        },
+        {
+          type: 'TASK_COMMENT_REMOVED',
+          label: 'Your comment was removed',
+          description: 'When somebody who runs the work takes down a comment of yours',
+          email: false,
+        },
+        {
+          type: 'TASK_REVIEW_REQUESTED',
+          label: 'Task ready for review',
+          description: 'When a task is moved to Review and you are one of the people who can close it',
+          email: true,
+        },
+        {
+          type: 'TASK_REVIEWED_DONE',
+          label: 'Task completed',
+          description: 'When a task you worked on is reviewed and marked done',
+          email: true,
+        },
+        {
+          type: 'TASK_DEADLINE_REMINDER',
+          label: 'Deadline approaching',
+          description: 'A week, three days and one day before a task of yours is due, and on the day',
+          email: true,
+        },
+        {
+          type: 'TASK_OVERDUE',
+          label: 'Task overdue',
+          description: 'When a task of yours passes its due date unfinished',
+          email: true,
+        },
+        {
+          type: 'TASK_DELETED',
+          label: 'Task deleted',
+          description: 'When somebody deletes a task that was assigned to you',
+          email: false,
+        },
+      ],
+    },
+    {
+      title: 'Requirements and planning',
+      description: 'New work entering a project you are part of.',
+      kinds: [
+        {
+          type: 'REQUIREMENT_CREATED',
+          label: 'New client requirement',
+          description: 'When a client requirement is added to a project',
+          email: false,
+        },
+        {
+          type: 'EPIC_CREATED',
+          label: 'New epic',
+          description: 'When an epic is created',
+          email: false,
+        },
+        {
+          type: 'FR_ASSIGNED',
+          label: 'Functional requirement assigned to you',
+          description: 'When you are made responsible for a functional requirement',
+          email: true,
+        },
+        {
+          type: 'FR_UNASSIGNED',
+          label: 'Taken off a functional requirement',
+          description: 'When somebody takes you off a functional requirement, and so off its open tasks',
+          email: false,
+        },
+      ],
+    },
+    {
+      title: 'Sprints',
+      description: 'The sprints your tasks are in.',
+      kinds: [
+        {
+          type: 'SPRINT_STARTED',
+          label: 'Sprint started',
+          description: 'When a sprint you have tasks in begins',
+          email: true,
+        },
+        {
+          type: 'SPRINT_READY_TO_CLOSE',
+          label: 'Sprint ready to close',
+          description: 'When the last task of the active sprint is finished',
+          email: true,
+        },
+        {
+          type: 'SPRINT_COMPLETED',
+          label: 'Sprint completed',
+          description: 'When a sprint you had tasks in is closed',
+          email: true,
+        },
+      ],
+    },
+    {
+      title: 'Leave, attendance and time',
+      description: 'Your own requests, and the ones waiting on you.',
+      kinds: [
+        {
+          type: 'LEAVE_REQUESTED',
+          label: 'Leave request to review',
+          description: 'When somebody asks for leave and you are one of the approvers',
+          email: true,
+        },
+        {
+          type: 'LEAVE_APPROVED',
+          label: 'Leave approved',
+          description: 'When your leave request is approved',
+          email: true,
+        },
+        {
+          type: 'LEAVE_REJECTED',
+          label: 'Leave rejected',
+          description: 'When your leave request is turned down',
+          email: true,
+        },
+        {
+          type: 'LEAVE_CANCELLED',
+          label: 'Leave cancelled',
+          description:
+            'When somebody cancels leave you approve — or an approver cancels a request of yours',
+          email: true,
+        },
+        {
+          type: 'LEAVE_BALANCE_ADJUSTED',
+          label: 'Leave balance changed',
+          description: 'When an approver changes how many days of leave you have',
+          email: false,
+        },
+        {
+          type: 'ATTENDANCE_CORRECTED',
+          label: 'Attendance corrected',
+          description: 'When a manager files, corrects or deletes a day of your attendance',
+          email: false,
+        },
+        {
+          type: 'TIME_ENTRY_SUBMITTED',
+          label: 'Time waiting for your approval',
+          description: 'When somebody logs time and you are one of the people who approve it — once, until you look',
+          email: false,
+        },
+        {
+          type: 'TIME_ENTRY_APPROVED',
+          label: 'Time entry approved',
+          description: 'When time you logged is approved',
+          email: false,
+        },
+        {
+          type: 'TIME_ENTRY_REJECTED',
+          label: 'Time entry rejected',
+          description: 'When time you logged is sent back',
+          email: false,
+        },
+      ],
+    },
+    {
+      title: 'Workspace',
+      // "Added to the workspace" and the join-request answers are not listed:
+      // they are filed under a workspace you have not joined yet, where no
+      // setting of yours can apply. They always arrive.
+      description: 'Membership of this workspace.',
+      kinds: [
+        {
+          type: 'WORKSPACE_ROLE_CHANGED',
+          label: 'Your role changed',
+          description: 'When your role in this workspace is changed',
+          email: false,
+        },
+        {
+          type: 'WORKSPACE_OWNERSHIP_TRANSFERRED',
+          label: 'A workspace handed to you',
+          description: 'When the owner of this workspace makes you its owner',
+          email: false,
+        },
+        {
+          type: 'JOIN_REQUEST_RECEIVED',
+          label: 'Request to join',
+          description: 'When somebody asks to join and you are one of the people who can let them in',
+          email: false,
+        },
+        {
+          type: 'WORKSPACE_ACCESS_CHANGED',
+          label: 'Your access switched off or on',
+          description: 'When a manager switches your access to this workspace off, or back on',
+          email: true,
+        },
+        {
+          type: 'WORKSPACE_MEMBER_REMOVED',
+          label: 'Removed from the workspace',
+          description: 'When a manager removes you from this workspace',
+          email: true,
+        },
+      ],
+    },
+  ];
 
-  Object.keys(NOTIFICATION_TEMPLATES).forEach((type) => {
-    prefs[type] = {
-      type,
-      inApp: true,
-      email: NOTIFICATION_TEMPLATES[type].requiresEmail,
-    };
-  });
+const ALL_KINDS = NOTIFICATION_GROUPS.flatMap((group) => group.kinds);
 
-  return prefs;
-};
-
-// Group notification types by category
-const groupByCategory = () => {
-  const groups: Record<NotificationCategory, string[]> = {
-    [NotificationCategory.TASK]: [],
-    [NotificationCategory.SPRINT]: [],
-    [NotificationCategory.LEAVE]: [],
-    [NotificationCategory.ATTENDANCE]: [],
-    [NotificationCategory.COMMENT]: [],
-    [NotificationCategory.TEAM]: [],
-    [NotificationCategory.SYSTEM]: [],
-  };
-
-  Object.entries(NOTIFICATION_TEMPLATES).forEach(([type, template]) => {
-    groups[template.category].push(type);
-  });
-
-  return groups;
-};
-
-const categoryLabels: Record<NotificationCategory, string> = {
-  [NotificationCategory.TASK]: 'Task Notifications',
-  [NotificationCategory.SPRINT]: 'Sprint Notifications',
-  [NotificationCategory.LEAVE]: 'Leave Notifications',
-  [NotificationCategory.ATTENDANCE]: 'Attendance Notifications',
-  [NotificationCategory.COMMENT]: 'Comment Notifications',
-  [NotificationCategory.TEAM]: 'Team Notifications',
-  [NotificationCategory.SYSTEM]: 'System Notifications',
-};
-
-const categoryDescriptions: Record<NotificationCategory, string> = {
-  [NotificationCategory.TASK]: 'Notifications about task assignments, status changes, and updates',
-  [NotificationCategory.SPRINT]: 'Notifications about sprint lifecycle and milestones',
-  [NotificationCategory.LEAVE]: 'Notifications about leave requests and approvals',
-  [NotificationCategory.ATTENDANCE]: 'Notifications about attendance and check-ins',
-  [NotificationCategory.COMMENT]: 'Notifications about comments and mentions',
-  [NotificationCategory.TEAM]: 'Notifications about team updates and changes',
-  [NotificationCategory.SYSTEM]: 'System-wide notifications and announcements',
-};
-
-// Human-readable labels for notification types
-const notificationLabels: Record<string, string> = {
-  [NOTIFICATION_TYPES.TASK_ASSIGNED]: 'Task Assignments',
-  [NOTIFICATION_TYPES.TASK_STATUS_CHANGED]: 'Task Status Changes',
-  [NOTIFICATION_TYPES.TASK_PRIORITY_CHANGED]: 'Task Priority Changes',
-  [NOTIFICATION_TYPES.TASK_COMPLETED]: 'Task Completions',
-  [NOTIFICATION_TYPES.TASK_DUE_SOON]: 'Task Due Soon',
-  [NOTIFICATION_TYPES.TASK_OVERDUE]: 'Task Overdue',
-  [NOTIFICATION_TYPES.SPRINT_STARTED]: 'Sprint Started',
-  [NOTIFICATION_TYPES.SPRINT_ENDING_SOON]: 'Sprint Ending Soon',
-  [NOTIFICATION_TYPES.SPRINT_COMPLETED]: 'Sprint Completed',
-  [NOTIFICATION_TYPES.SPRINT_TASK_ADDED]: 'Task Added to Sprint',
-  [NOTIFICATION_TYPES.WORKSPACE_INVITATION]: 'Workspace Invitations',
-  [NOTIFICATION_TYPES.LEAVE_APPROVED]: 'Leave Approved',
-  [NOTIFICATION_TYPES.LEAVE_REJECTED]: 'Leave Rejected',
-  [NOTIFICATION_TYPES.LEAVE_REQUESTED]: 'Leave Requests',
-  [NOTIFICATION_TYPES.LEAVE_CANCELLED]: 'Leave Cancelled',
-  [NOTIFICATION_TYPES.ATTENDANCE_LATE]: 'Late Check-in',
-  [NOTIFICATION_TYPES.ATTENDANCE_MISSED]: 'Missed Attendance',
-  [NOTIFICATION_TYPES.COMMENT_MENTION]: 'Mentions in Comments',
-  [NOTIFICATION_TYPES.COMMENT_REPLY]: 'Replies to Comments',
-  [NOTIFICATION_TYPES.TEAM_MEMBER_ADDED]: 'Team Member Added',
-  [NOTIFICATION_TYPES.TEAM_MEMBER_REMOVED]: 'Team Member Removed',
-};
-
-const notificationDescriptions: Record<string, string> = {
-  [NOTIFICATION_TYPES.TASK_ASSIGNED]: 'When you are assigned to a task',
-  [NOTIFICATION_TYPES.TASK_STATUS_CHANGED]: 'When a task status is updated',
-  [NOTIFICATION_TYPES.TASK_PRIORITY_CHANGED]: 'When task priority changes',
-  [NOTIFICATION_TYPES.TASK_COMPLETED]: 'When a task is completed',
-  [NOTIFICATION_TYPES.TASK_DUE_SOON]: 'When tasks are approaching their due date',
-  [NOTIFICATION_TYPES.TASK_OVERDUE]: 'When tasks become overdue',
-  [NOTIFICATION_TYPES.SPRINT_STARTED]: 'When a sprint begins',
-  [NOTIFICATION_TYPES.SPRINT_ENDING_SOON]: 'When a sprint is about to end',
-  [NOTIFICATION_TYPES.SPRINT_COMPLETED]: 'When a sprint is completed',
-  [NOTIFICATION_TYPES.SPRINT_TASK_ADDED]: 'When a task is added to a sprint',
-  [NOTIFICATION_TYPES.WORKSPACE_INVITATION]: 'When you are invited to a workspace',
-  [NOTIFICATION_TYPES.LEAVE_APPROVED]: 'When your leave is approved',
-  [NOTIFICATION_TYPES.LEAVE_REJECTED]: 'When your leave is rejected',
-  [NOTIFICATION_TYPES.LEAVE_REQUESTED]: 'When someone requests leave',
-  [NOTIFICATION_TYPES.LEAVE_CANCELLED]: 'When leave is cancelled',
-  [NOTIFICATION_TYPES.ATTENDANCE_LATE]: 'When you check in late',
-  [NOTIFICATION_TYPES.ATTENDANCE_MISSED]: 'When attendance is missed',
-  [NOTIFICATION_TYPES.COMMENT_MENTION]: 'When someone mentions you in a comment',
-  [NOTIFICATION_TYPES.COMMENT_REPLY]: 'When someone replies to your comment',
-  [NOTIFICATION_TYPES.TEAM_MEMBER_ADDED]: 'When a new team member joins',
-  [NOTIFICATION_TYPES.TEAM_MEMBER_REMOVED]: 'When a team member leaves',
-};
+/** Everything on, on every channel that exists — which is also what the server
+ *  assumes for a type with no stored row. */
+const getDefaultPreferences = (): Record<string, NotificationPreference> =>
+  Object.fromEntries(
+    ALL_KINDS.map((kind) => [kind.type, { type: kind.type, inApp: true, email: kind.email }])
+  );
 
 export default function NotificationPreferences() {
+  // Email switches mean nothing where no mail is delivered.
+  const mailDelivers = useAuth().user?.mailDelivers !== false;
   const { currentWorkspaceId } = useCurrentWorkspace();
   const {
     data: saved,
@@ -148,26 +302,20 @@ export default function NotificationPreferences() {
   const [preferences, setPreferences] =
     React.useState<Record<string, NotificationPreference>>(getDefaultPreferences());
 
-  // Drop the pre-server copy once, so a stale browser value can never be
-  // mistaken for the (now authoritative) server state.
-  React.useEffect(() => {
-    try {
-      localStorage.removeItem(LEGACY_STORAGE_KEY);
-    } catch (error) {
-      logger.error('Failed to clear legacy notification preferences', { error });
-    }
-  }, []);
-
   // Server rows are stored opt-out (only the toggles a user changed exist), so
-  // they are layered over the defaults rather than replacing them.
+  // they are layered over the defaults rather than replacing them. A stored row
+  // for a type that is no longer sent has nothing to be layered onto.
   React.useEffect(() => {
     if (!saved) return;
     setPreferences(() => {
       const merged = getDefaultPreferences();
       saved.forEach((row) => {
-        if (merged[row.type]) {
-          merged[row.type] = { type: row.type, inApp: row.inApp, email: row.email };
-        }
+        const type = row.type.toUpperCase();
+        const fallback = merged[type];
+        if (!fallback) return;
+        // The default's `email` is exactly "does this type have a mail at all",
+        // so a stored `true` for a type with none is not carried forward.
+        merged[type] = { type, inApp: row.inApp, email: fallback.email ? row.email : false };
       });
       return merged;
     });
@@ -206,7 +354,6 @@ export default function NotificationPreferences() {
   };
 
   const isSaving = savePreferences.isPending;
-  const categorizedTypes = groupByCategory();
 
   /**
    * A failed load must not be shown as "these are your settings".
@@ -237,78 +384,87 @@ export default function NotificationPreferences() {
       <div>
         <h3 className="text-lg font-medium">Notification Preferences</h3>
         <p className="text-sm text-muted-foreground mt-1">
-          Choose how you want to be notified about different events in this workspace.
+          Choose which notifications you get in this workspace, and which of them also arrive by
+          email. These are your own settings; nobody else is affected.
         </p>
+        {!mailDelivers && (
+          <p className="mt-2 text-sm text-muted-foreground">
+            Email is not set up in this installation, so nothing is sent by email for now. Your
+            email choices are kept for when it is.
+          </p>
+        )}
       </div>
 
-      {Object.entries(categorizedTypes).map(([category, types]) => {
-        if (types.length === 0) return null;
-
-        return (
-          <Card key={category}>
-            <CardHeader>
-              <CardTitle className="text-base">
-                {categoryLabels[category as NotificationCategory]}
-              </CardTitle>
-              <CardDescription>
-                {categoryDescriptions[category as NotificationCategory]}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-[1fr_80px_80px] gap-4 items-center text-sm font-medium pb-2 border-b">
-                <div>Notification Type</div>
-                <div className="flex items-center gap-1 justify-center">
-                  <Bell className="h-3.5 w-3.5" />
-                  <span>In-App</span>
-                </div>
-                <div className="flex items-center gap-1 justify-center">
-                  <Mail className="h-3.5 w-3.5" />
-                  <span>Email</span>
-                </div>
+      {NOTIFICATION_GROUPS.map((group) => (
+        <Card key={group.title}>
+          <CardHeader>
+            <CardTitle className="text-base">{group.title}</CardTitle>
+            <CardDescription>{group.description}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-[1fr_80px_80px] gap-4 items-center text-sm font-medium pb-2 border-b">
+              <div>Notification</div>
+              <div className="flex items-center gap-1 justify-center">
+                <Bell className="h-3.5 w-3.5" />
+                <span>In-App</span>
               </div>
+              <div className="flex items-center gap-1 justify-center">
+                <Mail className="h-3.5 w-3.5" />
+                <span>Email</span>
+              </div>
+            </div>
 
-              {types.map((type) => {
-                const pref = preferences[type];
-                if (!pref) return null;
+            {group.kinds.map((kind) => {
+              const pref = preferences[kind.type];
+              if (!pref) return null;
 
-                // The row's <Label> names the notification, not either switch —
-                // and it is a sibling, so it labels neither. Without an explicit
-                // name a screen reader announces two identical "switch, on"
-                // controls per row with no way to tell In-App from Email.
-                const label = notificationLabels[type] || type;
-
-                return (
-                  <div key={type} className="grid grid-cols-[1fr_80px_80px] gap-4 items-center">
-                    <div className="space-y-0.5">
-                      <Label className="font-normal">{label}</Label>
-                      <p className="text-xs text-muted-foreground">
-                        {notificationDescriptions[type] || ''}
-                      </p>
-                    </div>
-
-                    <div className="flex justify-center">
-                      <Switch
-                        aria-label={`${label}: in-app`}
-                        checked={pref.inApp}
-                        onCheckedChange={() => handleToggle(type, 'inApp')}
-                      />
-                    </div>
-
-                    <div className="flex justify-center">
-                      <Switch
-                        aria-label={`${label}: email`}
-                        checked={pref.email}
-                        onCheckedChange={() => handleToggle(type, 'email')}
-                        disabled={!NOTIFICATION_TEMPLATES[type].requiresEmail}
-                      />
-                    </div>
+              return (
+                <div key={kind.type} className="grid grid-cols-[1fr_80px_80px] gap-4 items-center">
+                  {/* The row's <Label> names the notification, not either
+                      switch — and it is a sibling, so it labels neither.
+                      Without an explicit name a screen reader announces two
+                      identical "switch, on" controls per row with no way to
+                      tell In-App from Email. */}
+                  <div className="space-y-0.5">
+                    <Label className="font-normal">{kind.label}</Label>
+                    <p className="text-xs text-muted-foreground">{kind.description}</p>
                   </div>
-                );
-              })}
-            </CardContent>
-          </Card>
-        );
-      })}
+
+                  <div className="flex justify-center">
+                    <Switch
+                      aria-label={`${kind.label}: in-app`}
+                      checked={pref.inApp}
+                      onCheckedChange={() => handleToggle(kind.type, 'inApp')}
+                    />
+                  </div>
+
+                  <div className="flex justify-center">
+                    {kind.email ? (
+                      <Switch
+                        aria-label={`${kind.label}: email`}
+                        checked={pref.email}
+                        disabled={!mailDelivers}
+                        onCheckedChange={() => handleToggle(kind.type, 'email')}
+                      />
+                    ) : (
+                      // No mail exists for this one. A dash, not a disabled
+                      // switch stuck at "off": that reads as a setting somebody
+                      // has locked, when there is nothing to set.
+                      <span
+                        className="text-muted-foreground"
+                        title="This notification is not sent by email"
+                      >
+                        <span aria-hidden="true">—</span>
+                        <span className="sr-only">Not sent by email</span>
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </CardContent>
+        </Card>
+      ))}
 
       <div className="flex justify-end gap-2">
         <Button

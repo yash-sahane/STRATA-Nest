@@ -4,6 +4,8 @@ import * as React from 'react';
 import { Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { authClient } from '@/lib/api/client';
+import { ApiError } from '@/lib/api/rest-client';
+import { safeReturnPath } from '@/lib/api/return-path';
 import { useAuth } from '@/components/providers/auth-provider';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -55,7 +57,7 @@ const STRENGTH_BANDS = [
 function ChangePasswordContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, loading: authLoading, backendUnreachable, refreshUser } = useAuth();
+  const { user, loading: authLoading, backendUnreachable, refreshUser, logout } = useAuth();
 
   const [formData, setFormData] = React.useState({
     currentPassword: '',
@@ -140,38 +142,26 @@ function ChangePasswordContent() {
         return;
       }
 
-      // Update password via the auth API.
+      // Update password via the auth API. The server mails the account's owner
+      // that it changed (AuthService.changePassword).
       await authClient.updatePassword(formData.newPassword, formData.currentPassword);
       await refreshUser();
-
-      // Best-effort courtesy e-mail: the password has ALREADY been changed, so
-      // a network failure here must never reach the catch below and tell the
-      // user the change failed.
-      try {
-        await fetch('/api/send-notification-email', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: user.name,
-            email: user.email,
-            notificationTitle: 'Password changed',
-            notificationMessage: 'Your password was changed successfully.',
-          }),
-        });
-      } catch (error) {
-        logger.error('Password change notification e-mail failed', { error });
-      }
 
       toast.success('Password changed successfully', {
         description: 'You can now access your account',
       });
 
-      // Redirect to dashboard
+      // On to where signing in was headed, when the forced change interrupted it.
+      const destination = safeReturnPath(searchParams.get('next')) ?? '/dashboard';
       setTimeout(() => {
-        router.push('/dashboard');
+        router.push(destination);
       }, 1500);
-    } catch (error: any) {
-      logger.error('Password change error', { error });
+    } catch (error: unknown) {
+      // A wrong current password, or too many of them, is the form's to explain —
+      // not a fault to put Next's dev overlay over the form for.
+      if (!(error instanceof ApiError && error.code >= 400 && error.code < 500)) {
+        logger.error('Password change error', { error });
+      }
 
       if (
         (error instanceof Error ? error.message : String(error))?.includes('Invalid credentials')
@@ -261,9 +251,9 @@ function ChangePasswordContent() {
         </CardHeader>
         <CardContent>
           {(isForced || hasTempPassword) && (
-            <Alert className="mb-6 border-orange-500/50 bg-orange-50 dark:bg-orange-950/20">
+            <Alert className="mb-6 border-orange-500/50 bg-warning/10">
               <Lock className="h-4 w-4 text-warning-text" />
-              <AlertDescription className="text-orange-900 dark:text-orange-100">
+              <AlertDescription className="text-foreground">
                 <strong>Security Required:</strong> You&apos;re using a temporary password. Please create
                 a new secure password to protect your account.
               </AlertDescription>
@@ -273,7 +263,9 @@ function ChangePasswordContent() {
           <form onSubmit={handleSubmit} className="space-y-4">
             {/* Current Password */}
             <div className="space-y-2">
-              <Label htmlFor="currentPassword">Current Password</Label>
+              <Label htmlFor="currentPassword">
+                {isForced || hasTempPassword ? 'Temporary password' : 'Current password'}
+              </Label>
               <div className="relative">
                 <Input
                   id="currentPassword"
@@ -283,7 +275,11 @@ function ChangePasswordContent() {
                   onChange={(e) => setFormData({ ...formData, currentPassword: e.target.value })}
                   required
                   className="pr-10"
-                  placeholder="Enter your current password"
+                  placeholder={
+                    isForced || hasTempPassword
+                      ? 'The one you were given'
+                      : 'Enter your current password'
+                  }
                 />
                 <button
                   type="button"
@@ -291,7 +287,7 @@ function ChangePasswordContent() {
                     setShowPasswords({ ...showPasswords, current: !showPasswords.current })
                   }
                   aria-label={showPasswords.current ? 'Hide current password' : 'Show current password'}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  className="absolute right-1 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   {showPasswords.current ? (
                     <EyeOff className="h-4 w-4" />
@@ -321,7 +317,7 @@ function ChangePasswordContent() {
                   type="button"
                   onClick={() => setShowPasswords({ ...showPasswords, new: !showPasswords.new })}
                   aria-label={showPasswords.new ? 'Hide new password' : 'Show new password'}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  className="absolute right-1 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   {showPasswords.new ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
@@ -368,7 +364,7 @@ function ChangePasswordContent() {
                     setShowPasswords({ ...showPasswords, confirm: !showPasswords.confirm })
                   }
                   aria-label={showPasswords.confirm ? 'Hide password confirmation' : 'Show password confirmation'}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  className="absolute right-1 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   {showPasswords.confirm ? (
                     <EyeOff className="h-4 w-4" />
@@ -424,6 +420,18 @@ function ChangePasswordContent() {
                 </>
               )}
             </Button>
+            {/* A way back, and a way out. A voluntary change had no Cancel, and
+                somebody made to change a temporary password — every other page
+                sends them here — had no way to leave but closing the tab. */}
+            {isForced || hasTempPassword ? (
+              <Button type="button" variant="ghost" className="w-full" onClick={() => logout()}>
+                Log out
+              </Button>
+            ) : (
+              <Button type="button" variant="ghost" className="w-full" asChild>
+                <Link href="/settings?tab=security">Cancel</Link>
+              </Button>
+            )}
           </form>
         </CardContent>
       </Card>

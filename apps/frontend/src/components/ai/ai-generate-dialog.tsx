@@ -1,8 +1,11 @@
 'use client';
 
 import * as React from 'react';
+import { getPriorityConfig } from '@/lib/semantic/priority';
+import { getComplexityConfig } from '@/lib/semantic/complexity';
+import { humanizeEnum } from '@/lib/semantic/status';
 import { useQueryClient } from '@tanstack/react-query';
-import { useForm } from 'react-hook-form';
+import { useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import {
@@ -30,12 +33,41 @@ import { Progress } from '@/components/ui/progress';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Sparkles, FileText, CheckCircle2, Loader2, Upload, Target, ListTodo } from 'lucide-react';
-import { toast } from '@/hooks/use-toast';
 import {
   generateProjectHierarchyUnified,
+  GENERATION_PERMISSIONS,
+  MAX_DOCUMENT_CHARS,
+  MAX_PDF_BYTES,
   type GeneratedHierarchy,
   type DocumentAnalysis,
 } from '@/lib/ai-generator';
+import { fetchWithSession, restClient } from '@/lib/api/rest-client';
+import { useMyPermissionKeys } from '@/hooks/use-permissions';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { toast } from 'sonner';
+
+/** What each key in GENERATION_PERMISSIONS lets a plan create, for the refusal. */
+const CREATES: Record<(typeof GENERATION_PERMISSIONS)[number], string> = {
+  'requirement:write': 'requirements',
+  'planning:write': 'epics',
+  'task:create': 'tasks',
+};
+
+const formatCount = (n: number) => n.toLocaleString('en-US');
+
+/**
+ * What bulk-save stores for a value the model wrote: its spelling of one of these
+ * (any case, spaces or dashes for underscores), or the fallback. The same rule as
+ * GenerationService's `oneOf` (apps/api/src/modules/generation), so the preview
+ * shows what the save will keep — "high priority" is saved as Medium, and says so.
+ */
+const PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] as const;
+const FR_TYPES = ['FUNCTIONAL', 'NON_FUNCTIONAL', 'TECHNICAL', 'BUSINESS'] as const;
+const COMPLEXITIES = ['LOW', 'MEDIUM', 'HIGH', 'VERY_HIGH'] as const;
+function savedAs<T extends string>(allowed: readonly T[], value: unknown, fallback: T): T {
+  const wanted = String(value ?? '').trim().toUpperCase().replace(/[\s-]+/g, '_');
+  return (allowed as readonly string[]).includes(wanted) ? (wanted as T) : fallback;
+}
 
 const formSchema = z.object({
   documentText: z
@@ -195,6 +227,15 @@ interface AIGenerateDialogProps {
 
 type GenerationStep = 'input' | 'generating' | 'preview' | 'saving';
 
+/** The node a generated reference points at: an index ("2", 2, "fr-2") or an exact title. */
+function nodeAt<T extends { title?: string; name?: string }>(nodes: readonly T[], ref: unknown): T | undefined {
+  if (ref === undefined || ref === null || ref === '') return undefined;
+  const digits = /(\d+)$/.exec(String(ref))?.[1];
+  if (digits !== undefined && nodes[Number(digits)]) return nodes[Number(digits)];
+  const wanted = String(ref).trim().toLowerCase();
+  return nodes.find((node) => (node.title ?? node.name ?? '').trim().toLowerCase() === wanted);
+}
+
 export function AIGenerateDialog({
   open,
   onOpenChange,
@@ -222,7 +263,25 @@ export function AIGenerateDialog({
 
   // Derived, not duplicated state: file upload and form.reset() both go through
   // setValue, which never reached a separate charCount counter.
-  const charCount = form.watch('documentText')?.length ?? 0;
+  const charCount = useWatch({ control: form.control, name: 'documentText' })?.length ?? 0;
+  /** Characters past MAX_DOCUMENT_CHARS — not sent to the model, and said so. */
+  const overLimit = Math.max(0, charCount - MAX_DOCUMENT_CHARS);
+
+  /**
+   * The keys a save needs that the caller does not hold here.
+   *
+   * The page offers this dialog to anybody who may write requirements, but the
+   * plan it saves also holds epics and tasks, and bulk-save checks for those too
+   * — so a role without them waited out a generation, paid for by the operator,
+   * only to be refused at "Confirm & Save All". Asked before anything is spent;
+   * empty while the answer is still loading (the route checks again anyway).
+   */
+  const { keys: heldKeys, isLoading: keysLoading } = useMyPermissionKeys(workspaceId || undefined);
+  const missingKeys: (typeof GENERATION_PERMISSIONS)[number][] =
+    keysLoading || heldKeys.has('*')
+      ? []
+      : GENERATION_PERMISSIONS.filter((key) => !heldKeys.has(key));
+  const mayGenerate = missingKeys.length === 0;
 
   /**
    * The planned timeline, but only when it is genuinely a SECOND answer.
@@ -302,13 +361,18 @@ export function AIGenerateDialog({
       !name.endsWith('.md') &&
       !isPdf
     ) {
-      toast({
-        title: 'Invalid File Type',
-        description: 'Please upload a .txt, .md, or .pdf file',
-        variant: 'destructive',
-      });
+      toast.error('Invalid File Type', { description: 'Please upload a .txt, .md, or .pdf file' });
       // Let the same file be re-picked after a correction; without this the
       // input keeps its value and the next identical choice fires no change.
+      event.target.value = '';
+      return;
+    }
+
+    // Before the upload, not after the route refuses it: the same limit the route applies.
+    if (isPdf && file.size > MAX_PDF_BYTES) {
+      toast.error('PDF is too large', {
+        description: `${file.name} is over ${MAX_PDF_BYTES / (1024 * 1024)} MB. Only the first ${formatCount(MAX_DOCUMENT_CHARS)} characters of a document are used — paste the part that matters instead.`,
+      });
       event.target.value = '';
       return;
     }
@@ -321,10 +385,12 @@ export function AIGenerateDialog({
         const formData = new FormData();
         formData.append('file', file);
 
-        const response = await fetch('/api/parse-pdf', {
-          method: 'POST',
-          body: formData,
-        });
+        // The workspace rides in the query string so the route can check the
+        // caller's permissions there before it reads the upload at all.
+        const response = await fetchWithSession(
+          `/api/parse-pdf?workspaceId=${encodeURIComponent(workspaceId)}`,
+          { method: 'POST', body: formData }
+        );
 
         const data = await response.json().catch(() => null);
         if (!response.ok) {
@@ -339,17 +405,18 @@ export function AIGenerateDialog({
       }
 
       form.setValue('documentText', text);
-      toast({
-        title: 'File Loaded',
-        description: `${file.name} has been loaded successfully (${text.length} characters)`,
-      });
-    } catch (error: any) {
-      toast({
-        title: 'Error',
-        description:
-          (error instanceof Error ? error.message : String(error)) || 'Failed to read file',
-        variant: 'destructive',
-      });
+      if (text.length > MAX_DOCUMENT_CHARS) {
+        // "Loaded (31,245 characters)" read as "all of it will be used".
+        toast.warning('File loaded — but only part of it will be used', {
+          description: `${file.name} has ${formatCount(text.length)} characters; only the first ${formatCount(MAX_DOCUMENT_CHARS)} are sent to the AI.`,
+        });
+      } else {
+        toast.success('File Loaded', {
+          description: `${file.name} has been loaded successfully (${formatCount(text.length)} characters)`,
+        });
+      }
+    } catch (error: unknown) {
+      toast.error('Failed to read file', { description: error instanceof Error ? error.message : String(error) });
     } finally {
       // Re-picking the same file after a failure must re-fire onChange.
       event.target.value = '';
@@ -384,18 +451,10 @@ export function AIGenerateDialog({
       // Show preview
       setStep('preview');
 
-      toast({
-        title: 'Success!',
-        description: 'AI has generated your project structure',
-      });
-    } catch (error: any) {
-      toast({
-        title: 'Generation Failed',
-        description:
-          (error instanceof Error ? error.message : String(error)) ||
-          'Failed to generate project structure',
-        variant: 'destructive',
-      });
+      toast.success('Success!', { description: 'AI has generated your project structure' });
+    } catch (error: unknown) {
+      toast.error('Generation Failed', { description: (error instanceof Error ? error.message : String(error)) ||
+          'Failed to generate project structure' });
       setStep('input');
       setProgress(0);
     } finally {
@@ -417,30 +476,24 @@ export function AIGenerateDialog({
         setSaveProgress((prev) => Math.min(prev + 10, 90));
       }, 500);
 
-      const response = await fetch('/api/bulk-save', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          // Retry-safe: the server returns the first response for a repeated key
-          // instead of building a second copy of the whole tree.
-          ...(saveKey ? { 'Idempotency-Key': saveKey } : {}),
-        },
-        body: JSON.stringify({
-          generated: generatedData,
-          projectId,
-          projectCode,
-          workspaceId,
-        }),
-      });
+      // Straight to the API through the REST client, which renews an expired
+      // session and retries: a preview read for long enough to outlive the access
+      // token no longer loses the whole tree to a 401.
+      const data = await restClient.post<{
+        clientRequirements?: unknown[];
+        functionalRequirements?: unknown[];
+        epics?: unknown[];
+        tasks?: unknown[];
+      }>(
+        '/api/v1/bulk-save/',
+        { generated: generatedData, projectId, projectCode, workspaceId },
+        // Retry-safe: the server returns the first response for a repeated key
+        // instead of building a second copy of the whole tree.
+        saveKey ? { headers: { 'Idempotency-Key': saveKey } } : {},
+      );
 
       stopProgressTimer();
       setSaveProgress(100);
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data?.error?.message || data?.error || 'Failed to save generated data');
-      }
 
       // Call onGenerated callback for any additional handling
       onGenerated(generatedData);
@@ -448,10 +501,7 @@ export function AIGenerateDialog({
       // The API response is FLAT ({ success, clientRequirements, ... }) — there
       // is no `result` wrapper, and reading one made every SUCCESSFUL save
       // report 'Save Failed' and invite a duplicating retry.
-      toast({
-        title: 'Successfully Saved!',
-        description: `Added ${data.clientRequirements?.length ?? 0} client requirements, ${data.functionalRequirements?.length ?? 0} FRs, ${data.epics?.length ?? 0} epics, and ${data.tasks?.length ?? 0} tasks`,
-      });
+      toast.success('Successfully Saved!', { description: `Added ${data.clientRequirements?.length ?? 0} client requirements, ${data.functionalRequirements?.length ?? 0} FRs, ${data.epics?.length ?? 0} epics, and ${data.tasks?.length ?? 0} tasks` });
 
       // Refetch instead of window.location.reload(): a reload destroys the
       // document — and sonner's toast store — in the same tick as the toast.
@@ -467,12 +517,8 @@ export function AIGenerateDialog({
       // Close dialog and reset
       onOpenChange(false);
       resetDialog();
-    } catch (error: any) {
-      toast({
-        title: 'Save Failed',
-        description: error instanceof Error ? error.message : 'Failed to save generated data',
-        variant: 'destructive',
-      });
+    } catch (error: unknown) {
+      toast.error('Save Failed', { description: error instanceof Error ? error.message : 'Failed to save generated data' });
       // Go back to preview on error so user can retry
       setStep('preview');
       setSaveProgress(0);
@@ -509,7 +555,17 @@ export function AIGenerateDialog({
 
         {step === 'input' && (
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+            <form onSubmit={(e) => form.handleSubmit(onSubmit)(e)} className="space-y-6">
+              {!mayGenerate && (
+                <Alert variant="destructive">
+                  <AlertDescription>
+                    A generated plan is saved as requirements, epics and tasks, and your role in
+                    this workspace cannot create {missingKeys.map((key) => CREATES[key]).join(' or ')}.
+                    Ask a workspace manager for that permission, or add the work by hand.
+                  </AlertDescription>
+                </Alert>
+              )}
+
               {/* File Upload */}
               <Card>
                 <CardHeader>
@@ -518,7 +574,7 @@ export function AIGenerateDialog({
                     Upload Document (Optional)
                   </CardTitle>
                   <CardDescription>
-                    Upload a .txt, .md, .pdf, or .docx file containing requirements
+                    Upload a .txt, .md or .pdf file containing requirements
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -535,10 +591,11 @@ export function AIGenerateDialog({
                     accept=".txt,.md,.pdf"
                     aria-describedby="ai-generate-file-hint"
                     onChange={handleFileUpload}
+                    disabled={!mayGenerate}
                     className="block w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-primary file:text-primary-foreground hover:file:bg-primary/90"
                   />
                   <p id="ai-generate-file-hint" className="sr-only">
-                    Accepted formats: .txt, .md, .pdf
+                    Accepted formats: .txt, .md, .pdf, up to {MAX_PDF_BYTES / (1024 * 1024)} MB
                   </p>
                 </CardContent>
               </Card>
@@ -562,15 +619,23 @@ We need a mobile app for our e-commerce business that allows customers to browse
                     </FormControl>
                     <div className="flex justify-between items-start">
                       <FormDescription>
-                        Minimum 100 characters for strong and accurate generation. Include specific
-                        details about features, requirements, and business goals.
+                        Minimum 100 characters for strong and accurate generation; the first{' '}
+                        {formatCount(MAX_DOCUMENT_CHARS)} are used. Include specific details about
+                        features, requirements, and business goals.
                       </FormDescription>
                       <span
-                        className={`text-sm font-medium ${charCount >= 100 ? 'text-green-700 dark:text-green-400' : charCount >= 50 ? 'text-yellow-700 dark:text-yellow-400' : 'text-red-600 dark:text-red-400'}`}
+                        className={`text-sm font-medium ${charCount >= 100 ? 'text-success-text' : charCount >= 50 ? 'text-yellow-700 dark:text-yellow-400' : 'text-destructive-text'}`}
                       >
                         {charCount} / 100
                       </span>
                     </div>
+                    {/* Said where the text is, for as long as it is true: the
+                        excess used to be dropped without a word. Polite, so it is
+                        announced once the typing or the load settles. */}
+                    <p aria-live="polite" className="text-sm text-warning-text">
+                      {overLimit > 0 &&
+                        `Only the first ${formatCount(MAX_DOCUMENT_CHARS)} characters are sent to the AI — the last ${formatCount(overLimit)} will not be read. Trim the document to the parts that matter.`}
+                    </p>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -581,7 +646,7 @@ We need a mobile app for our e-commerce business that allows customers to browse
                 <Button type="button" variant="outline" onClick={handleCancel}>
                   Cancel
                 </Button>
-                <Button type="submit">
+                <Button type="submit" disabled={!mayGenerate}>
                   <Sparkles className="mr-2 h-4 w-4" />
                   Generate with AI
                 </Button>
@@ -664,7 +729,7 @@ We need a mobile app for our e-commerce business that allows customers to browse
 
             {/* Generated Content */}
             <Tabs defaultValue="client-reqs" className="w-full">
-              <TabsList className="grid w-full grid-cols-5">
+              <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1">
                 <TabsTrigger value="client-reqs">
                   <FileText className="h-4 w-4 mr-1" />
                   Client ({generatedData.clientRequirements.length})
@@ -691,7 +756,7 @@ We need a mobile app for our e-commerce business that allows customers to browse
                       <CardHeader>
                         <CardTitle className="text-sm flex items-center justify-between">
                           {req.title}
-                          <Badge>{req.priority}</Badge>
+                          <Badge>{getPriorityConfig(savedAs(PRIORITIES, req.priority, 'MEDIUM')).label}</Badge>
                         </CardTitle>
                         <CardDescription className="text-xs">
                           Client: {req.clientName}
@@ -711,12 +776,12 @@ We need a mobile app for our e-commerce business that allows customers to browse
                         <CardTitle className="text-sm flex items-center justify-between">
                           {req.title}
                           <div className="flex gap-1">
-                            <Badge variant="outline">{req.type}</Badge>
-                            <Badge>{req.priority}</Badge>
+                            <Badge variant="outline">{humanizeEnum(savedAs(FR_TYPES, req.type, 'FUNCTIONAL'))}</Badge>
+                            <Badge>{getPriorityConfig(savedAs(PRIORITIES, req.priority, 'MEDIUM')).label}</Badge>
                           </div>
                         </CardTitle>
                         <CardDescription className="text-xs">
-                          Complexity: {req.complexity}
+                          {getComplexityConfig(savedAs(COMPLEXITIES, req.complexity, 'MEDIUM')).label} complexity
                         </CardDescription>
                       </CardHeader>
                       <CardContent className="space-y-2">
@@ -751,8 +816,17 @@ We need a mobile app for our e-commerce business that allows customers to browse
                           {epic.startDate && epic.endDate && `${epic.startDate} → ${epic.endDate}`}
                         </CardDescription>
                       </CardHeader>
-                      <CardContent>
+                      <CardContent className="space-y-1">
                         <p className="text-sm text-muted-foreground">{epic.description}</p>
+                        {/* What it will be saved under — the save follows these. */}
+                        <p className="text-xs">
+                          <span className="text-muted-foreground">Delivers: </span>
+                          {nodeAt(generatedData.clientRequirements, epic.clientRequirementId)?.title ??
+                            'the client requirement in the same position'}
+                          {' · '}
+                          <span className="text-muted-foreground">Requirements: </span>
+                          {epic.functionalRequirementIds?.length ?? 0}
+                        </p>
                       </CardContent>
                     </Card>
                   ))}
@@ -766,12 +840,20 @@ We need a mobile app for our e-commerce business that allows customers to browse
                           {task.title}
                           <div className="flex gap-1">
                             <Badge variant="outline">{task.estimatedHours}h</Badge>
-                            <Badge>{task.priority}</Badge>
+                            <Badge>{getPriorityConfig(task.priority).label}</Badge>
                           </div>
                         </CardTitle>
                       </CardHeader>
                       <CardContent className="space-y-2">
                         <p className="text-sm text-muted-foreground">{task.description}</p>
+                        <p className="text-xs">
+                          <span className="text-muted-foreground">Implements: </span>
+                          {nodeAt(generatedData.functionalRequirements, task.functionalRequirementId)?.title ??
+                            '—'}
+                          {' · '}
+                          <span className="text-muted-foreground">Epic: </span>
+                          {nodeAt(generatedData.epics, task.epicId)?.name ?? '—'}
+                        </p>
                         {task.labels.length > 0 && (
                           <div className="flex flex-wrap gap-1">
                             {task.labels.map((label, i) => (
@@ -791,7 +873,8 @@ We need a mobile app for our e-commerce business that allows customers to browse
                     <CardHeader>
                       <CardTitle className="text-base">Project Timeline</CardTitle>
                       <CardDescription>
-                        Duration: {generatedData.timeline.projectDuration}
+                        Duration: {generatedData.timeline.projectDuration}. A suggestion only —
+                        milestones are not saved; sprints are planned from the requirements.
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-3">
@@ -820,7 +903,7 @@ We need a mobile app for our e-commerce business that allows customers to browse
               </Button>
               <div className="flex gap-2">
                 <Button type="button" variant="outline" onClick={() => setStep('input')}>
-                  Regenerate
+                  Back to the document
                 </Button>
                 <Button type="button" variant="success" onClick={handleConfirmGeneration}>
                   <CheckCircle2 className="mr-2 h-4 w-4" />

@@ -1,14 +1,16 @@
 'use client';
 
 import * as React from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { getInitials } from '@/lib/utils';
-import { query, resources } from '@/lib/api/client';
+import { query, resources, type ApiModels } from '@/lib/api/client';
+import { restClient } from '@/lib/api/rest-client';
 import { useTeamMembers } from '@/hooks/use-team';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import {
   Select,
   SelectContent,
@@ -30,6 +32,7 @@ import {
   KeySquare,
   LayoutList,
   ListChecks,
+  Loader2,
   LogIn,
   Mail,
   PartyPopper,
@@ -83,6 +86,7 @@ const ACTIVITY_CONFIG: Record<string, ActivityConfig> = {
     label: 'Role Changed',
   },
   'workspace.member.removed': { icon: UserMinus, color: 'text-red-500', label: 'Member Removed' },
+  'workspace.member.status_changed': { icon: UserMinus, color: 'text-amber-600 dark:text-amber-500', label: 'Member Access Changed' },
   'workspace.invitation.accepted': {
     icon: LogIn,
     color: 'text-sky-500',
@@ -115,9 +119,7 @@ const ACTIVITY_CONFIG: Record<string, ActivityConfig> = {
   ...crud('project', FolderKanban, 'Project'),
   ...crud('epic', Rocket, 'Epic'),
   ...crud('sprint', Target, 'Sprint'),
-  ...crud('retrospective', ListChecks, 'Retrospective'),
   ...crud('task', CheckCircle2, 'Task'),
-  ...crud('label', Tag, 'Label'),
   ...crud('client_requirement', FileText, 'Client Requirement'),
   ...crud('functional_requirement', FileText, 'Functional Requirement'),
   ...crud('holiday', CalendarOff, 'Holiday'),
@@ -125,12 +127,17 @@ const ACTIVITY_CONFIG: Record<string, ActivityConfig> = {
   ...crud('leave_balance', CalendarOff, 'Leave Balance'),
   ...crud('workspace_role', ShieldCheck, 'Role'),
   ...crud('invite_code', KeySquare, 'Invite Code'),
-  ...crud('email_invitation', Mail, 'Email Invitation'),
   ...crud('join_request', UserPlus, 'Join Request'),
-  ...crud('pending_access', UserPlus, 'Access Request'),
   ...crud('github_integration', GitBranch, 'GitHub Integration'),
   ...crud('gitlab_integration', GitBranch, 'GitLab Integration'),
   ...crud('discord_integration', LayoutList, 'Discord Integration'),
+
+  // Collections that no longer exist. Nothing records them now, but the trail is
+  // append-only: the rows written while they did still have to read as words.
+  ...crud('retrospective', ListChecks, 'Retrospective'),
+  ...crud('label', Tag, 'Label'),
+  ...crud('email_invitation', Mail, 'Email Invitation'),
+  ...crud('pending_access', UserPlus, 'Access Request'),
 };
 
 /** Total lookup. The audit trail is append-only and open-ended: an action added
@@ -164,27 +171,114 @@ interface ActivityFeedProps {
 }
 
 const PAGE_SIZE = 100;
+const ALL_ACTIONS = 'all';
+
+/**
+ * The audit row's entity type is the server's table-ish key ("leave_request",
+ * "functional_requirement"), and the badge printed it raw — snake_case on a
+ * screen people read. Named here for the types the API audits; anything new
+ * falls back to the key with its underscores turned into spaces.
+ */
+const ENTITY_TYPE_LABELS: Record<string, string> = {
+  task: 'Task',
+  functional_requirement: 'Functional requirement',
+  client_requirement: 'Client requirement',
+  epic: 'Epic',
+  sprint: 'Sprint',
+  retrospective: 'Retrospective',
+  project: 'Project',
+  leave_request: 'Leave request',
+  holiday: 'Holiday',
+  time_entry: 'Time entry',
+  attendance: 'Attendance',
+  workspace: 'Workspace',
+  workspace_member: 'Member',
+  workspace_role: 'Role',
+  invite_code: 'Invite code',
+  join_request: 'Join request',
+  file: 'File',
+  integration: 'Integration',
+};
+
+function entityTypeLabel(entityType: string): string {
+  const known = ENTITY_TYPE_LABELS[entityType];
+  if (known) return known;
+  const spaced = entityType.replace(/_/g, ' ').trim();
+  return spaced ? spaced.charAt(0).toUpperCase() + spaced.slice(1) : 'Item';
+}
 
 export function ActivityFeed({ workspaceId, showFilters = true, className }: ActivityFeedProps) {
-  const [filterAction, setFilterAction] = React.useState<string>('all');
+  const [filterAction, setFilterAction] = React.useState<string>(ALL_ACTIONS);
 
+  /**
+   * The trail a page at a time, filtered by the server.
+   *
+   * It was one request for the newest hundred rows, and the action filter ran
+   * over those hundred in the browser: nothing older could be reached at all,
+   * and filtering for an action showed only the instances that happened to be
+   * among the newest hundred of everything. The filter is part of the key — each
+   * is its own list on the server — and "Load more" reads the next page of it.
+   */
   const {
-    data: activities = [],
+    data,
     isLoading,
     isError,
     refetch,
-  } = useQuery({
-    queryKey: ['activity-logs', workspaceId],
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isFetchNextPageError,
+  } = useInfiniteQuery({
+    queryKey: ['activity-logs', workspaceId, filterAction],
     enabled: Boolean(workspaceId),
-    queryFn: async () => {
-      if (!workspaceId) return [];
-      const response = await resources.list<ActivityLog>('activity_logs', [
-        query.equal('workspaceId', workspaceId),
-        query.orderDesc('createdAt'),
-        query.limit(PAGE_SIZE),
-      ]);
-      return response.items;
-    },
+    initialPageParam: 1,
+    queryFn: ({ pageParam }) =>
+      workspaceId
+        ? resources.list<ActivityLog>('activity_logs', [
+            query.equal('workspaceId', workspaceId),
+            ...(filterAction === ALL_ACTIONS ? [] : [query.equal('action', filterAction)]),
+            query.orderDesc('createdAt'),
+            query.limit(PAGE_SIZE),
+            query.page(pageParam),
+          ])
+        : Promise.resolve<ApiModels.ResourceList<ActivityLog>>({
+            items: [],
+            total: 0,
+            page: 1,
+            pageSize: PAGE_SIZE,
+          }),
+    getNextPageParam: (last) =>
+      last.items.length > 0 && last.page * last.pageSize < last.total ? last.page + 1 : undefined,
+  });
+
+  // Pages are read by offset while new rows arrive at the top, so a row can be
+  // pushed from the end of one page onto the start of the next: show it once.
+  const activities = React.useMemo(() => {
+    const seen = new Set<string>();
+    const rows: ActivityLog[] = [];
+    for (const row of (data?.pages ?? []).flatMap((page) => page.items)) {
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      rows.push(row);
+    }
+    return rows;
+  }, [data]);
+  const total = data?.pages[0]?.total ?? 0;
+
+  // Every action in the part of the trail this member can read, from the server:
+  // the rows on screen are only ever the first page or two. Not under the
+  // 'activity-logs' root, so a new row does not re-read it — an action new
+  // enough not to be in it yet is picked up from the rows below.
+  const { data: recordedActions = [] } = useQuery({
+    queryKey: ['activity-log-actions', workspaceId],
+    enabled: Boolean(workspaceId) && showFilters,
+    staleTime: 5 * 60 * 1000,
+    queryFn: async () =>
+      (
+        await restClient.get<{ actions: string[] }>('/api/v1/activity_logs/actions/', {
+          params: { workspaceId },
+        })
+      ).actions,
   });
 
   // The log stores a userId; the roster is where the display name lives. It is
@@ -196,16 +290,13 @@ export function ActivityFeed({ workspaceId, showFilters = true, className }: Act
     return (userId: string) => byId.get(userId) ?? 'Someone';
   }, [teamMembers]);
 
-  // Only the actions actually present, so the picker never offers an empty filter.
-  const availableActions = React.useMemo(
-    () => [...new Set(activities.map((a) => a.action))].sort(),
-    [activities]
-  );
-
-  const filteredActivities = React.useMemo(() => {
-    if (filterAction === 'all') return activities;
-    return activities.filter((activity) => activity.action === filterAction);
-  }, [activities, filterAction]);
+  // Only actions that have actually been recorded, so the picker never offers an
+  // empty filter — and the one picked stays listed whatever has loaded.
+  const availableActions = React.useMemo(() => {
+    const actions = new Set([...recordedActions, ...activities.map((a) => a.action)]);
+    if (filterAction !== ALL_ACTIONS) actions.add(filterAction);
+    return [...actions].sort();
+  }, [recordedActions, activities, filterAction]);
 
   return (
     <Card className={className}>
@@ -214,7 +305,7 @@ export function ActivityFeed({ workspaceId, showFilters = true, className }: Act
           <div>
             <CardTitle className="flex items-center gap-2">
               <Clock className="h-5 w-5" />
-              Activity Feed
+              Recent Activity
             </CardTitle>
             <CardDescription>Recent activity across this workspace</CardDescription>
           </div>
@@ -229,7 +320,7 @@ export function ActivityFeed({ workspaceId, showFilters = true, className }: Act
                   <SelectValue placeholder="Filter by type" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Activities</SelectItem>
+                  <SelectItem value={ALL_ACTIONS}>All Activities</SelectItem>
                   {availableActions.map((action) => (
                     <SelectItem key={action} value={action}>
                       {configFor(action).label}
@@ -255,21 +346,32 @@ export function ActivityFeed({ workspaceId, showFilters = true, className }: Act
                 </div>
               ))}
             </div>
-          ) : isError ? (
+          ) : isError && activities.length === 0 ? (
+            // Only when there is nothing to show: a failed refresh or a failed
+            // "Load more" keeps the rows already read on screen.
             <ErrorState
               title="Couldn't load activity"
               description="The workspace activity trail could not be fetched."
               onRetry={() => refetch()}
             />
-          ) : filteredActivities.length === 0 ? (
-            <EmptyState
-              icon={Clock}
-              title="No activities yet"
-              description="Activity will appear here as your team works in this workspace"
-            />
+          ) : activities.length === 0 ? (
+            filterAction === ALL_ACTIONS ? (
+              <EmptyState
+                icon={Clock}
+                title="No activities yet"
+                description="Activity will appear here as your team works in this workspace"
+              />
+            ) : (
+              <EmptyState
+                icon={Filter}
+                title={`No "${configFor(filterAction).label}" activity`}
+                description="Nothing of this kind is in the part of the trail you can see."
+                action={{ label: 'Show all activity', onClick: () => setFilterAction(ALL_ACTIONS) }}
+              />
+            )
           ) : (
             <div className="space-y-4">
-              {filteredActivities.map((activity) => {
+              {activities.map((activity) => {
                 const config = configFor(activity.action);
                 const Icon = config.icon;
                 const userName = nameOf(activity.userId);
@@ -277,7 +379,7 @@ export function ActivityFeed({ workspaceId, showFilters = true, className }: Act
                 return (
                   <div
                     key={activity.id}
-                    className="flex gap-3 p-3 rounded-lg border bg-card hover:bg-accent/50 transition-colors"
+                    className="flex gap-3 p-3 rounded-lg border bg-card"
                   >
                     {/* Activity Icon */}
                     <div className="shrink-0">
@@ -324,7 +426,7 @@ export function ActivityFeed({ workspaceId, showFilters = true, className }: Act
                             )}
                         </div>
                         <Badge variant="outline" className="shrink-0 text-xs">
-                          {activity.entityType}
+                          {entityTypeLabel(activity.entityType)}
                         </Badge>
                       </div>
 
@@ -336,6 +438,26 @@ export function ActivityFeed({ workspaceId, showFilters = true, className }: Act
                   </div>
                 );
               })}
+
+              <div className="flex flex-col items-center gap-2 py-2">
+                <p className="text-xs text-muted-foreground">
+                  Showing {activities.length.toLocaleString()} of {total.toLocaleString()}
+                </p>
+                {isFetchNextPageError && (
+                  <p className="text-xs text-destructive-text">Couldn&apos;t load older activity.</p>
+                )}
+                {hasNextPage && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => fetchNextPage()}
+                    disabled={isFetchingNextPage}
+                  >
+                    {isFetchingNextPage && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    {isFetchNextPageError ? 'Try again' : 'Load more'}
+                  </Button>
+                )}
+              </div>
             </div>
           )}
         </ScrollArea>

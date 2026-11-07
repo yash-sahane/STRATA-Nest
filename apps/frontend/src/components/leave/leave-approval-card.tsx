@@ -22,13 +22,22 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { useApproveLeave, useRejectLeave, type LeaveRequest } from '@/hooks/use-leave';
+import {
+  useApproveLeave,
+  useCancelLeaveRequest,
+  useRejectLeave,
+  type LeaveRequest,
+} from '@/hooks/use-leave';
+import { useConfirm } from '@/components/providers/confirm-provider';
+import { parseDateOnly, todayDateOnly } from '@/lib/utils/working-days';
 import {
   getLeaveTypeLabel,
   getLeaveTypeColor,
   formatLeaveDateRange,
 } from '@/lib/leave-utils';
 import { LeaveStatusBadge } from '@/components/leave/leave-status-badge';
+import { formatDate } from '@/lib/utils';
+import { useAuth } from '@/components/providers/auth-provider';
 
 interface LeaveApprovalCardProps {
   leaveRequest: LeaveRequest;
@@ -41,6 +50,7 @@ export function LeaveApprovalCard({
   approverId,
   approverName,
 }: LeaveApprovalCardProps) {
+  const mailDelivers = useAuth().user?.mailDelivers !== false;
   const [showApproveDialog, setShowApproveDialog] = React.useState(false);
   const [showRejectDialog, setShowRejectDialog] = React.useState(false);
   const [rejectionReason, setRejectionReason] = React.useState('');
@@ -48,6 +58,44 @@ export function LeaveApprovalCard({
 
   const approveLeave = useApproveLeave();
   const rejectLeave = useRejectLeave();
+  const cancelLeave = useCancelLeaveRequest();
+  const confirm = useConfirm();
+
+  /**
+   * Approved leave that has not ended can still be changed by whoever approves
+   * leave: cancelled before it starts, ended early while it runs. These cards
+   * carried no control at all, so somebody back early stayed "on leave" to the
+   * last day, charged for days they worked.
+   */
+  const today = parseDateOnly(todayDateOnly());
+  // Its first day counts as started, as the API counts it: "Cancel Leave" on
+  // the morning of somebody's day off handed that day back to their balance.
+  const started = parseDateOnly(leaveRequest.startDate) <= today;
+  const startsToday = parseDateOnly(leaveRequest.startDate).getTime() === today.getTime();
+  const over = parseDateOnly(leaveRequest.endDate) < today;
+  const person = leaveRequest.userName || 'This person';
+  const handleWithdraw = async () => {
+    const proceed = await confirm(
+      started
+        ? {
+            title: 'End this leave early?',
+            description: startsToday
+              ? `${person}'s leave began today, so ending it now withdraws it: they are back today, all its days go back to their balance and come off the calendar, and they are told.`
+              : `${person}'s leave will end yesterday. The days not taken go back to their balance and come off the calendar, and they are told.`,
+            confirmText: 'End Early',
+            cancelText: 'Keep It',
+            destructive: true,
+          }
+        : {
+            title: 'Cancel this leave?',
+            description: `${person}'s approved leave is withdrawn and the days go back to their balance. They are told.`,
+            confirmText: 'Cancel Leave',
+            cancelText: 'Keep It',
+            destructive: true,
+          }
+    );
+    if (proceed) cancelLeave.mutate(leaveRequest.id);
+  };
 
   const handleApprove = async () => {
     setDecisionError('');
@@ -92,7 +140,7 @@ export function LeaveApprovalCard({
 
   return (
     <>
-      <Card className="hover-lift">
+      <Card>
         <CardHeader>
           <div className="flex items-start justify-between">
             <div className="space-y-1">
@@ -132,7 +180,7 @@ export function LeaveApprovalCard({
               <FileText className="h-4 w-4 text-muted-foreground" />
               <span className="text-muted-foreground">Requested:</span>
               <span className="font-medium">
-                {new Date(leaveRequest.createdAt).toLocaleDateString()}
+                {formatDate(leaveRequest.createdAt)}
               </span>
             </div>
           </div>
@@ -176,11 +224,22 @@ export function LeaveApprovalCard({
           </CardFooter>
         )}
         {(isApproved || isRejected) && (
-          <CardFooter>
+          <CardFooter className="flex flex-col gap-2">
+            {isApproved && !over && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full"
+                disabled={cancelLeave.isPending}
+                onClick={handleWithdraw}
+              >
+                {started ? 'End Early' : 'Cancel Leave'}
+              </Button>
+            )}
             <div className="text-xs text-muted-foreground w-full text-center">
               {isApproved ? 'Approved' : 'Rejected'}
               {leaveRequest.approvedAt &&
-                ` on ${new Date(leaveRequest.approvedAt).toLocaleDateString()}`}
+                ` on ${formatDate(leaveRequest.approvedAt)}`}
             </div>
           </CardFooter>
         )}
@@ -245,8 +304,8 @@ export function LeaveApprovalCard({
           <DialogHeader>
             <DialogTitle>Reject Leave Request</DialogTitle>
             <DialogDescription>
-              You are about to reject {leaveRequest.userName}&apos;s leave request. Please provide a
-              reason for rejection. The employee will be notified via email.
+              You are about to reject {leaveRequest.userName}&apos;s leave request. Give the
+              reason: they are told it in the app{mailDelivers ? ', and by email' : ''}.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">

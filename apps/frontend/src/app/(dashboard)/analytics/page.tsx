@@ -58,6 +58,7 @@ import {
 } from '@/components/analytics/chart-colors';
 import { ChartTooltip } from '@/components/analytics/chart-tooltip';
 import { ChartEmptyState } from '@/components/analytics/chart-empty-state';
+import { SprintHistoryCard } from '@/components/analytics/sprint-history-card';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useProjects } from '@/hooks/use-project';
 import { useWorkspaceTasks } from '@/hooks/use-task';
@@ -66,6 +67,12 @@ import {
   useWorkspaceAnalytics,
   useTeamAnalytics,
 } from '@/hooks/use-analytics';
+import { formatDate } from '@/lib/utils';
+import { humanizeEnum } from '@/lib/semantic/status';
+import { useTasksRealtime, useProjectsRealtime } from '@/hooks/use-realtime';
+import { isTaskOverdue } from '@/lib/task-dates';
+import { useHasPermission } from '@/hooks/use-permissions';
+import { Permission } from '@/lib/permissions';
 
 const ANALYTICS_VIEWS = ['workspace', 'projects', 'team'] as const;
 type AnalyticsView = (typeof ANALYTICS_VIEWS)[number];
@@ -124,6 +131,17 @@ function AnalyticsPageContent() {
       : 'workspace'
   );
 
+  /**
+   * Team Performance is each person's figures set side by side: tasks finished,
+   * tasks overdue, how long they take. It was on offer to everybody in the
+   * workspace, the people being compared included. It is for whoever is
+   * answerable for the team — the same people who approve its leave — and the
+   * permission for exactly that has existed all along without being asked.
+   */
+  const canSeeTeamPerformance = useHasPermission(Permission.VIEW_TEAM_ANALYTICS);
+  const shownTab: AnalyticsView =
+    activeTab === 'team' && !canSeeTeamPerformance ? 'workspace' : activeTab;
+
   // Mirror the active tab into the URL so a view can be linked and bookmarked.
   const handleTabChange = React.useCallback(
     (value: string) => {
@@ -156,6 +174,8 @@ function AnalyticsPageContent() {
     isError: tasksError,
     refetch: refetchTasks,
   } = useWorkspaceTasks(currentWorkspace?.id);
+  useTasksRealtime(currentWorkspace?.id);
+  useProjectsRealtime(currentWorkspace?.id);
 
   // Keep the selection valid rather than only initialising it: switching
   // workspaces replaces the project list, and a stale id from the previous
@@ -247,7 +267,7 @@ function AnalyticsPageContent() {
   const projectStatusPieData = projectAnalytics
     ? Object.entries(projectAnalytics.statusDistribution)
         .map(([status, value]) => ({
-          name: status.replace('_', ' '),
+          name: humanizeEnum(status),
           value,
           color: STATUS_COLORS[status],
         }))
@@ -267,15 +287,16 @@ function AnalyticsPageContent() {
       {/* Header */}
       <PageHeader
         icon={BarChart3}
-        title="Analytics & Reports"
+        title="Analytics"
         description="Comprehensive insights and performance metrics"
       />
 
-      <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-4">
-        <TabsList className="grid w-full grid-cols-3 lg:w-[600px]">
+      <Tabs value={shownTab} onValueChange={handleTabChange} className="space-y-4">
+        {/* Wraps on a phone: three labels in fixed thirds overlapped there. */}
+        <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 sm:w-auto">
           <TabsTrigger value="workspace">Workspace Overview</TabsTrigger>
           <TabsTrigger value="projects">Project Analytics</TabsTrigger>
-          <TabsTrigger value="team">Team Performance</TabsTrigger>
+          {canSeeTeamPerformance && <TabsTrigger value="team">Team Performance</TabsTrigger>}
         </TabsList>
 
         {/* Workspace Overview Tab */}
@@ -343,12 +364,7 @@ function AnalyticsPageContent() {
                       <div>
                         <p className="text-sm text-muted-foreground">Overdue Tasks</p>
                         <p className="text-2xl font-bold">
-                          {
-                            allTasks.filter(
-                              (t) =>
-                                t.dueDate && new Date(t.dueDate) < new Date() && t.status !== 'DONE'
-                            ).length
-                          }
+                          {allTasks.filter((t) => isTaskOverdue(t)).length}
                         </p>
                       </div>
                       <AlertTriangle className="h-8 w-8 text-red-500" />
@@ -400,10 +416,7 @@ function AnalyticsPageContent() {
                           (t) => t.status === 'DONE'
                         ).length;
                         const total = projectTasks.length;
-                        const overdue = projectTasks.filter(
-                          (t) =>
-                            t.dueDate && new Date(t.dueDate) < new Date() && t.status !== 'DONE'
-                        ).length;
+                        const overdue = projectTasks.filter((t) => isTaskOverdue(t)).length;
                         const completionRate = total > 0 ? (completed / total) * 100 : 0;
 
                         return (
@@ -643,7 +656,7 @@ function AnalyticsPageContent() {
                                 <p className="font-medium">{task.title}</p>
                                 <p className="text-sm text-muted-foreground">
                                   {project?.name} · Updated{' '}
-                                  {new Date(task.updatedAt).toLocaleDateString()}
+                                  {formatDate(task.updatedAt)}
                                 </p>
                               </div>
                               {/* Resolved through the semantic status module, not a
@@ -668,13 +681,13 @@ function AnalyticsPageContent() {
         <TabsContent value="projects" className="space-y-4">
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <CardTitle>Project Analytics</CardTitle>
                   <CardDescription>Detailed metrics for selected project</CardDescription>
                 </div>
                 <Select value={selectedProjectId} onValueChange={setSelectedProjectId}>
-                  <SelectTrigger className="w-[250px]">
+                  <SelectTrigger className="w-full sm:w-[250px]" aria-label="Project">
                     <SelectValue placeholder="Select project" />
                   </SelectTrigger>
                   <SelectContent>
@@ -797,6 +810,8 @@ function AnalyticsPageContent() {
                   </CardContent>
                 </Card>
               </div>
+
+              <SprintHistoryCard projectId={selectedProjectId} />
             </>
           )}
         </TabsContent>
@@ -857,7 +872,7 @@ function AnalyticsPageContent() {
                           </div>
                           <div className="flex-1">
                             <div className="flex items-center justify-between">
-                              <p className="truncate font-medium">{member.memberName}</p>
+                              <p className="truncate font-medium" title={member.memberName}>{member.memberName}</p>
                               <p className="text-sm text-muted-foreground">
                                 {member.completedTasks} / {member.totalTasks} tasks
                               </p>

@@ -3,7 +3,7 @@
  * Validates and parses CSV files containing user data
  */
 
-import { ROLE_HIERARCHY } from '@/lib/permissions';
+import { BUILT_IN_ROLES } from '@/lib/permissions';
 
 export interface ParsedUser {
   name: string;
@@ -11,15 +11,36 @@ export interface ParsedUser {
   role: string;
 }
 
-// Derived from the single source of truth (ROLE_HIERARCHY in lib/permissions)
+// Derived from the single source of truth (BUILT_IN_ROLES in lib/permissions)
 // so bulk-import role validation can never drift from the roles the permission
 // system actually defines. Add a role there and CSV import accepts it too.
-const VALID_ROLES = Object.keys(ROLE_HIERARCHY);
+const VALID_ROLES: readonly string[] = BUILT_IN_ROLES;
 
 /**
- * Parse CSV file and extract user data
+ * The role a CSV cell names, as a membership stores it — or null.
+ *
+ * A built-in is its key in any letter case (`manager` is MANAGER). A custom role
+ * is matched on its name, also in any case, and returned as the workspace spells
+ * it: the cell used to be upper-cased before it was checked, so a workspace's own
+ * "Release Captain" could never be imported even once it existed.
  */
-export async function parseCSV(file: File): Promise<ParsedUser[]> {
+function resolveRole(cell: string, customRoles: readonly string[]): string | null {
+  const upper = cell.toUpperCase();
+  if (VALID_ROLES.includes(upper)) return upper;
+  const lower = cell.toLowerCase();
+  return customRoles.find((name) => name.toLowerCase() === lower) ?? null;
+}
+
+/**
+ * Parse CSV file and extract user data.
+ *
+ * `customRoles` are the names of the workspace's own roles, accepted in the
+ * `role` column alongside the built-in keys.
+ */
+export async function parseCSV(
+  file: File,
+  customRoles: readonly string[] = []
+): Promise<ParsedUser[]> {
   // Strip the UTF-8 BOM Excel writes: with it, the first header cell reads
   // U+FEFF + "name" instead of "name", so a perfectly valid export failed with
   // "Missing required columns: name".
@@ -61,7 +82,7 @@ export async function parseCSV(file: File): Promise<ParsedUser[]> {
 
     const name = values[nameIndex]?.trim();
     const email = values[emailIndex]?.trim().toLowerCase();
-    const role = values[roleIndex]?.trim().toUpperCase();
+    const roleCell = values[roleIndex]?.trim() ?? '';
 
     // Validate name
     if (!name) {
@@ -84,8 +105,9 @@ export async function parseCSV(file: File): Promise<ParsedUser[]> {
     seenEmails.add(email);
 
     // Validate role
-    const roleValidation = validateRole(role);
-    if (!roleValidation.isValid) {
+    const roleValidation = validateRole(roleCell, customRoles);
+    const role = resolveRole(roleCell, customRoles);
+    if (!roleValidation.isValid || !role) {
       errors.push(`Row ${i + 1}: ${roleValidation.error}`);
       continue;
     }
@@ -152,43 +174,21 @@ export function validateEmail(email: string): { isValid: boolean; error?: string
 /**
  * Validate role
  */
-export function validateRole(role: string): { isValid: boolean; error?: string } {
+export function validateRole(
+  role: string,
+  customRoles: readonly string[] = []
+): { isValid: boolean; error?: string } {
   if (!role) {
     return { isValid: false, error: 'Role is required' };
   }
 
-  if (!VALID_ROLES.includes(role)) {
+  if (!resolveRole(role, customRoles)) {
     return {
       isValid: false,
-      error: `Invalid role: ${role}. Valid roles are: ${VALID_ROLES.join(', ')}`,
+      error: `Invalid role: ${role}. Valid roles are: ${[...VALID_ROLES, ...customRoles].join(', ')}`,
     };
   }
 
   return { isValid: true };
 }
 
-/**
- * Validate complete user data object
- */
-export function validateUserData(user: ParsedUser): { isValid: boolean; errors: string[] } {
-  const errors: string[] = [];
-
-  const emailValidation = validateEmail(user.email);
-  if (!emailValidation.isValid) {
-    errors.push(emailValidation.error!);
-  }
-
-  const roleValidation = validateRole(user.role);
-  if (!roleValidation.isValid) {
-    errors.push(roleValidation.error!);
-  }
-
-  if (!user.name || user.name.trim().length === 0) {
-    errors.push('Name is required');
-  }
-
-  return {
-    isValid: errors.length === 0,
-    errors,
-  };
-}

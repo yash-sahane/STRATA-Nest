@@ -3,7 +3,9 @@
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useAttendanceAnalytics } from '@/hooks/use-attendance';
-import { countWorkingDaysInMonth, getWorkingSaturdaysInMonth } from '@/lib/attendance-utils';
+import { useHolidaySet } from '@/hooks/use-holidays';
+import { countWorkingDaysInMonth, getCurrentDate, getWorkingSaturdaysInMonth } from '@/lib/attendance-utils';
+import { parseDateOnly } from '@/lib/utils/working-days';
 import { plural } from '@/lib/plural';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -21,8 +23,10 @@ interface AttendanceStatsProps {
 export function AttendanceStats({ year, month }: AttendanceStatsProps) {
   const { user } = useAuth();
   const { currentWorkspace } = useCurrentWorkspace();
-  const currentYear = year ?? new Date().getFullYear();
-  const currentMonth = month ?? new Date().getMonth();
+  // The business day's month by default — the app's today — not the browser's.
+  const today = parseDateOnly(getCurrentDate());
+  const currentYear = year ?? today.getFullYear();
+  const currentMonth = month ?? today.getMonth();
 
   const workspaceId = currentWorkspace?.id || '';
   const { data: analytics, isLoading, isError, refetch } = useAttendanceAnalytics(
@@ -32,7 +36,9 @@ export function AttendanceStats({ year, month }: AttendanceStatsProps) {
     currentMonth
   );
 
-  const workingDays = countWorkingDaysInMonth(currentYear, currentMonth);
+  // Public holidays are not working days — the count the rate is taken against.
+  const { holidays } = useHolidaySet(workspaceId || undefined);
+  const workingDays = countWorkingDaysInMonth(currentYear, currentMonth, holidays);
   const workingSaturdays = getWorkingSaturdaysInMonth(currentYear, currentMonth);
   // The shared helper, so there is one implementation of this rather than one
   // per file — which is how a dozen other sites ended up with none.
@@ -84,10 +90,10 @@ export function AttendanceStats({ year, month }: AttendanceStatsProps) {
 
   // Determine attendance rate color
   const getRateColor = (rate: number) => {
-    if (rate >= 95) return 'text-green-700 dark:text-green-400';
-    if (rate >= 85) return 'text-blue-600 dark:text-blue-400';
-    if (rate >= 75) return 'text-orange-700 dark:text-orange-400';
-    return 'text-red-600 dark:text-red-400';
+    if (rate >= 95) return 'text-success-text';
+    if (rate >= 85) return 'text-info-text';
+    if (rate >= 75) return 'text-warning-text';
+    return 'text-destructive-text';
   };
 
   // Determine late days severity
@@ -100,28 +106,28 @@ export function AttendanceStats({ year, month }: AttendanceStatsProps) {
   return (
     <div className="space-y-4">
       {/* Working Days Info */}
-      <Card className="border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/50">
+      <Card className="border-info/30 bg-info/10">
         <CardHeader className="pb-3">
           <CardTitle className="text-sm font-medium flex items-center gap-2">
-            <Calendar className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-            <span className="text-blue-900 dark:text-blue-100">Working Days Schedule</span>
+            <Calendar className="h-4 w-4 text-info-text" />
+            <span className="text-foreground">Working Days Schedule</span>
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
           <div className="flex items-center justify-between text-sm">
-            <span className="text-blue-700 dark:text-blue-300">Total Working Days</span>
-            <span className="font-semibold text-blue-900 dark:text-blue-100">
+            <span className="text-info-text">Total Working Days</span>
+            <span className="font-semibold text-foreground">
               {days(workingDays)}
             </span>
           </div>
           <div className="flex items-center justify-between text-sm">
-            <span className="text-blue-700 dark:text-blue-300">Working Saturdays</span>
-            <span className="font-semibold text-blue-900 dark:text-blue-100">
+            <span className="text-info-text">Working Saturdays</span>
+            <span className="font-semibold text-foreground">
               {days(workingSaturdays.length)}
             </span>
           </div>
-          <div className="pt-2 border-t border-blue-200 dark:border-blue-800">
-            <p className="text-xs text-blue-700 dark:text-blue-300">
+          <div className="pt-2 border-t border-info/30">
+            <p className="text-xs text-info-text">
               Week 1 & 3 Saturdays are working days
             </p>
           </div>
@@ -172,7 +178,7 @@ export function AttendanceStats({ year, month }: AttendanceStatsProps) {
           </CardHeader>
           <CardContent>
             <div className="space-y-2">
-              <div className="text-3xl font-bold text-blue-600 dark:text-blue-400">{totalWorkHours.toFixed(1)}h</div>
+              <div className="text-3xl font-bold text-info-text">{totalWorkHours.toFixed(1)}h</div>
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <span>Average: {averageWorkHours.toFixed(1)}h/day worked</span>
               </div>
@@ -186,13 +192,13 @@ export function AttendanceStats({ year, month }: AttendanceStatsProps) {
               <div className="flex items-center gap-1 text-xs">
                 {averageWorkHours >= 8 ? (
                   <>
-                    <CheckCircle className="h-3 w-3 text-green-700 dark:text-green-400" />
-                    <span className="text-green-700 dark:text-green-400">Meeting target</span>
+                    <CheckCircle className="h-3 w-3 text-success-text" />
+                    <span className="text-success-text">Meeting target</span>
                   </>
                 ) : (
                   <>
-                    <AlertCircle className="h-3 w-3 text-orange-700 dark:text-orange-400" />
-                    <span className="text-orange-700 dark:text-orange-400">Below 8h/day</span>
+                    <AlertCircle className="h-3 w-3 text-warning-text" />
+                    <span className="text-warning-text">Below 8h/day</span>
                   </>
                 )}
               </div>
@@ -211,10 +217,10 @@ export function AttendanceStats({ year, month }: AttendanceStatsProps) {
               <div
                 className={`text-3xl font-bold ${
                   lateDays === 0
-                    ? 'text-green-700 dark:text-green-400'
+                    ? 'text-success-text'
                     : lateDays <= 2
-                      ? 'text-orange-700 dark:text-orange-400'
-                      : 'text-red-600 dark:text-red-400'
+                      ? 'text-warning-text'
+                      : 'text-destructive-text'
                 }`}
               >
                 {lateDays}
@@ -226,7 +232,7 @@ export function AttendanceStats({ year, month }: AttendanceStatsProps) {
                 {getLateSeverity(lateDays) === 'success' && (
                   <Badge
                     variant="outline"
-                    className="bg-green-50 dark:bg-green-950 text-green-700 dark:text-green-300 border-green-200 dark:border-green-800"
+                    className="bg-success/10 text-success-text border-success/30"
                   >
                     Excellent
                   </Badge>
@@ -234,7 +240,7 @@ export function AttendanceStats({ year, month }: AttendanceStatsProps) {
                 {getLateSeverity(lateDays) === 'warning' && (
                   <Badge
                     variant="outline"
-                    className="bg-orange-50 dark:bg-orange-950 text-orange-700 dark:text-orange-300 border-orange-200 dark:border-orange-800"
+                    className="bg-warning/10 text-warning-text border-warning/30"
                   >
                     Needs Improvement
                   </Badge>
@@ -242,7 +248,7 @@ export function AttendanceStats({ year, month }: AttendanceStatsProps) {
                 {getLateSeverity(lateDays) === 'error' && (
                   <Badge
                     variant="outline"
-                    className="bg-red-50 dark:bg-red-950 text-red-700 dark:text-red-300 border-red-200 dark:border-red-800"
+                    className="bg-destructive/10 text-destructive-text border-destructive/30"
                   >
                     Action Required
                   </Badge>
@@ -263,10 +269,10 @@ export function AttendanceStats({ year, month }: AttendanceStatsProps) {
               <div
                 className={`text-3xl font-bold ${
                   absentDays === 0
-                    ? 'text-green-700 dark:text-green-400'
+                    ? 'text-success-text'
                     : absentDays <= 1
-                      ? 'text-orange-700 dark:text-orange-400'
-                      : 'text-red-600 dark:text-red-400'
+                      ? 'text-warning-text'
+                      : 'text-destructive-text'
                 }`}
               >
                 {absentDays}
@@ -278,7 +284,7 @@ export function AttendanceStats({ year, month }: AttendanceStatsProps) {
                 {absentDays === 0 && (
                   <Badge
                     variant="outline"
-                    className="bg-green-50 dark:bg-green-950 text-green-700 dark:text-green-300 border-green-200 dark:border-green-800"
+                    className="bg-success/10 text-success-text border-success/30"
                   >
                     Perfect Record
                   </Badge>
@@ -286,7 +292,7 @@ export function AttendanceStats({ year, month }: AttendanceStatsProps) {
                 {absentDays > 0 && absentDays <= 1 && (
                   <Badge
                     variant="outline"
-                    className="bg-orange-50 dark:bg-orange-950 text-orange-700 dark:text-orange-300 border-orange-200 dark:border-orange-800"
+                    className="bg-warning/10 text-warning-text border-warning/30"
                   >
                     Good
                   </Badge>
@@ -294,7 +300,7 @@ export function AttendanceStats({ year, month }: AttendanceStatsProps) {
                 {absentDays > 1 && (
                   <Badge
                     variant="outline"
-                    className="bg-red-50 dark:bg-red-950 text-red-700 dark:text-red-300 border-red-200 dark:border-red-800"
+                    className="bg-destructive/10 text-destructive-text border-destructive/30"
                   >
                     Review Required
                   </Badge>
@@ -315,11 +321,11 @@ export function AttendanceStats({ year, month }: AttendanceStatsProps) {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div className="space-y-1">
                 <p className="text-sm text-muted-foreground">Present Days</p>
-                <p className="text-2xl font-bold text-green-700 dark:text-green-400">{analytics.presentDays}</p>
+                <p className="text-2xl font-bold text-success-text">{analytics.presentDays}</p>
               </div>
               <div className="space-y-1">
                 <p className="text-sm text-muted-foreground">Late Days</p>
-                <p className="text-2xl font-bold text-orange-700 dark:text-orange-400">{analytics.lateDays}</p>
+                <p className="text-2xl font-bold text-warning-text">{analytics.lateDays}</p>
               </div>
               <div className="space-y-1">
                 <p className="text-sm text-muted-foreground">Half Days</p>
@@ -327,7 +333,7 @@ export function AttendanceStats({ year, month }: AttendanceStatsProps) {
               </div>
               <div className="space-y-1">
                 <p className="text-sm text-muted-foreground">Leave Days</p>
-                <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">{analytics.leaveDays}</p>
+                <p className="text-2xl font-bold text-info-text">{analytics.leaveDays}</p>
               </div>
             </div>
           </CardContent>

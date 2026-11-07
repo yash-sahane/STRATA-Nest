@@ -23,7 +23,7 @@ export const QUERY_KEYS = {
         // must not drop it: it is the same answer either side of the switch, and
         // evicting it made every permission-gated control on the destination page
         // flip to "loading" and then re-fetch for no gain.
-        MY_MEMBERSHIPS: ['my-memberships'],
+        MY_ACCESS: ['my-access'],
         // A person's notifications, keyed on THEM: both notification queries
         // filter by userId alone and never by workspace, so the same rows are
         // correct either side of a switch. Evicting them was not just wasted

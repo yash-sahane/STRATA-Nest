@@ -126,7 +126,7 @@ export function ResourceAllocationCard({
               return (
                 <div
                   key={member.userId}
-                  className="space-y-2 p-3 transition-colors hover:bg-muted/30"
+                  className="space-y-2 p-3"
                 >
                   <div className="flex items-center justify-between gap-3">
                     {/* `min-w-0`, or this row cannot shrink. A flex item's automatic
@@ -142,7 +142,7 @@ export function ResourceAllocationCard({
                       </Avatar>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
-                          <p className="text-sm font-medium truncate">{member.userName}</p>
+                          <p className="text-sm font-medium truncate" title={member.userName}>{member.userName}</p>
                           <Badge
                             variant="outline"
                             className={cn('text-xs', getWorkloadBgColor(member.workloadPercentage))}
@@ -169,7 +169,7 @@ export function ResourceAllocationCard({
                     indicatorClassName={getWorkloadBarColor(member.workloadPercentage)}
                   />
                   {member.workloadPercentage > 100 && (
-                    <p className="flex items-center gap-1 text-xs text-orange-700 dark:text-orange-400">
+                    <p className="flex items-center gap-1 text-xs text-warning-text">
                       <AlertTriangle className="h-3 w-3" />
                       Overloaded by {member.workloadPercentage - 100}%
                     </p>

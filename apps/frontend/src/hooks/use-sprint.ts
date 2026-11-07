@@ -1,11 +1,10 @@
 ﻿import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { resources } from '@/lib/api/client';
-import { query, id } from '@/lib/api/client';
+import { query } from '@/lib/api/client';
 import { restClient } from '@/lib/api/rest-client';
-import type { EditBasedOn, Sprint, Task } from '@/types';
-import { toast } from '@/hooks/use-toast';
-import { createBulkNotifications } from '@/hooks/use-notification';
-import { saveFailureToast } from '@/lib/api/mutation-error';
+import type { EditBasedOn, Sprint } from '@/types';
+import { showSaveFailure } from '@/lib/api/mutation-error';
+import { toast } from 'sonner';
 
 export function useSprints(projectId?: string) {
   return useQuery({
@@ -43,24 +42,6 @@ export function useWorkspaceSprints(workspaceId?: string) {
   });
 }
 
-export function useActiveSprint(projectId?: string) {
-  return useQuery({
-    queryKey: ['sprint', 'active', projectId],
-    queryFn: async () => {
-      if (!projectId) return null;
-
-      const response = await resources.list('sprints', [
-        query.equal('projectId', projectId),
-        query.equal('status', 'ACTIVE'),
-        query.limit(1),
-      ]);
-
-      return response.items.length > 0 ? (response.items[0] as unknown as Sprint) : null;
-    },
-    enabled: !!projectId,
-  });
-}
-
 export function useSprint(sprintId?: string) {
   return useQuery({
     queryKey: ['sprint', sprintId],
@@ -89,7 +70,7 @@ export function useCreateSprint() {
       createdBy: string;
       createdByName?: string;
     }) => {
-      const response = await resources.create('sprints', id.unique(),
+      const response = await resources.create('sprints',
         {
           workspaceId: data.workspaceId,
           projectId: data.projectId,
@@ -108,18 +89,10 @@ export function useCreateSprint() {
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['sprints', variables.projectId] });
-      toast({
-        title: 'Sprint created',
-        description: 'The sprint has been created successfully.',
-      });
+      toast.success('Sprint created', { description: 'The sprint has been created successfully.' });
     },
     onError: (error: unknown) => {
-      toast({
-        title: 'Error',
-        description:
-          (error instanceof Error ? error.message : String(error)) || 'Failed to create sprint',
-        variant: 'destructive',
-      });
+      toast.error('Failed to create sprint', { description: error instanceof Error ? error.message : String(error) });
     },
   });
 }
@@ -151,13 +124,10 @@ export function useUpdateSprint() {
       queryClient.invalidateQueries({ queryKey: ['sprint', variables.sprintId] });
       queryClient.invalidateQueries({ queryKey: ['sprints', data.projectId] });
       queryClient.invalidateQueries({ queryKey: ['sprint', 'active', data.projectId] });
-      toast({
-        title: 'Sprint updated',
-        description: 'The sprint has been updated successfully.',
-      });
+      toast.success('Sprint updated', { description: 'The sprint has been updated successfully.' });
     },
     onError: (error: unknown) => {
-      toast(saveFailureToast(error, 'Failed to update sprint'));
+      showSaveFailure(error, 'Failed to update sprint');
     },
   });
 }
@@ -173,18 +143,10 @@ export function useDeleteSprint() {
       queryClient.invalidateQueries({ queryKey: ['sprints', variables.projectId] });
       queryClient.invalidateQueries({ queryKey: ['sprint', variables.sprintId] });
       queryClient.invalidateQueries({ queryKey: ['sprint', 'active', variables.projectId] });
-      toast({
-        title: 'Sprint deleted',
-        description: 'The sprint has been deleted successfully.',
-      });
+      toast.success('Sprint deleted', { description: 'The sprint has been deleted successfully.' });
     },
     onError: (error: unknown) => {
-      toast({
-        title: 'Error',
-        description:
-          (error instanceof Error ? error.message : String(error)) || 'Failed to delete sprint',
-        variant: 'destructive',
-      });
+      toast.error('Failed to delete sprint', { description: error instanceof Error ? error.message : String(error) });
     },
   });
 }
@@ -193,104 +155,23 @@ export function useStartSprint() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({
-      sprintId,
-      // projectId,
-    }: {
-      sprintId: string;
-      projectId: string;
-      teamMemberIds?: string[];
-      taskCount?: number;
-    }) => {
-      // 1. Update sprint status to ACTIVE
-      const response = await resources.update('sprints', sprintId,
-        { status: 'ACTIVE' }
-      );
-
-      // 2. Find all tasks linked to this sprint that are in BACKLOG
-      // Tasks get their sprintId set when their FR is assigned to a sprint
-      const sprintTasksResponse = await resources.listAll('tasks', [
-        query.equal('sprintId', sprintId),
-        query.equal('status', 'BACKLOG'),
-      ]);
-      const tasksToUpdate = sprintTasksResponse.items as unknown as Task[];
-
-      // Collect assignees to notify
-      const assigneesToNotify = new Set<string>();
-      tasksToUpdate.forEach((task) => {
-        if (task.assignedTo && Array.isArray(task.assignedTo)) {
-          task.assignedTo.forEach((userId: string) => {
-            if (userId && userId.trim()) assigneesToNotify.add(userId);
-          });
-        }
-      });
-
-      // 3. Update all tasks to TODO status
-      const updatePromises = tasksToUpdate.map((task) =>
-        resources.update('tasks', task.id, {
-          status: 'TODO',
-        })
-      );
-
-      await Promise.all(updatePromises);
-
-      // Return sprint and metadata for notifications
-      return {
-        sprint: response as unknown as Sprint,
-        tasksUpdated: tasksToUpdate.length,
-        assigneeIds: Array.from(assigneesToNotify),
-      };
-    },
-    onSuccess: async (
-      result: { sprint: Sprint; tasksUpdated: number; assigneeIds: string[] },
-      variables: {
-        sprintId: string;
-        projectId: string;
-        teamMemberIds?: string[];
-        taskCount?: number;
-      }
-    ) => {
-      const { sprint, tasksUpdated, assigneeIds } = result;
-
+    // One request. Starting a sprint also moves its planned tasks from Backlog
+    // to To Do and tells the team — both used to be done from here, task by task
+    // and person by person, so a tab closed part-way left a started sprint with
+    // its work still parked. The API does both as part of the start now.
+    mutationFn: async ({ sprintId }: { sprintId: string; projectId: string }) =>
+      (await resources.update('sprints', sprintId, { status: 'ACTIVE' })) as unknown as Sprint,
+    onSuccess: (_sprint, variables) => {
       queryClient.invalidateQueries({ queryKey: ['sprint', variables.sprintId] });
       queryClient.invalidateQueries({ queryKey: ['sprints', variables.projectId] });
       queryClient.invalidateQueries({ queryKey: ['sprint', 'active', variables.projectId] });
-      // Also invalidate tasks since we updated their status to TODO
+      // The sprint's tasks just moved to To Do on the server.
       queryClient.invalidateQueries({ queryKey: ['tasks', variables.projectId] });
 
-      // Combine team member IDs from variables with assignees from tasks
-      const allNotifyIds = new Set<string>([...(variables.teamMemberIds || []), ...assigneeIds]);
-      const uniqueNotifyIds = Array.from(allNotifyIds).filter((id) => id && id.trim());
-
-      // Send SPRINT_STARTED notifications to all team members and assigned users
-      if (uniqueNotifyIds.length > 0) {
-        await createBulkNotifications({
-          workspaceId: sprint.workspaceId,
-          userIds: uniqueNotifyIds,
-          type: 'SPRINT_STARTED',
-          data: {
-            sprintName: sprint.name,
-            sprintGoal: sprint.goal,
-            startDate: sprint.startDate,
-            endDate: sprint.endDate,
-            taskCount: tasksUpdated || variables.taskCount || 0,
-            sprintId: sprint.id,
-          },
-        });
-      }
-
-      toast({
-        title: 'Sprint started',
-        description: `The sprint is now active. ${tasksUpdated} task(s) moved to TODO.`,
-      });
+      toast.success('Sprint started', { description: 'The sprint is now active and its planned tasks are in To Do.' });
     },
     onError: (error: unknown) => {
-      toast({
-        title: 'Error',
-        description:
-          (error instanceof Error ? error.message : String(error)) || 'Failed to start sprint',
-        variant: 'destructive',
-      });
+      toast.error('Failed to start sprint', { description: error instanceof Error ? error.message : String(error) });
     },
   });
 }
@@ -306,9 +187,6 @@ export function useCompleteSprint() {
       sprintId: string;
       projectId: string;
       retrospectiveNotes?: string;
-      teamMemberIds?: string[];
-      completedTasks?: number;
-      totalTasks?: number;
     }) => {
       // POST /sprints/:id/complete is the transactional path: it guards against
       // completing twice, seeds the retrospective and emits SprintCompleted —
@@ -330,47 +208,26 @@ export function useCompleteSprint() {
         sprintId: string;
         projectId: string;
         retrospectiveNotes?: string;
-        teamMemberIds?: string[];
-        completedTasks?: number;
-        totalTasks?: number;
       }
     ) => {
       queryClient.invalidateQueries({ queryKey: ['sprint', variables.sprintId] });
       queryClient.invalidateQueries({ queryKey: ['sprints', variables.projectId] });
       queryClient.invalidateQueries({ queryKey: ['sprint', 'active', variables.projectId] });
-      // Completion rolls unfinished tasks out of the sprint server-side.
+      // Completion rolls unfinished tasks out of the sprint server-side — and
+      // the requirements they belong to, which go back to the FR backlog.
       queryClient.invalidateQueries({ queryKey: ['tasks', variables.projectId] });
+      queryClient.invalidateQueries({ queryKey: ['functional-requirements'] });
 
-      // Send SPRINT_COMPLETED notifications to team members
-      if (variables.teamMemberIds && variables.teamMemberIds.length > 0) {
-        await createBulkNotifications({
-          workspaceId: sprint.workspaceId,
-          userIds: variables.teamMemberIds,
-          type: 'SPRINT_COMPLETED',
-          data: {
-            sprintName: sprint.name,
-            completedTasks: variables.completedTasks || 0,
-            totalTasks: variables.totalTasks || 0,
-            completionRate: variables.totalTasks
-              ? Math.round(((variables.completedTasks || 0) / variables.totalTasks) * 100)
-              : 0,
-            sprintId: sprint.id,
-          },
-        });
-      }
-
-      toast({
-        title: 'Sprint completed',
-        description: 'The sprint has been marked as completed.',
-      });
+      // What the server recorded as it closed the sprint, not a client count.
+      const done = sprint.completedTaskCount ?? 0;
+      const total = sprint.totalTaskCount ?? 0;
+      const rolled = sprint.rolledOverTaskCount ?? 0;
+      toast.success('Sprint completed', { description: rolled > 0
+            ? `${done} of ${total} tasks done. ${rolled} unfinished ${rolled === 1 ? 'task' : 'tasks'} left the sprint with ${rolled === 1 ? 'its requirement' : 'their requirements'}, to be planned again.`
+            : `${done} of ${total} tasks done.` });
     },
     onError: (error: unknown) => {
-      toast({
-        title: 'Error',
-        description:
-          (error instanceof Error ? error.message : String(error)) || 'Failed to complete sprint',
-        variant: 'destructive',
-      });
+      toast.error('Failed to complete sprint', { description: error instanceof Error ? error.message : String(error) });
     },
   });
 }

@@ -1,23 +1,23 @@
 'use client';
 
-import { PageHeader } from '@/components/layout/page-header';
+import { getSprintStatusConfig } from '@/lib/semantic/status';
+import { SprintHeader, SprintUnavailable } from '@/components/sprints/sprint-header';
+import { sprintFigures, sprintSchedule } from '@/lib/sprint-figures';
 import { PageLoader } from '@/components/ui/page-loader';
 import { ErrorState } from '@/components/ui/error-state';
 
 import * as React from 'react';
-import { useParams, useRouter } from 'next/navigation';
-import { useSprint } from '@/hooks/use-sprint';
+import { useParams } from 'next/navigation';
+import { useSprint, useUpdateSprint } from '@/hooks/use-sprint';
 import { useTasks } from '@/hooks/use-task';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { ArrowLeft, TrendingUp, Target, Zap, CheckCircle2, Clock } from 'lucide-react';
+import { TrendingUp, Target, Zap, CheckCircle2, Clock, Eye } from 'lucide-react';
 import {
   LineChart,
   Line,
-  BarChart,
-  Bar,
   PieChart,
   Pie,
   Cell,
@@ -35,13 +35,17 @@ import { ChartEmptyState } from '@/components/analytics/chart-empty-state';
 import { ChartTooltip } from '@/components/analytics/chart-tooltip';
 import { completionDate } from '@/components/sprints/burndown-chart';
 import {
-  differenceInDays,
   eachDayOfInterval,
   endOfDay,
   format as formatDateFns,
   parseISO,
   startOfDay,
 } from 'date-fns';
+import { Textarea } from '@/components/ui/textarea';
+import { useHasPermission } from '@/hooks/use-permissions';
+import { Permission } from '@/lib/permissions';
+import { basedOnFor } from '@/lib/utils/changed-fields';
+import { useSprintsRealtime, useTasksRealtime } from '@/hooks/use-realtime';
 
 // Design tokens rather than raw hex, so this page speaks the same color language
 // as /analytics and adapts to dark mode.
@@ -62,16 +66,25 @@ const renderPercentLabel = ({ percent }: { percent?: number }) =>
 
 export default function SprintAnalyticsPage() {
   const params = useParams();
-  const router = useRouter();
   const sprintId = params.id as string;
 
   const {
     data: sprint,
     isLoading: sprintLoading,
     isError: sprintError,
+    error: sprintLoadError,
     refetch: refetchSprint,
   } = useSprint(sprintId);
-  const { data: allTasks, isLoading: tasksLoading } = useTasks(sprint?.projectId);
+  // Whoever may edit the sprint may write its retrospective.
+  const canEditSprint = useHasPermission(Permission.EDIT_SPRINT);
+  useSprintsRealtime(sprint?.projectId);
+  useTasksRealtime(sprint?.projectId);
+  const {
+    data: allTasks,
+    isLoading: tasksLoading,
+    isError: tasksError,
+    refetch: refetchTasks,
+  } = useTasks(sprint?.projectId);
 
   // Filter tasks for this sprint
   const sprintTasks = React.useMemo(() => {
@@ -87,46 +100,37 @@ export default function SprintAnalyticsPage() {
   // completion rate. The snapshot the server takes inside the closing
   // transaction is the real record, and is used in preference where present.
   const metrics = React.useMemo(() => {
-    const total = sprintTasks.length;
-    const completed = sprintTasks.filter((t) => t.status === 'DONE').length;
-    const inProgress = sprintTasks.filter(
-      (t) => t.status === 'IN_PROGRESS' || t.status === 'REVIEW'
-    ).length;
-    const todo = sprintTasks.filter((t) => t.status === 'TODO' || t.status === 'BACKLOG').length;
+    const count = (status: string) => sprintTasks.filter((t) => t.status === status).length;
 
-    const isClosed = sprint?.status === 'COMPLETED';
-    const snapTotal = sprint?.totalTaskCount;
-    const snapDone = sprint?.completedTaskCount;
-    const hasSnapshot =
-      isClosed && typeof snapTotal === 'number' && typeof snapDone === 'number';
-
-    if (hasSnapshot) {
+    // The board and the list give the same figures (sprintFigures).
+    const figures = sprintFigures(sprint, sprintTasks);
+    if (figures.source === 'snapshot') {
       return {
-        total: snapTotal as number,
-        completed: snapDone as number,
+        ...figures,
         // The sprint is closed: nothing is in progress in it any more, and the
-        // rest was rolled back to the backlog.
+        // rest left it to be planned again.
+        backlog: 0,
+        todo: 0,
         inProgress: 0,
-        todo: Math.max(0, (snapTotal as number) - (snapDone as number)),
-        completionRate:
-          (snapTotal as number) > 0
-            ? Math.round(((snapDone as number) / (snapTotal as number)) * 100)
-            : 0,
-        velocity: snapDone as number,
-        source: 'snapshot' as const,
+        review: 0,
+        rolledOver: Math.max(0, figures.total - figures.completed),
+        velocity: figures.completed,
       };
     }
-
+    const completed = count('DONE');
     return {
-      total,
+      ...figures,
+      total: sprintTasks.length,
       completed,
-      inProgress,
-      todo,
-      completionRate: total > 0 ? Math.round((completed / total) * 100) : 0,
+      // The board's columns, each its own. Review used to be counted as In
+      // Progress here, so this page said 4 in progress beside a board showing
+      // In Progress 2 and In Review 2.
+      backlog: count('BACKLOG'),
+      todo: count('TODO'),
+      inProgress: count('IN_PROGRESS'),
+      review: count('REVIEW'),
+      rolledOver: 0,
       velocity: completed, // velocity expressed as completed tasks
-      // A sprint closed before the snapshot existed has no trustworthy figures.
-      // Saying so beats printing the 100% the old filter produced.
-      source: isClosed ? ('unrecorded' as const) : ('live' as const),
     };
   }, [sprintTasks, sprint]);
 
@@ -165,17 +169,16 @@ export default function SprintAnalyticsPage() {
     });
   }, [sprint, metrics, sprintTasks]);
 
-  // Status Distribution
+  // Status Distribution, in the board's columns and words.
   const statusData = [
+    { name: 'Backlog', value: metrics.backlog, color: STATUS_COLORS.BACKLOG },
+    { name: 'To Do', value: metrics.todo, color: STATUS_COLORS.TODO },
+    { name: 'In Progress', value: metrics.inProgress, color: STATUS_COLORS.IN_PROGRESS },
+    { name: 'In Review', value: metrics.review, color: STATUS_COLORS.REVIEW },
+    { name: 'Completed', value: metrics.completed, color: STATUS_COLORS.DONE },
     // On a closed sprint the leftovers were not left "To Do" in it — they were
     // rolled back to the backlog when it closed.
-    {
-      name: metrics.source === 'snapshot' ? 'Rolled over' : 'To Do',
-      value: metrics.todo,
-      color: STATUS_COLORS.TODO,
-    },
-    { name: 'In Progress', value: metrics.inProgress, color: STATUS_COLORS.IN_PROGRESS },
-    { name: 'Completed', value: metrics.completed, color: STATUS_COLORS.DONE },
+    { name: 'Rolled over', value: metrics.rolledOver, color: STATUS_COLORS.TODO },
   ].filter((item) => item.value > 0);
 
   // Priority Distribution
@@ -196,93 +199,51 @@ export default function SprintAnalyticsPage() {
     ].filter((item) => item.value > 0);
   }, [sprintTasks]);
 
-  // Tasks by Status
-  const tasksByStatusData = React.useMemo(() => {
-    const byStatus = sprintTasks.reduce(
-      (acc, task) => {
-        const status =
-          task.status === 'DONE'
-            ? 'Completed'
-            : task.status === 'IN_PROGRESS' || task.status === 'REVIEW'
-              ? 'In Progress'
-              : 'To Do';
-        acc[status] = (acc[status] || 0) + 1;
-        return acc;
-      },
-      {} as Record<string, number>
-    );
-
-    return [
-      { name: 'To Do', value: byStatus['To Do'] || 0 },
-      { name: 'In Progress', value: byStatus['In Progress'] || 0 },
-      { name: 'Completed', value: byStatus['Completed'] || 0 },
-    ];
-  }, [sprintTasks]);
-
-  // Days remaining. `differenceInDays` excludes the start day while the burndown
-  // uses an inclusive interval, so +1 keeps the two readouts on this page from
-  // contradicting each other (and makes a single-day sprint read "1 day").
-  const daysRemaining = sprint ? differenceInDays(parseISO(sprint.endDate), new Date()) : 0;
-  const totalDays = sprint
-    ? differenceInDays(parseISO(sprint.endDate), parseISO(sprint.startDate)) + 1
-    : 0;
-  const daysPassed = Math.min(totalDays, Math.max(0, totalDays - daysRemaining));
-
   if (sprintLoading || tasksLoading) {
     return <PageLoader message="Loading sprint analytics..." />;
   }
 
-  // isError BEFORE the not-found branch. A 500 (or an offline blip) leaves
-  // `sprint` undefined exactly like a deleted sprint does, so every sub-page
-  // told the user a sprint that plainly exists was "Sprint not found" — a
-  // dead end with nothing to retry.
-  if (sprintError) {
+  // isError BEFORE the not-found branch: a 500 or an offline blip leaves
+  // `sprint` undefined exactly like a deleted sprint does. SprintUnavailable
+  // tells the two apart — a retry for the blip, a way back for the 404.
+  if (sprintError || !sprint) {
     return (
-      <ErrorState
-        className="mt-10"
-        title="Couldn't load this sprint"
-        description="The sprint is still there — this is a connection problem."
+      <SprintUnavailable
+        error={sprintError ? sprintLoadError : null}
         onRetry={() => void refetchSprint()}
       />
     );
   }
 
-  if (!sprint) {
+  const header = (
+    <SprintHeader sprint={sprint} current="analytics" description="How the sprint is going: progress, burndown and who is doing what" />
+  );
+
+  // Every figure below is counted from the tasks: without them each would read
+  // 0, which is a claim about the sprint rather than a failure to load it.
+  if (tasksError && !allTasks) {
     return (
-      <div className="flex flex-col items-center justify-center h-[50vh]">
-        <p className="text-muted-foreground mb-4">Sprint not found</p>
-        <Button onClick={() => router.push('/sprints')}>
-          <ArrowLeft className="mr-2 h-4 w-4" />
-          Back to Sprints
-        </Button>
+      <div className="space-y-6">
+        {header}
+        <ErrorState
+          title="Couldn't load this sprint's tasks"
+          description="Its figures are counted from them. This is a connection or server problem — try again."
+          onRetry={() => void refetchTasks()}
+        />
       </div>
     );
   }
 
+  // Where the sprint is in its dates, in calendar days with today counted
+  // (sprintSchedule). One still open past its last day is overdue, and says by
+  // how much rather than "0 days" under a full bar.
+  const schedule = sprintSchedule(sprint);
+  const overdue = sprint.status !== 'COMPLETED' && schedule.endedDaysAgo > 0;
+
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <Button variant="ghost" size="sm" onClick={() => router.push('/sprints')} className="mb-4">
-          <ArrowLeft className="mr-2 h-4 w-4" />
-          Back to Sprints
-        </Button>
-
-        <PageHeader
-          title={`${sprint.name} Analytics`}
-          description="Sprint performance metrics and insights"
-          actions={
-            <>
-              <Button variant="outline" onClick={() => router.push(`/sprints/${sprintId}/backlog`)}>
-                Open Backlog
-              </Button>
-              <Button variant="outline" onClick={() => router.push(`/sprints/${sprintId}/board`)}>
-                Open Board
-              </Button>
-            </>
-          }
-        />
-      </div>
+      {/* Header — shared by the sprint's three views. */}
+      {header}
 
       {/* Sprint Info */}
       <Card>
@@ -290,7 +251,7 @@ export default function SprintAnalyticsPage() {
           <div className="grid gap-6 md:grid-cols-3">
             <div>
               <p className="text-sm text-muted-foreground mb-1">Sprint Duration</p>
-              <p className="text-2xl font-bold">{plural(totalDays, 'day')}</p>
+              <p className="text-2xl font-bold">{plural(schedule.totalDays, 'day')}</p>
               <p className="text-xs text-muted-foreground mt-1">
                 {formatDateFns(parseISO(sprint.startDate), 'MMM d, yyyy')} -{' '}
                 {formatDateFns(parseISO(sprint.endDate), 'MMM d, yyyy')}
@@ -298,9 +259,53 @@ export default function SprintAnalyticsPage() {
             </div>
             <div>
               <p className="text-sm text-muted-foreground mb-1">Days Remaining</p>
-              <p className="text-2xl font-bold">{plural(Math.max(0, daysRemaining), 'day')}</p>
+              {sprint.status === 'COMPLETED' ? (
+                <>
+                  <p className="text-2xl font-bold">Closed</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {sprint.completedAt
+                      ? `Completed ${formatDateFns(new Date(sprint.completedAt), 'MMM d, yyyy')}`
+                      : 'This sprint has been completed'}
+                  </p>
+                </>
+              ) : overdue ? (
+                <>
+                  <p className="text-2xl font-bold text-warning-text">
+                    Ended {plural(schedule.endedDaysAgo, 'day')} ago
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {sprint.status === 'ACTIVE'
+                      ? 'Overdue — still active past its last day. Complete it to record the result.'
+                      : 'Its dates have passed without it being started.'}
+                  </p>
+                </>
+              ) : schedule.startsInDays > 0 ? (
+                <>
+                  <p className="text-2xl font-bold">{plural(schedule.totalDays, 'day')}</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {schedule.startsInDays === 1
+                      ? 'Starts tomorrow'
+                      : `Starts in ${plural(schedule.startsInDays, 'day')}`}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-2xl font-bold">
+                    {schedule.daysRemaining === 1 ? 'Last day' : plural(schedule.daysRemaining, 'day')}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Day {schedule.daysElapsed} of {schedule.totalDays}
+                  </p>
+                </>
+              )}
               <Progress
-                value={totalDays > 0 ? (daysPassed / totalDays) * 100 : 0}
+                aria-label="Sprint time elapsed"
+                value={
+                  sprint.status === 'COMPLETED' || overdue
+                    ? 100
+                    : (schedule.daysElapsed / schedule.totalDays) * 100
+                }
+                indicatorClassName={overdue ? 'bg-warning' : undefined}
                 className="mt-2"
               />
             </div>
@@ -310,7 +315,7 @@ export default function SprintAnalyticsPage() {
                 className="text-sm"
                 variant={sprint.status === 'ACTIVE' ? 'default' : 'secondary'}
               >
-                {sprint.status}
+                {getSprintStatusConfig(sprint.status).label}
               </Badge>
               {sprint.goal && (
                 <p className="text-xs text-muted-foreground mt-2 line-clamp-2">
@@ -323,7 +328,7 @@ export default function SprintAnalyticsPage() {
       </Card>
 
       {/* Key Metrics */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-5">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Completion Rate</CardTitle>
@@ -362,14 +367,24 @@ export default function SprintAnalyticsPage() {
         {/* "Capacity Used" used to live here, but it restated Completion Rate
             exactly (completed/total) under a label implying team capacity — and
             no capacity field exists on Sprint. Show remaining work instead. */}
+        {/* On a closed sprint nothing is waiting to start in it: what was
+            unfinished left it, back to the backlog. */}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Not Started</CardTitle>
+            <CardTitle className="text-sm font-medium">
+              {metrics.source === 'snapshot' ? 'Rolled Over' : 'Not Started'}
+            </CardTitle>
             <Target className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{metrics.todo}</div>
-            <p className="text-xs text-muted-foreground">Tasks still in To Do / Backlog</p>
+            <div className="text-2xl font-bold">
+              {metrics.source === 'snapshot' ? metrics.rolledOver : metrics.backlog + metrics.todo}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {metrics.source === 'snapshot'
+                ? 'Unfinished when it closed, back in the backlog'
+                : 'Tasks still in To Do / Backlog'}
+            </p>
           </CardContent>
         </Card>
 
@@ -383,72 +398,66 @@ export default function SprintAnalyticsPage() {
             <p className="text-xs text-muted-foreground">Tasks being worked on</p>
           </CardContent>
         </Card>
-      </div>
 
-      {/* Charts Row 1 */}
-      <div className="grid gap-6 md:grid-cols-2">
-        {/* Burndown Chart */}
         <Card>
-          <CardHeader>
-            <CardTitle>Burndown Chart</CardTitle>
-            <CardDescription>Ideal vs actual tasks remaining</CardDescription>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">In Review</CardTitle>
+            <Eye className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={burndownData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="date" />
-                <YAxis />
-                <Tooltip content={<ChartTooltip />} />
-                <Legend formatter={legendLabel} />
-                <Line
-                  type="monotone"
-                  dataKey="ideal"
-                  stroke={COLORS.secondary}
-                  strokeDasharray="5 5"
-                  name="Ideal"
-                />
-                <Line
-                  type="monotone"
-                  dataKey="actual"
-                  stroke={COLORS.primary}
-                  strokeWidth={2}
-                  name="Actual"
-                  connectNulls
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-
-        {/* Tasks by Status */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Tasks Distribution</CardTitle>
-            <CardDescription>Tasks by current status</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={tasksByStatusData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" />
-                <YAxis />
-                <Tooltip content={<ChartTooltip />} />
-                <Legend formatter={legendLabel} />
-                <Bar dataKey="value" fill={COLORS.primary} name="Tasks" />
-              </BarChart>
-            </ResponsiveContainer>
+            <div className="text-2xl font-bold">{metrics.review}</div>
+            <p className="text-xs text-muted-foreground">Tasks waiting on a review</p>
           </CardContent>
         </Card>
       </div>
 
-      {/* Charts Row 2 */}
+      {/* Burndown Chart — the full width: it is the one chart here read over time. */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Burndown Chart</CardTitle>
+          <CardDescription>Ideal vs actual tasks remaining</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ResponsiveContainer width="100%" height={300}>
+            <LineChart data={burndownData}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="date" />
+              <YAxis />
+              <Tooltip content={<ChartTooltip />} />
+              <Legend formatter={legendLabel} />
+              <Line
+                type="monotone"
+                dataKey="ideal"
+                stroke={COLORS.secondary}
+                strokeDasharray="5 5"
+                name="Ideal"
+              />
+              <Line
+                type="monotone"
+                dataKey="actual"
+                stroke={COLORS.primary}
+                strokeWidth={2}
+                name="Actual"
+                connectNulls
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+
+      {/* The status split used to be drawn twice: a bar chart of three of these
+          numbers and this pie of the same three. One is kept — the pie, in the
+          board's columns and colours. */}
       <div className="grid gap-6 md:grid-cols-2">
         {/* Status Distribution */}
         <Card>
           <CardHeader>
             <CardTitle>Task Status Distribution</CardTitle>
-            <CardDescription>Breakdown of tasks by current status</CardDescription>
+            <CardDescription>
+              {metrics.source === 'snapshot'
+                ? 'The tasks as the sprint closed'
+                : "The sprint's tasks by board column"}
+            </CardDescription>
           </CardHeader>
           <CardContent>
             {statusData.length === 0 ? (
@@ -512,7 +521,7 @@ export default function SprintAnalyticsPage() {
       </div>
 
       {/* Sprint Goal & Retrospective */}
-      {(sprint.goal || sprint.retrospectiveNotes) && (
+      {(sprint.goal || sprint.retrospectiveNotes || canEditSprint) && (
         <div className="grid gap-6 md:grid-cols-2">
           {sprint.goal && (
             <Card>
@@ -527,21 +536,112 @@ export default function SprintAnalyticsPage() {
               </CardContent>
             </Card>
           )}
-          {sprint.retrospectiveNotes && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <TrendingUp className="h-5 w-5" />
-                  Retrospective Notes
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm whitespace-pre-wrap">{sprint.retrospectiveNotes}</p>
-              </CardContent>
-            </Card>
+          {(sprint.retrospectiveNotes || canEditSprint) && (
+            <RetrospectiveNotes sprint={sprint} canEdit={canEditSprint} />
           )}
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * What the team took away from the sprint.
+ *
+ * The notes live on the sprint itself, and until now nothing could write them:
+ * completing a sprint is a one-click confirmation, the edit dialog has no such
+ * field, and this card only ever appeared once notes existed — which they never
+ * could. Anyone who may edit the sprint writes them here, before or after it
+ * closes.
+ */
+function RetrospectiveNotes({
+  sprint,
+  canEdit,
+}: {
+  sprint: { id: string; retrospectiveNotes?: string };
+  canEdit: boolean;
+}) {
+  const updateSprint = useUpdateSprint();
+  const [editing, setEditing] = React.useState(false);
+  const [draft, setDraft] = React.useState('');
+  const stored = sprint.retrospectiveNotes ?? '';
+
+  const startEditing = () => {
+    setDraft(stored);
+    setEditing(true);
+  };
+
+  const save = async () => {
+    const retrospectiveNotes = draft.trim();
+    if (retrospectiveNotes === stored) {
+      setEditing(false);
+      return;
+    }
+    try {
+      await updateSprint.mutateAsync({
+        sprintId: sprint.id,
+        updates: {
+          retrospectiveNotes,
+          // What the notes said when editing began, so two people writing at
+          // once are told rather than one silently replacing the other.
+          basedOn: basedOnFor(sprint as unknown as Record<string, unknown>, {
+            retrospectiveNotes,
+          }),
+        } as Parameters<typeof updateSprint.mutateAsync>[0]['updates'],
+      });
+      setEditing(false);
+    } catch {
+      // the mutation toasts the reason; keep what was typed
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
+        <CardTitle className="flex items-center gap-2">
+          <TrendingUp className="h-5 w-5" />
+          Retrospective Notes
+        </CardTitle>
+        {canEdit && !editing && (
+          <Button variant="outline" size="sm" onClick={startEditing}>
+            {stored ? 'Edit' : 'Add Notes'}
+          </Button>
+        )}
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {editing ? (
+          <>
+            <Textarea
+              aria-label="Retrospective notes"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder="What went well, what to change next time, and what the team will do about it."
+              className="min-h-32"
+              maxLength={5000}
+              autoFocus
+            />
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setEditing(false)}
+                disabled={updateSprint.isPending}
+              >
+                Cancel
+              </Button>
+              <Button size="sm" onClick={save} disabled={updateSprint.isPending}>
+                {updateSprint.isPending ? 'Saving...' : 'Save Notes'}
+              </Button>
+            </div>
+          </>
+        ) : stored ? (
+          <p className="text-sm whitespace-pre-wrap">{stored}</p>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Nothing written yet. Record what went well and what to change next time.
+          </p>
+        )}
+      </CardContent>
+    </Card>
   );
 }

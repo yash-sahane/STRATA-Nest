@@ -70,13 +70,9 @@ export function setWorkspaceTimeZone(timeZone: string | null | undefined): void 
   workspaceTimeZone = clean(timeZone);
 }
 
-/**
- * Kept for the original caller in auth-client, which supplies the SERVER's zone.
- *
- * @deprecated Prefer `setServerTimeZone`; this is the same thing under its first name.
- */
-export function setBusinessTimeZone(timeZone: string | null | undefined): void {
-  setServerTimeZone(timeZone);
+/** The zone the API files days in, or null before `/auth/me` has answered. */
+export function getServerTimeZone(): string | null {
+  return serverTimeZone;
 }
 
 /** The zone actually in force, for diagnostics. */
@@ -97,8 +93,29 @@ export function getBusinessTimeZone(): string | null {
  * behaviour and correct for everyone in the server's own region.
  */
 export function todayDateOnly(): string {
+  return businessDateOf(new Date());
+}
+
+/**
+ * The calendar date an instant falls on, as 'YYYY-MM-DD', in the same zone as
+ * `todayDateOnly` — so the two can be compared.
+ *
+ * `String(timestamp).slice(0, 10)` is the date in UTC, which is not the business
+ * day for hours of every day anywhere else: somebody added to a workspace at
+ * 00:30 in Kolkata (19:00 UTC, the day before) was taken to have joined the
+ * previous day — a working day — and was shown absent for it, at a 0%
+ * attendance rate, for a day before they belonged.
+ *
+ * A value that is already a plain date is returned as it is: read as an instant
+ * it would be UTC midnight, the day before anywhere west of UTC. An unreadable
+ * value gives ''.
+ */
+export function businessDateOf(value: string | Date): string {
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const instant = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(instant.getTime())) return '';
   const zone = workspaceTimeZone ?? serverTimeZone;
-  if (!zone) return formatDateOnly(new Date());
+  if (!zone) return formatDateOnly(instant);
   try {
     // `en-CA` short format IS ISO order.
     return new Intl.DateTimeFormat('en-CA', {
@@ -106,10 +123,10 @@ export function todayDateOnly(): string {
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
-    }).format(new Date());
+    }).format(instant);
   } catch {
     // An unrecognised zone must not take the app down over a date label.
-    return formatDateOnly(new Date());
+    return formatDateOnly(instant);
   }
 }
 

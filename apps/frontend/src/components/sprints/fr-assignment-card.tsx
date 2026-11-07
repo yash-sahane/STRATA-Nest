@@ -1,7 +1,8 @@
 ﻿'use client';
 
 import { getFunctionalRequirementStatusConfig } from '@/lib/semantic/status';
-import { getComplexityConfig } from '@/lib/semantic/complexity';
+import { ComplexityBadge } from '@/components/requirements/complexity-badge';
+import { getPriorityConfig } from '@/lib/semantic/priority';
 
 import * as React from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -19,10 +20,9 @@ import { X, UserPlus, FileText } from 'lucide-react';
 import type { FunctionalRequirement } from '@/types';
 import type { WorkspaceMemberUser } from '@/hooks/use-workspace';
 import { useUpdateFunctionalRequirement } from '@/hooks/use-functional-requirement';
-import { useTasksByFunctionalRequirement, useUpdateTask } from '@/hooks/use-task';
-import { toast } from '@/hooks/use-toast';
 import { getInitials } from '@/lib/utils';
-import { logger } from '@/lib/logger';
+import { useConfirm } from '@/components/providers/confirm-provider';
+import { toast } from 'sonner';
 
 interface FRAssignmentCardProps {
   /** Assigning or unassigning PATCHes the FR and its tasks, so it needs
@@ -32,11 +32,17 @@ interface FRAssignmentCardProps {
   fr: FunctionalRequirement;
   /**
    * The workspace roster as `useWorkspaceMembers` returns it — `id` is the USER
-   * id, which is what `fr.assignedTo` holds. Typed as the roster row rather than
+   * id, which is what `fr.assigneeIds` holds. Typed as the roster row rather than
    * `User` so the only call site (the sprint backlog) no longer needs `as any`.
    */
   teamMembers: WorkspaceMemberUser[];
   projectId: string;
+  /**
+   * What planning can do with this requirement here ("Add to Sprint", "Remove
+   * from Sprint"), drawn in the card's footer. The page used to put the button
+   * under the card, where it read as belonging to the card below.
+   */
+  action?: React.ReactNode;
 }
 
 export function FRAssignmentCard({
@@ -44,146 +50,81 @@ export function FRAssignmentCard({
   teamMembers,
   projectId,
   canEdit = false,
+  action,
 }: FRAssignmentCardProps) {
   const updateFR = useUpdateFunctionalRequirement();
-  const updateTask = useUpdateTask();
-  const { data: linkedTasks = [] } = useTasksByFunctionalRequirement(fr.id);
   const [isAssigning, setIsAssigning] = React.useState(false);
 
-  const assignedMembers = React.useMemo(() => {
-    if (!fr.assignedTo || fr.assignedTo.length === 0) return [];
-    return teamMembers.filter((member) => fr.assignedTo?.includes(member.id));
-  }, [fr.assignedTo, teamMembers]);
+  const assignedMembers = React.useMemo(
+    () => teamMembers.filter((member) => (fr.assigneeIds ?? []).includes(member.id)),
+    [fr.assigneeIds, teamMembers]
+  );
 
-  const unassignedMembers = React.useMemo(() => {
-    if (!fr.assignedTo || fr.assignedTo.length === 0) return teamMembers;
-    return teamMembers.filter((member) => !fr.assignedTo?.includes(member.id));
-  }, [fr.assignedTo, teamMembers]);
+  const unassignedMembers = React.useMemo(
+    () => teamMembers.filter((member) => !(fr.assigneeIds ?? []).includes(member.id)),
+    [fr.assigneeIds, teamMembers]
+  );
 
   const handleAssignMember = async (userId: string) => {
     const member = teamMembers.find((m) => m.id === userId);
     if (!member) return;
 
-    const currentAssignedTo = fr.assignedTo || [];
-    const currentAssignedToNames = fr.assignedToNames || [];
-    const newAssignedTo = [...currentAssignedTo, userId];
-    const newAssignedToNames = [...currentAssignedToNames, member.name];
-
     await updateFR.mutateAsync({
       requirementId: fr.id,
       projectId,
-      updates: {
-        assignedTo: newAssignedTo,
-        assignedToNames: newAssignedToNames,
-      },
+      updates: { assigneeIds: [...(fr.assigneeIds ?? []), userId] },
     });
 
-    // ✅ AUTO-ASSIGN: Update linked tasks with the same assignees
-    if (linkedTasks.length > 0) {
-      try {
-        await Promise.all(
-          linkedTasks.map((task) =>
-            updateTask.mutateAsync({
-              taskId: task.id,
-              projectId,
-              // silent: this handler emits ONE toast at the end covering the FR
-              // and the whole fan-out. Without it each linked task added its own.
-              silent: true,
-              updates: {
-                assignedTo: newAssignedTo,
-                assignedToNames: newAssignedToNames,
-                assigneeIds: newAssignedTo,
-              },
-            })
-          )
-        );
-      } catch (error) {
-        logger.error('Failed to update linked tasks', { error });
-        toast({
-          title: 'Partial Success',
-          description: `Assigned ${member.name} to FR but failed to update some linked tasks.`,
-          variant: 'destructive',
-        });
-        setIsAssigning(false);
-        return;
-      }
-    }
-
-    // The only success feedback on this path: useUpdateFunctionalRequirement is
-    // deliberately silent and the per-task updates are silenced above, so
-    // without this the click looked like a no-op until the invalidation
-    // round-tripped and users re-clicked.
-    toast({
-      title: 'Success',
-      description: linkedTasks.length
-        ? `Assigned ${member.name} to ${fr.hierarchyId} and ${linkedTasks.length} linked task(s)`
-        : `Assigned ${member.name} to ${fr.hierarchyId}`,
-    });
+    // The requirement's tasks follow on the server (RequirementTasks): the ones
+    // that had the requirement's people get the new list, and a task somebody
+    // gave to a particular person keeps them. This card used to write the whole
+    // list over every linked task itself.
+    //
+    // The only success feedback on this path: the hook is deliberately silent,
+    // so without this the click looked like a no-op until the refetch landed.
+    toast.success('Assigned', { description: `${member.name} is on ${fr.hierarchyId}.` });
 
     setIsAssigning(false);
   };
 
+  const confirm = useConfirm();
+
   const handleUnassignMember = async (userId: string) => {
-    const currentAssignedTo = fr.assignedTo || [];
-    const currentAssignedToNames = fr.assignedToNames || [];
-    const index = currentAssignedTo.indexOf(userId);
+    const current = fr.assigneeIds ?? [];
+    const index = current.indexOf(userId);
 
     if (index === -1) return;
 
-    const removedName = currentAssignedToNames[index] ?? 'member';
-    const newAssignedTo = currentAssignedTo.filter((id) => id !== userId);
-    const newAssignedToNames = currentAssignedToNames.filter((_, i) => i !== index);
+    const removedName =
+      (fr.assigneeNames ?? [])[index] ||
+      teamMembers.find((member) => member.id === userId)?.name ||
+      'member';
 
-    await updateFR.mutateAsync({
-      requirementId: fr.id,
-      projectId,
-      updates: {
-        assignedTo: newAssignedTo,
-        assignedToNames: newAssignedToNames,
-      },
+    // It moves their work: the requirement's open tasks lose them too.
+    const confirmed = await confirm({
+      title: `Take ${removedName} off ${fr.hierarchyId}?`,
+      description: `${removedName} comes off its open tasks too, and is told.`,
+      confirmText: 'Take off',
     });
+    if (!confirmed) return;
 
-    // ✅ AUTO-UNASSIGN: Update linked tasks with the same assignees
-    if (linkedTasks.length > 0) {
-      try {
-        await Promise.all(
-          linkedTasks.map((task) =>
-            updateTask.mutateAsync({
-              taskId: task.id,
-              projectId,
-              silent: true, // one toast for the whole fan-out, emitted below
-              updates: {
-                assignedTo: newAssignedTo,
-                assignedToNames: newAssignedToNames,
-                assigneeIds: newAssignedTo,
-              },
-            })
-          )
-        );
-      } catch (error) {
-        logger.error('Failed to update linked tasks', { error });
-        toast({
-          title: 'Partial Success',
-          description: `Removed from FR but failed to update some linked tasks.`,
-          variant: 'destructive',
-        });
-        return;
-      }
+    try {
+      await updateFR.mutateAsync({
+        requirementId: fr.id,
+        projectId,
+        updates: { assigneeIds: current.filter((id) => id !== userId) },
+      });
+    } catch {
+      return; // the save's own toast has said why
     }
 
-    toast({
-      title: 'Success',
-      description: linkedTasks.length
-        ? `Removed ${removedName} from ${fr.hierarchyId} and ${linkedTasks.length} linked task(s)`
-        : `Removed ${removedName} from ${fr.hierarchyId}`,
-    });
+    toast.success('Removed', { description: `${removedName} is no longer on ${fr.hierarchyId} or its open tasks.` });
   };
 
   const status = getFunctionalRequirementStatusConfig(fr.status);
-  const complexity = getComplexityConfig(fr.complexity);
 
   return (
-    <Card className="hover-lift">
+    <Card>
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between">
           <div className="space-y-1">
@@ -192,9 +133,7 @@ export function FRAssignmentCard({
               <Badge variant="outline" className="font-mono text-xs">
                 {fr.hierarchyId}
               </Badge>
-              <Badge variant={complexity.badgeVariant}>
-                Complexity: {complexity.label}
-              </Badge>
+              <ComplexityBadge complexity={fr.complexity} showName />
             </div>
             <CardTitle className="text-base">{fr.title}</CardTitle>
           </div>
@@ -225,7 +164,7 @@ export function FRAssignmentCard({
                       variant="ghost"
                       size="icon"
                       aria-label={`Unassign ${member.name}`}
-                      className="h-4 w-4 rounded-full hover:bg-destructive hover:text-destructive-foreground"
+                      className="h-6 w-6 rounded-full hover:bg-destructive hover:text-destructive-foreground"
                       onClick={() => handleUnassignMember(member.id)}
                     >
                       <X className="h-3 w-3" />
@@ -281,16 +220,18 @@ export function FRAssignmentCard({
           </div>
         )}
 
-        {/* FR Metadata */}
-        <div className="flex items-center gap-3 pt-2 border-t text-xs text-muted-foreground">
+        {/* FR Metadata, and the planning action at its far end — wrapping
+            under the badges on a narrow card rather than squeezing them. */}
+        <div className="flex flex-wrap items-center gap-3 pt-2 border-t text-xs text-muted-foreground">
           <Badge variant={status.badgeVariant} className={status.badgeClassName}>
             Status: {status.label}
           </Badge>
           {fr.priority && (
             <Badge variant="outline" className="border-primary/20">
-              Priority: {fr.priority}
+              {getPriorityConfig(fr.priority).label} priority
             </Badge>
           )}
+          {action && <div className="ml-auto">{action}</div>}
         </div>
       </CardContent>
     </Card>

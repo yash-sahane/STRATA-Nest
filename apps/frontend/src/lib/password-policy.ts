@@ -38,6 +38,3 @@ export function passwordFailures(value: string): string[] {
   return PASSWORD_RULES.filter((r) => !r.test(value)).map((r) => r.label);
 }
 
-export function isStrongPassword(value: string): boolean {
-  return passwordFailures(value).length === 0;
-}

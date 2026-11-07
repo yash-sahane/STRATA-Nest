@@ -6,18 +6,9 @@ import { ErrorState } from '@/components/ui/error-state';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
-import { useLeaveAvailability } from '@/hooks/use-leave';
+import { useApprovedLeaveUnits, useLeaveAvailability } from '@/hooks/use-leave';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { getBalanceFieldDisplayName, type LeaveBalanceField } from '@/lib/leave-balance-mapper';
-import { DEFAULT_LEAVE_ALLOCATION } from '@/lib/leave-utils';
-
-/** Annual allocation each field is seeded with. `unpaidLeave` has none — it is
- *  a counter of unpaid days taken, so it shows a total instead of a remainder. */
-const DEFAULT_ALLOCATIONS: Record<Exclude<LeaveBalanceField, 'unpaidLeave'>, number> = {
-  paidLeave: DEFAULT_LEAVE_ALLOCATION.paidLeave,
-  halfDay: DEFAULT_LEAVE_ALLOCATION.halfDay,
-  compOff: DEFAULT_LEAVE_ALLOCATION.compOff,
-};
 
 /**
  * The signed-in member's own allowance. No `userId` prop: `/leave_balances/me`
@@ -29,13 +20,17 @@ export function LeaveBalanceDisplay() {
   // Availability, not the raw row: a PENDING request is not debited until it is
   // approved, so this tab reported "Paid Leave 21 / 21 days — 0 used • Good"
   // for a member with 19 days already committed and 2 actually bookable.
-  const {
-    balance: leaveBalance,
-    committed,
-    isLoading,
-    isError,
-    refetch,
-  } = useLeaveAvailability(currentWorkspaceId || undefined);
+  const availability = useLeaveAvailability(currentWorkspaceId || undefined);
+  const { balance: leaveBalance, committed } = availability;
+  // What approved leave has actually taken this year — the records that took
+  // it, not a default allocation minus what is left (see useApprovedLeaveUnits).
+  const approvedQuery = useApprovedLeaveUnits(currentWorkspaceId || undefined);
+  const isLoading = availability.isLoading || approvedQuery.isLoading;
+  const isError = availability.isError || approvedQuery.isError;
+  const refetch = () => {
+    availability.refetch();
+    void approvedQuery.refetch();
+  };
 
   if (isLoading) {
     return (
@@ -89,16 +84,23 @@ export function LeaveBalanceDisplay() {
         {balanceFields.map((field) => {
           const isCounter = field === 'unpaidLeave'; // days taken, not days left
           const value = leaveBalance[field] || 0;
-          const total = isCounter ? 0 : DEFAULT_ALLOCATIONS[field];
 
           // What is left to BOOK, which is what a member actually wants to know:
           // the row still holds the days their pending requests have spoken for.
           const pending = isCounter ? 0 : committed[field];
           const remaining = Math.max(0, value - pending);
-          const used = isCounter || field === 'compOff' ? value : Math.max(0, total - value); // compOff is earned
-          // Clamped: a manager-raised or overdrawn balance must not push the
-          // Progress bar outside its track. Pending days fill the bar too —
-          // they are no longer available, they are just not spent yet.
+          /**
+           * "Used" is what approved leave took from this field this year, and
+           * the year's total is what is still on the row plus that — both from
+           * records the server keeps. Both used to be invented: the total was
+           * the default allocation and "used" the default minus what is left,
+           * so a balance an approver raised to 30 read "30 / 21 days — 0 used",
+           * and comp-off read "/ 0 days" beside the days somebody had earned.
+           */
+          const used = isCounter ? value : (approvedQuery.data?.[field] ?? 0);
+          const total = isCounter ? 0 : value + used;
+          // Clamped against rounding. Pending days fill the bar too — they are
+          // no longer available, they are just not spent yet.
           const utilization =
             isCounter || total === 0
               ? 0
@@ -113,7 +115,7 @@ export function LeaveBalanceDisplay() {
           }
 
           return (
-            <Card key={field} className="hover-lift">
+            <Card key={field}>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium">
                   {getBalanceFieldDisplayName(field)}
@@ -166,7 +168,12 @@ export function LeaveBalanceDisplay() {
                   </>
                 )}
                 {field === 'compOff' && (
-                  <p className="mt-2 text-xs text-muted-foreground">Earned comp off days</p>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Earned comp off days
+                    {used > 0 || pending > 0
+                      ? ` — ${used} used${pending > 0 ? ` • ${pending} pending` : ''}`
+                      : ''}
+                  </p>
                 )}
                 {isCounter && (
                   <p className="mt-2 text-xs text-muted-foreground">

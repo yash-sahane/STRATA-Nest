@@ -17,7 +17,8 @@ export interface QueryOp {
   | 'notIn'
   | 'order'
   | 'limit'
-  | 'page';
+  | 'page'
+  | 'text';
   k?: string;
   v?: unknown;
   dir?: 'asc' | 'desc';
@@ -48,23 +49,8 @@ export const query = {
   orderDesc: (k: string): QueryOp => ({ op: 'order', k, dir: 'desc' }),
   limit: (n: number): QueryOp => ({ op: 'limit', n }),
   page: (n: number): QueryOp => ({ op: 'page', n }),
-};
-
-const ID_ALPHA = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-
-function nativeId(): string {
-  let value = '';
-  const bytes = new Uint8Array(20);
-  globalThis.crypto.getRandomValues(bytes);
-  for (let index = 0; index < bytes.length; index += 1) {
-    value += ID_ALPHA[bytes[index] % ID_ALPHA.length];
-  }
-  return value;
-}
-
-export const id = {
-  unique: nativeId,
-  custom: (value: string) => value,
+  /** `q=`: the server searches the fields that resource names for this text. */
+  text: (v: string): QueryOp => ({ op: 'text', v }),
 };
 
 function appendValue(out: Array<[string, string]>, key: string, value: unknown): void {
@@ -132,6 +118,9 @@ export function translateQueries(queries: QueryInput[] = []): Array<[string, str
         break;
       case 'page':
         if (item.n !== undefined) out.push(['page', String(item.n)]);
+        break;
+      case 'text':
+        if (typeof item.v === 'string' && item.v.trim()) out.push(['q', item.v.trim()]);
         break;
       default:
         break;

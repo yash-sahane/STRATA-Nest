@@ -1,5 +1,4 @@
 import type { Task } from '@/types';
-import { format, parseISO } from 'date-fns';
 
 export interface TeamMemberWorkload {
   userId: string;
@@ -8,13 +7,11 @@ export interface TeamMemberWorkload {
   totalTasks: number;
   activeTasks: number;
   completedTasks: number;
-  tasksByDay: Record<string, Task[]>;
   workloadPercentage: number; // 0-100+
 }
 
 export interface WorkloadSummary {
   members: TeamMemberWorkload[];
-  dateRange: { start: Date; end: Date };
   totalTasks: number;
   averageWorkload: number;
 }
@@ -101,51 +98,21 @@ export function workloadBandForPercentage(percentage: number) {
 
 export function calculateTeamWorkload(
   tasks: Task[],
-  members: Array<{ id: string; userId?: string; name: string; email: string }>,
-  startDate: Date,
-  endDate: Date
+  members: Array<{ id: string; userId?: string; name: string; email: string }>
 ): WorkloadSummary {
   const memberWorkloads: TeamMemberWorkload[] = members.map((member) => {
     // Use userId if available (workspace_members), otherwise fall back to id
     const memberId = member.userId || member.id;
 
-    // Filter tasks assigned to this member
-    // Tasks can carry assignees in either field depending on the workflow that created them.
-    const memberTasks = tasks.filter((task) => {
-      const assigneeIds = task.assigneeIds || [];
-      const assignedTo = task.assignedTo || [];
-      return (
-        (assigneeIds.includes(memberId) || assignedTo.includes(memberId)) && task.status !== 'DONE'
-      );
-    });
-
-    // Calculate tasks by day
-    const tasksByDay: Record<string, Task[]> = {};
-    const currentDate = new Date(startDate);
-
-    while (currentDate <= endDate) {
-      const dateKey = format(currentDate, 'yyyy-MM-dd');
-
-      // Tasks due on this date or overdue
-      const tasksForDay = memberTasks.filter((task) => {
-        if (!task.dueDate) return false;
-        const taskDueDate = parseISO(task.dueDate);
-        return taskDueDate <= currentDate && task.status !== 'DONE';
-      });
-
-      tasksByDay[dateKey] = tasksForDay;
-      currentDate.setDate(currentDate.getDate() + 1);
-    }
+    const memberTasks = tasks.filter(
+      (task) => (task.assigneeIds || []).includes(memberId) && task.status !== 'DONE'
+    );
 
     // Calculate workload metrics
     const activeTasks = memberTasks.filter((task) => isActiveTaskStatus(task.status)).length;
-    const completedTasks = tasks.filter((task) => {
-      const assigneeIds = task.assigneeIds || [];
-      const assignedTo = task.assignedTo || [];
-      return (
-        (assigneeIds.includes(memberId) || assignedTo.includes(memberId)) && task.status === 'DONE'
-      );
-    }).length;
+    const completedTasks = tasks.filter(
+      (task) => (task.assigneeIds || []).includes(memberId) && task.status === 'DONE'
+    ).length;
 
     // Task count as a lightweight workload metric, against the same constant the
     // band table is defined in — a hardcoded 10 here and a separate set of
@@ -160,7 +127,6 @@ export function calculateTeamWorkload(
       totalTasks,
       activeTasks,
       completedTasks,
-      tasksByDay,
       workloadPercentage: Math.round(workloadPercentage),
     };
   });
@@ -176,7 +142,6 @@ export function calculateTeamWorkload(
 
   return {
     members: memberWorkloads,
-    dateRange: { start: startDate, end: endDate },
     totalTasks,
     averageWorkload,
   };

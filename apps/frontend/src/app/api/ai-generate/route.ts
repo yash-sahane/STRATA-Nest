@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { hasApiSession, proxyToApi } from '@/lib/api/server-proxy';
+import { checkWorkspacePermissions, hasApiSession } from '@/lib/api/server-proxy';
+import { refuseCrossSite } from '@/lib/api/server-proxy';
+import { GENERATION_PERMISSIONS, MAX_PROMPT_CHARS } from '@/lib/ai-generator';
 import { logger } from '@/lib/logger';
 
 /**
@@ -12,21 +14,23 @@ import { logger } from '@/lib/logger';
  * for older keys. `gemini-3.6-flash` is the replacement Google names in that
  * error. Override with GEMINI_MODEL when a different one is wanted.
  */
-const GEMINI_MODEL =
-  process.env.GEMINI_MODEL || process.env.NEXT_PUBLIC_GEMINI_MODEL || 'gemini-3.6-flash';
-// Operator secrets, read only on the server. The unprefixed names are the ones
-// to set: Next.js inlines any NEXT_PUBLIC_* value into the client bundle at each
-// client-side reference, so naming a provider key that way is one stray import
-// away from shipping it to browsers. The NEXT_PUBLIC_ reads are kept as a
-// fallback so existing deployments keep working.
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? process.env.NEXT_PUBLIC_GEMINI_API_KEY ?? '';
-const HF_API_KEY = process.env.HF_API_KEY ?? process.env.NEXT_PUBLIC_HF_API_KEY ?? '';
-const HF_MODEL =
-  process.env.HF_MODEL || process.env.NEXT_PUBLIC_HF_MODEL || 'meta-llama/Llama-3.1-8B-Instruct';
-const HF_ENDPOINT =
-  process.env.HF_ENDPOINT ||
-  process.env.NEXT_PUBLIC_HF_ENDPOINT ||
-  'https://router.huggingface.co/v1/chat/completions';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+// Operator secrets, read only on the server — never under a NEXT_PUBLIC_ name:
+// Next.js inlines those into the client bundle at each client-side reference, so
+// a provider key named that way is one stray import away from every browser.
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? '';
+const HF_API_KEY = process.env.HF_API_KEY ?? '';
+const HF_MODEL = process.env.HF_MODEL || 'meta-llama/Llama-3.1-8B-Instruct';
+const HF_ENDPOINT = process.env.HF_ENDPOINT || 'https://router.huggingface.co/v1/chat/completions';
+/**
+ * The fallback's output budget. It was 4096, and the plan the prompt asks for —
+ * up to 30 tasks, 15 functional requirements with their criteria and rules, 8
+ * epics, the timeline — runs to roughly 6–7k tokens of JSON, so a full answer was
+ * cut off mid-object and failed to parse. HF_MAX_TOKENS is there for a provider
+ * that caps output lower.
+ */
+const HF_MAX_TOKENS =
+  Number(process.env.HF_MAX_TOKENS) > 0 ? Math.floor(Number(process.env.HF_MAX_TOKENS)) : 8192;
 
 // Initialize Gemini client
 const genAI = GEMINI_API_KEY ? new GoogleGenerativeAI(GEMINI_API_KEY) : null;
@@ -61,7 +65,7 @@ async function callHuggingFace(prompt: string): Promise<string> {
             content: prompt,
           },
         ],
-        max_tokens: 4096,
+        max_tokens: HF_MAX_TOKENS,
         temperature: 0.7,
       };
     } else {
@@ -70,7 +74,7 @@ async function callHuggingFace(prompt: string): Promise<string> {
       requestBody = {
         inputs: prompt,
         parameters: {
-          max_new_tokens: 4096,
+          max_new_tokens: HF_MAX_TOKENS,
           temperature: 0.7,
           return_full_text: false,
         },
@@ -126,9 +130,10 @@ async function callHuggingFace(prompt: string): Promise<string> {
 
     logger.debug('[HF] Successfully generated response');
     return text;
-  } catch (error: any) {
-    const errorMsg = error?.message || String(error);
-    logger.error('[HF] Error', { message: errorMsg, status: error?.status });
+  } catch (error: unknown) {
+    const failure = error as { message?: string; status?: number } | null | undefined;
+    const errorMsg = failure?.message || String(error);
+    logger.error('[HF] Error', { message: errorMsg, status: failure?.status });
     throw error;
   }
 }
@@ -197,62 +202,57 @@ async function callGemini(prompt: string): Promise<string> {
 
     logger.debug('[Gemini] Successfully generated response');
     return text.trim();
-  } catch (error: any) {
-    const errorMsg = error?.message || String(error);
-    logger.error('[Gemini] Error', { message: errorMsg, status: error?.status });
+  } catch (error: unknown) {
+    const failure = error as { message?: string; status?: number } | null | undefined;
+    const errorMsg = failure?.message || String(error);
+    logger.error('[Gemini] Error', { message: errorMsg, status: failure?.status });
     throw error;
   }
 }
 
 /**
- * May this caller author in that workspace?
- *
- * Signed-in was not a high enough bar: this route spends the operator's key, and
- * generation AUTHORS requirements, so the permission it needs is the one the
- * manual equivalent needs. Resolved by the API — which understands custom
- * workspace roles — rather than guessed at here.
+ * The largest body read at all. The prompt cap below is in characters, and JSON
+ * can spell one character in six bytes (`\uXXXX`), so this leaves room for the
+ * longest real prompt and refuses anything bigger before it is buffered.
  */
-async function mayGenerateIn(request: NextRequest, workspaceId: string): Promise<boolean> {
-  try {
-    const { status, data } = await proxyToApi(
-      request,
-      `/api/v1/auth/me/permissions/?workspaceId=${encodeURIComponent(workspaceId)}`,
-    );
-    if (status !== 200) return false;
-    const granted: unknown = (data as { permissions?: unknown })?.permissions;
-    if (!Array.isArray(granted)) return false;
-    return granted.includes('*') || granted.includes('requirement:write');
-  } catch {
-    return false;
-  }
-}
+const MAX_BODY_BYTES = MAX_PROMPT_CHARS * 6 + 4096;
 
 export async function POST(request: NextRequest) {
   try {
+    const refused = refuseCrossSite(request, { expectJson: true });
+    if (refused) return NextResponse.json({ error: refused }, { status: 403 });
     // This route calls the model with the OPERATOR's key and never reaches the
     // backend, so without this check any anonymous POST spends their quota.
     if (!(await hasApiSession(request))) {
       return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
     }
+    if (Number(request.headers.get('content-length')) > MAX_BODY_BYTES) {
+      return NextResponse.json({ error: 'The document is too long to generate from.' }, { status: 413 });
+    }
 
     const { prompt, maxRetries = 2, workspaceId } = await request.json();
 
-    // Authorisation, not just authentication — see mayGenerateIn.
-    if (typeof workspaceId !== 'string' || !workspaceId.trim()) {
-      return NextResponse.json(
-        { error: 'workspaceId is required so your permissions can be checked.' },
-        { status: 400 },
-      );
-    }
-    if (!(await mayGenerateIn(request, workspaceId))) {
-      return NextResponse.json(
-        { error: 'You do not have permission to generate requirements in this workspace.' },
-        { status: 403 },
-      );
-    }
+    // Authorisation, not just authentication: every permission the SAVE will need
+    // (GENERATION_PERMISSIONS). This checked requirement:write alone, so a role
+    // without epics or tasks was charged a generation and then refused the save.
+    const access = await checkWorkspacePermissions(
+      request,
+      workspaceId,
+      GENERATION_PERMISSIONS,
+      'You do not have permission to generate a plan in this workspace: saving one creates requirements, epics and tasks.',
+    );
+    if (!access.ok) return NextResponse.json({ error: access.error }, { status: access.status });
 
     if (typeof prompt !== 'string' || !prompt.trim()) {
       return NextResponse.json({ error: 'Prompt is required' }, { status: 400 });
+    }
+    // Every character is the operator's tokens, and nothing else bounded them.
+    // The app's own prompt never exceeds this (see MAX_PROMPT_CHARS).
+    if (prompt.length > MAX_PROMPT_CHARS) {
+      return NextResponse.json(
+        { error: `The prompt is too long (${prompt.length} characters; the limit is ${MAX_PROMPT_CHARS}).` },
+        { status: 413 },
+      );
     }
     // maxRetries is caller-supplied: a huge value would be a free way to make
     // the server sit in a retry loop against the model provider.

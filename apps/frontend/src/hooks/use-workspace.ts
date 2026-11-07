@@ -2,12 +2,11 @@
 import { resources } from '@/lib/api/client';
 import { query } from '@/lib/api/client';
 import { restClient } from '@/lib/api/rest-client';
-import { parseJsonObject } from '@/lib/api/json-fields';
 import { useWorkspaceContext } from '@/components/providers/workspace-provider';
 import type { Workspace } from '@/types';
 import { useMemo } from 'react';
 import { useTeamMembers } from './use-team';
-import { toast } from '@/hooks/use-toast';
+import { toast } from 'sonner';
 
 export function useWorkspaces(userId?: string) {
   return useQuery({
@@ -17,21 +16,8 @@ export function useWorkspaces(userId?: string) {
 
       // The API already scopes the list to workspaces the caller can access
       // (owner or member), so one complete listing returns exactly the right set.
-      const response = await resources.listAll<{
-        settings?: unknown;
-        memberIds?: unknown;
-      }>('workspaces');
-
-      // Parse settings JSON
-      const parsedWorkspaces = response.items.map((workspace) => ({
-        ...workspace,
-        settings: parseJsonObject(workspace.settings),
-        memberIds: Array.isArray(workspace.memberIds)
-          ? workspace.memberIds
-          : [],
-      }));
-
-      return parsedWorkspaces as unknown as Workspace[];
+      const response = await resources.listAll('workspaces');
+      return response.items as unknown as Workspace[];
     },
     enabled: !!userId,
   });
@@ -46,16 +32,7 @@ export function useWorkspace(workspaceId?: string) {
       const response = await resources.get('workspaces', workspaceId
       );
 
-      // Parse JSON fields
-      const workspace = {
-        ...response,
-        settings: parseJsonObject(response.settings),
-        memberIds: Array.isArray(response.memberIds)
-          ? response.memberIds
-          : [],
-      };
-
-      return workspace as unknown as Workspace;
+      return response as unknown as Workspace;
     },
     enabled: !!workspaceId,
   });
@@ -70,6 +47,8 @@ export function useCreateWorkspace() {
       name: string;
       description?: string;
       ownerId: string;
+      /** Somebody else runs it: they own it and are its first Manager. */
+      manager?: { name: string; email: string };
     }) => {
       // Check if user already has a workspace with this name
       const existingWorkspaces = await resources.list('workspaces', [
@@ -88,32 +67,27 @@ export function useCreateWorkspace() {
       const workspaceData = {
         name: data.name,
         description: data.description || '',
-        settings: {
-          allowPublicSignup: false,
-          requireApproval: true,
-          enableNotifications: true,
-          enableIntegrations: false,
-        },
+        // Nothing to declare yet: the four flags that used to be written here
+        // (public sign-up, approval, notifications, integrations) were read by
+        // nothing, on either side.
+        settings: {},
+        ...(data.manager ? { manager: data.manager } : {}),
       };
 
-      const response = await resources.create('workspaces', 'unique()',
+      const response = await resources.create('workspaces',
         workspaceData
       );
 
-      // Normalize the response (the API returns settings as a native object)
-      const workspace = {
-        ...response,
-        settings: parseJsonObject(response.settings),
-        memberIds: Array.isArray(response.memberIds) ? response.memberIds : [response.memberIds],
+      return response as unknown as Workspace & {
+        /** Who it was created for; `temporaryPassword` only when mail cannot carry it. */
+        manager?: { userId: string; name: string; email: string; emailSent: boolean; temporaryPassword?: string };
       };
-
-      return workspace as unknown as Workspace;
     },
     onSuccess: (newWorkspace) => {
       // 1. Seed the new workspace into the cached list BEFORE switching to it.
       //    `invalidateQueries` keeps the old data while it refetches, so for the
       //    duration of that round trip the list still read [A, B] — and
-      //    useCurrentWorkspace's self-heal effect, seeing the freshly selected
+      //    WorkspaceProvider's self-heal effect, seeing the freshly selected
       //    id in no workspace of that list, bounced the selection straight back
       //    to workspaces[0]. Writing the row in first makes the new id resolve
       //    immediately; the refetch below then reconciles.
@@ -129,17 +103,10 @@ export function useCreateWorkspace() {
       //    full reload.
       setCurrentWorkspaceId(newWorkspace.id);
 
-      toast({
-        title: 'Success',
-        description: `Workspace "${newWorkspace.name}" created successfully!`,
-      });
+      toast.success(`Workspace "${newWorkspace.name}" created`);
     },
     onError: (error: Error) => {
-      toast({
-        title: 'Error',
-        description: (error instanceof Error ? error.message : String(error)) || 'Failed to create workspace',
-        variant: 'destructive',
-      });
+      toast.error('Failed to create workspace', { description: error instanceof Error ? error.message : String(error) });
     },
   });
 }
@@ -157,43 +124,28 @@ export function useUpdateWorkspace() {
       const { workspaceId, ...updates } = data;
 
       // settings passes through as a native object (the DTO validates @IsObject)
-      const updateData: any = { ...updates };
+      const updateData: Record<string, unknown> = { ...updates };
 
       const response = await resources.update('workspaces', workspaceId,
         updateData
       );
 
-      // Parse the response
-      const workspace = {
-        ...response,
-        settings: parseJsonObject(response.settings),
-        memberIds: Array.isArray(response.memberIds)
-          ? response.memberIds
-          : [],
-      };
-
-      return workspace as unknown as Workspace;
+      return response as unknown as Workspace;
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['workspace', variables.workspaceId] });
       queryClient.invalidateQueries({ queryKey: ['workspaces'] });
-      toast({
-        title: 'Success',
-        description: 'Workspace updated successfully!',
-      });
+      toast.success('Workspace updated');
     },
     onError: (error: Error) => {
-      toast({
-        title: 'Error',
-        description: (error instanceof Error ? error.message : String(error)) || 'Failed to update workspace',
-        variant: 'destructive',
-      });
+      toast.error('Failed to update workspace', { description: error instanceof Error ? error.message : String(error) });
     },
   });
 }
 
 export function useDeleteWorkspace() {
   const queryClient = useQueryClient();
+  const { noteDeparture } = useWorkspaceContext();
 
   return useMutation({
     mutationFn: async (workspaceId: string) => {
@@ -202,58 +154,42 @@ export function useDeleteWorkspace() {
       // so the client makes exactly one call.
       await resources.remove('workspaces', workspaceId);
     },
-    onSuccess: () => {
+    onSuccess: (_result, workspaceId) => {
+      // Before the list refetches: losing it is the caller's own doing.
+      noteDeparture(workspaceId, 'deleted');
       queryClient.invalidateQueries({ queryKey: ['workspaces'] });
-      toast({
-        title: 'Success',
-        description: 'Workspace and all associated data deleted successfully!',
-      });
+      toast.success('Workspace and all associated data deleted');
     },
     onError: (error: Error) => {
-      toast({
-        title: 'Error',
-        description: (error instanceof Error ? error.message : String(error)) || 'Failed to delete workspace',
-        variant: 'destructive',
-      });
+      toast.error('Failed to delete workspace', { description: error instanceof Error ? error.message : String(error) });
     },
   });
 }
 
-export function useInviteMember() {
+/** End the caller's own membership of a workspace. */
+export function useLeaveWorkspace() {
   const queryClient = useQueryClient();
+  const { noteDeparture } = useWorkspaceContext();
 
   return useMutation({
-    mutationFn: async (data: {
-      workspaceId: string;
-      name: string;
-      email: string;
-      role: string;
-    }) => {
-      // The API owns the whole invitation: it creates the ACTIVE membership at
-      // the requested role and mails the workspace's REAL invite code. The old
-      // client-side `Math.random()` code matched nothing in the database, so
-      // every invitation sent from here was unusable.
-      return restClient.post('/api/v1/users/invite/', {
-        name: data.name,
-        email: data.email,
-        roleName: data.role,
-        workspaceId: data.workspaceId,
-      });
+    mutationFn: async ({ workspaceId }: { workspaceId: string; workspaceName: string }) => {
+      await restClient.post(`/api/v1/workspaces/${workspaceId}/leave/`, {});
     },
     onSuccess: (_result, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['workspace', variables.workspaceId] });
+      // Said BEFORE the list refetches, so that moving off it reads as the
+      // caller's own doing rather than as access a manager took away.
+      noteDeparture(variables.workspaceId, 'left');
+      // The list (which also moves the app off this workspace if it was the
+      // current one), what the caller may do where, and what they can ask to
+      // join again.
+      queryClient.invalidateQueries({ queryKey: ['workspaces'] });
+      queryClient.invalidateQueries({ queryKey: ['my-access'] });
       queryClient.invalidateQueries({ queryKey: ['team-members'] });
-      toast({
-        title: 'Invitation Sent',
-        description: `Invitation email sent to ${variables.email}`,
-      });
+      queryClient.invalidateQueries({ queryKey: ['workspace-directory'] });
+      toast.success('Left workspace', { description: `You are no longer a member of ${variables.workspaceName}.` });
     },
     onError: (error: Error) => {
-      toast({
-        title: 'Error',
-        description: (error instanceof Error ? error.message : String(error)) || 'Failed to send invitation',
-        variant: 'destructive',
-      });
+      toast.error("Couldn't leave the workspace", { description: (error instanceof Error ? error.message : String(error)) || 'Please try again.' });
     },
   });
 }
@@ -268,40 +204,25 @@ export function useJoinWorkspace() {
       // `inviteCode` filter, so resolving the workspace client-side either
       // found nothing or matched an unrelated workspace.
       //
-      // The endpoint takes EITHER a `code` (the workspace invite code) or a
-      // `token` (an EmailInvitation), and this posted `code` unconditionally — so
-      // somebody holding a token, which an admin can read off the pending
-      // invitations list and pass on, was told "Invalid invite code" because it
-      // was looked up as the wrong kind of secret.
-      //
-      // The two are distinguishable by shape:
-      //   code   randomBytes(8).base64url.slice(0,10).toUpperCase()  10 chars, uppercase
-      //   token  randomBytes(24).base64url                           ~32 chars, mixed case
-      // so a value that cannot be a code is offered as a token rather than
-      // refused on the caller's behalf. The server still decides.
-      const value = data.inviteCode.trim();
-      const looksLikeCode = /^[A-Z0-9_-]{1,12}$/.test(value.toUpperCase()) && value.length <= 12;
-      return restClient.post(
-        '/api/v1/workspaces/accept-invitation/',
-        looksLikeCode ? { code: value } : { token: value },
-      ) as Promise<{ success: true; workspaceId: string; role?: string }>;
+      // The server normalises case and stray spaces, and decides.
+      return restClient.post('/api/v1/workspaces/accept-invitation/', {
+        code: data.inviteCode.trim(),
+      }) as Promise<{ success: true; workspaceId: string; role?: string }>;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['workspaces'] });
       // ['team-members'] is the key the roster actually registers; the old
       // ['workspace-members'] root no longer exists and matched nothing.
       queryClient.invalidateQueries({ queryKey: ['team-members'] });
-      toast({
-        title: 'Workspace Joined',
-        description: 'You now have access to this workspace',
-      });
+      // What the caller may DO in the new workspace, and what is left to ask
+      // for: both are cached per user and were stale after a join made from
+      // inside the app (Workspaces > Join a workspace).
+      queryClient.invalidateQueries({ queryKey: ['my-access'] });
+      queryClient.invalidateQueries({ queryKey: ['workspace-directory'] });
+      toast.success('Workspace Joined', { description: 'You now have access to this workspace. It is in your workspace list.' });
     },
     onError: (error: unknown) => {
-      toast({
-        title: 'Error',
-        description: (error instanceof Error ? error.message : String(error)) || 'Failed to join workspace',
-        variant: 'destructive',
-      });
+      toast.error('Failed to join workspace', { description: error instanceof Error ? error.message : String(error) });
     },
   });
 }
@@ -359,4 +280,24 @@ export function useWorkspaceMembers(workspaceId?: string) {
   return { ...teamQuery, data: members };
 }
 
-
+/**
+ * Hand a workspace to another of its managers. The server checks the new owner
+ * is an active member whose role can run it.
+ */
+export function useTransferOwnership() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (data: { workspaceId: string; userId: string; name: string }) =>
+      restClient.post(`/api/v1/workspaces/${data.workspaceId}/transfer-ownership/`, {
+        userId: data.userId,
+      }),
+    onSuccess: (_, data) => {
+      queryClient.invalidateQueries({ queryKey: ['workspaces'] });
+      queryClient.invalidateQueries({ queryKey: ['workspace', data.workspaceId] });
+      toast.success(`${data.name} now owns this workspace`);
+    },
+    onError: (error: Error) => {
+      toast.error("Couldn't hand the workspace over", { description: error instanceof Error ? error.message : String(error) });
+    },
+  });
+}

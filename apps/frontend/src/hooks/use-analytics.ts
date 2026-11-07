@@ -4,6 +4,18 @@ import { useWorkspaceTasks } from './use-task';
 import { useWorkspaceSprints } from './use-sprint';
 import { useProjects } from './use-project';
 import { useWorkspaceMembers } from './use-workspace';
+import { isTaskOverdue } from '@/lib/task-dates';
+
+/**
+ * The figures the Analytics page shows, and only those.
+ *
+ * These hooks used to compute a good deal more that no screen drew: a "budget"
+ * that was estimated hours under another name, a time "efficiency" and "actual
+ * hours" read from a task column nothing ever fills (logged time lives in time
+ * entries), a velocity equal to the completed count, and a 30-day completion
+ * trend, per-assignee table and overdue list nobody rendered — all recomputed,
+ * over every task in the workspace, on each change.
+ */
 
 /**
  * When a DONE task actually finished. The API stamps `completedAt` on the
@@ -17,29 +29,8 @@ function completionDate(task: Task): string {
 }
 
 /**
- * Time efficiency: estimated hours vs actual hours, as a percentage clamped to
- * [0, 200]. 100 means work matched the estimate; above 100 means work was
- * completed faster than estimated. Returns null when either side is zero,
- * since efficiency cannot be measured without both values.
- */
-export function computeTimeEfficiency(
-  estimatedHours: number,
-  actualHours: number
-): number | null {
-  if (estimatedHours <= 0 || actualHours <= 0) return null;
-  return Math.min(200, Math.max(0, (estimatedHours / actualHours) * 100));
-}
-
-/** Format a Date as a local-timezone YYYY-MM-DD string (no UTC conversion). */
-function toLocalDateString(date: Date): string {
-  const month = `${date.getMonth() + 1}`.padStart(2, '0');
-  const day = `${date.getDate()}`.padStart(2, '0');
-  return `${date.getFullYear()}-${month}-${day}`;
-}
-
-/**
  * Project Analytics Hook
- * Returns comprehensive metrics for a specific project.
+ * The selected project's task mix, completion and estimate figures.
  *
  * Derived synchronously (useMemo) from the workspace task query so the metrics
  * always recompute when the source data arrives or changes.
@@ -51,102 +42,41 @@ export function useProjectAnalytics(projectId?: string, workspaceId?: string) {
   const data = useMemo(() => {
     if (!projectId || !allTasks) return null;
 
-    // Filter tasks for this project
-    const projectTasks = allTasks.filter(task => task.projectId === projectId);
+    const projectTasks = allTasks.filter((task) => task.projectId === projectId);
 
-    // Task status distribution
     const statusDistribution = {
-      BACKLOG: projectTasks.filter(t => t.status === 'BACKLOG').length,
-      TODO: projectTasks.filter(t => t.status === 'TODO').length,
-      IN_PROGRESS: projectTasks.filter(t => t.status === 'IN_PROGRESS').length,
-      REVIEW: projectTasks.filter(t => t.status === 'REVIEW').length,
-      DONE: projectTasks.filter(t => t.status === 'DONE').length,
+      BACKLOG: projectTasks.filter((t) => t.status === 'BACKLOG').length,
+      TODO: projectTasks.filter((t) => t.status === 'TODO').length,
+      IN_PROGRESS: projectTasks.filter((t) => t.status === 'IN_PROGRESS').length,
+      REVIEW: projectTasks.filter((t) => t.status === 'REVIEW').length,
+      DONE: projectTasks.filter((t) => t.status === 'DONE').length,
     };
 
-    // Priority distribution
     const priorityDistribution = {
-      LOW: projectTasks.filter(t => t.priority === 'LOW').length,
-      MEDIUM: projectTasks.filter(t => t.priority === 'MEDIUM').length,
-      HIGH: projectTasks.filter(t => t.priority === 'HIGH').length,
-      CRITICAL: projectTasks.filter(t => t.priority === 'CRITICAL').length,
+      LOW: projectTasks.filter((t) => t.priority === 'LOW').length,
+      MEDIUM: projectTasks.filter((t) => t.priority === 'MEDIUM').length,
+      HIGH: projectTasks.filter((t) => t.priority === 'HIGH').length,
+      CRITICAL: projectTasks.filter((t) => t.priority === 'CRITICAL').length,
     };
 
-    // Completion metrics
     const totalTasks = projectTasks.length;
-    const completedTasks = statusDistribution.DONE;
-    const completionRate = totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0;
+    const completionRate = totalTasks > 0 ? (statusDistribution.DONE / totalTasks) * 100 : 0;
 
-    // Time tracking
     const totalEstimatedHours = projectTasks.reduce((sum, t) => sum + (t.estimatedHours || 0), 0);
-    const totalActualHours = projectTasks.reduce((sum, t) => sum + (t.actualHours || 0), 0);
-    const timeEfficiency = computeTimeEfficiency(totalEstimatedHours, totalActualHours);
-
     const completedEstimatedHours = projectTasks
-      .filter(t => t.status === 'DONE')
+      .filter((t) => t.status === 'DONE')
       .reduce((sum, t) => sum + (t.estimatedHours || 0), 0);
-
-    // Overdue tasks
-    const now = new Date();
-    const overdueTasks = projectTasks.filter(t =>
-      t.dueDate &&
-      new Date(t.dueDate) < now &&
-      t.status !== 'DONE'
-    );
-
-    // Tasks by assignee
-    const assigneeStats = projectTasks.reduce((acc, task) => {
-      const assignees = task.assigneeIds || [];
-      assignees.forEach(assigneeId => {
-        if (!acc[assigneeId]) {
-          acc[assigneeId] = {
-            total: 0,
-            completed: 0,
-            inProgress: 0,
-          };
-        }
-        acc[assigneeId].total++;
-        if (task.status === 'DONE') acc[assigneeId].completed++;
-        if (task.status === 'IN_PROGRESS') acc[assigneeId].inProgress++;
-      });
-      return acc;
-    }, {} as Record<string, { total: number; completed: number; inProgress: number }>);
-
-    // Completion trend over a 30-day window ending today (inclusive), so today's
-    // completions still get a bucket. Bucketed on the real completion date.
-    const trendStart = new Date();
-    trendStart.setDate(trendStart.getDate() - 29);
-
-    const completionTrend = Array.from({ length: 30 }, (_, i) => {
-      const date = new Date(trendStart);
-      date.setDate(date.getDate() + i);
-
-      const completedOnDay = projectTasks.filter(t => {
-        if (t.status !== 'DONE') return false;
-        const completed = completionDate(t);
-        if (!completed) return false;
-        return new Date(completed).toDateString() === date.toDateString();
-      }).length;
-
-      return {
-        date: toLocalDateString(date),
-        completed: completedOnDay,
-      };
-    });
 
     return {
       totalTasks,
-      completedTasks,
       completionRate,
       statusDistribution,
       priorityDistribution,
       totalEstimatedHours,
-      totalActualHours,
-      timeEfficiency,
       completedEstimatedHours,
-      overdueTasks: overdueTasks.length,
-      overdueTasksList: overdueTasks,
-      assigneeStats,
-      completionTrend,
+      // The one definition, shared with every other screen that counts them
+      // (lib/task-dates.ts). Due today is not overdue.
+      overdueTasks: projectTasks.filter((t) => isTaskOverdue(t)).length,
     };
   }, [projectId, allTasks]);
 
@@ -155,7 +85,7 @@ export function useProjectAnalytics(projectId?: string, workspaceId?: string) {
 
 /**
  * Team Performance Analytics Hook
- * Returns team-wide performance metrics
+ * Who holds the work and how much of it they have finished.
  */
 export function useTeamAnalytics(workspaceId?: string) {
   const tasksQuery = useWorkspaceTasks(workspaceId);
@@ -174,15 +104,15 @@ export function useTeamAnalytics(workspaceId?: string) {
 
     // Members that currently hold at least one task
     const teamMembers = new Set<string>();
-    allTasks.forEach(task => {
-      (task.assigneeIds || []).forEach(id => teamMembers.add(id));
+    allTasks.forEach((task) => {
+      (task.assigneeIds || []).forEach((id) => teamMembers.add(id));
     });
 
     // Every row this hook returns is keyed by user id, and the screens that
     // render them had nothing else to show — so the leaderboard and the
     // workload axis both read "Member rJJUvZYp". The roster is already loaded
     // here (teamSize below counts it), so the name is resolved once, centrally.
-    const nameById = new Map((members ?? []).map(m => [m.userId, m.name || m.email]));
+    const nameById = new Map((members ?? []).map((m) => [m.userId, m.name || m.email]));
     // Two different misses. Roster loaded but this assignee is not on it: they
     // genuinely left the workspace, so "Unknown member" is the truth. Roster
     // failed: there is no name to look up for ANYONE, and labelling every row
@@ -192,55 +122,30 @@ export function useTeamAnalytics(workspaceId?: string) {
     const nameOf = (id: string) =>
       nameById.get(id) ?? (rosterFailed ? `Member ${id.slice(0, 8)}` : 'Unknown member');
 
-    // Individual performance
-    const memberPerformance = Array.from(teamMembers).map(memberId => {
-      const memberTasks = allTasks.filter(t =>
-        (t.assigneeIds || []).includes(memberId)
-      );
-
-      const completed = memberTasks.filter(t => t.status === 'DONE').length;
-      const inProgress = memberTasks.filter(t => t.status === 'IN_PROGRESS').length;
+    const memberPerformance = Array.from(teamMembers).map((memberId) => {
+      const memberTasks = allTasks.filter((t) => (t.assigneeIds || []).includes(memberId));
+      const completed = memberTasks.filter((t) => t.status === 'DONE').length;
       const total = memberTasks.length;
-
-      // Velocity expressed as completed task count
-      const velocityPoints = completed;
-
-      // Time efficiency
-      const estimatedHours = memberTasks.reduce((sum, t) => sum + (t.estimatedHours || 0), 0);
-      const actualHours = memberTasks.reduce((sum, t) => sum + (t.actualHours || 0), 0);
-
       return {
         memberId,
         memberName: nameOf(memberId),
         totalTasks: total,
         completedTasks: completed,
-        inProgressTasks: inProgress,
         completionRate: total > 0 ? (completed / total) * 100 : 0,
-        velocity: velocityPoints,
-        estimatedHours,
-        actualHours,
-        efficiency: computeTimeEfficiency(estimatedHours, actualHours),
       };
     });
 
-    // Team averages
-    const avgCompletionRate = memberPerformance.length > 0
-      ? memberPerformance.reduce((sum, m) => sum + m.completionRate, 0) / memberPerformance.length
-      : 0;
-
-    const avgVelocity = memberPerformance.length > 0
-      ? memberPerformance.reduce((sum, m) => sum + m.velocity, 0) / memberPerformance.length
-      : 0;
+    const avgCompletionRate =
+      memberPerformance.length > 0
+        ? memberPerformance.reduce((sum, m) => sum + m.completionRate, 0) / memberPerformance.length
+        : 0;
 
     // Workload distribution. The denominator is the number of assignments, not
     // the number of tasks: a task with three assignees counts once per assignee,
     // so shares of a task-count denominator would sum to well over 100%.
-    const totalAssignments = allTasks.reduce(
-      (sum, t) => sum + (t.assigneeIds || []).length,
-      0
-    );
+    const totalAssignments = allTasks.reduce((sum, t) => sum + (t.assigneeIds || []).length, 0);
 
-    const workloadDistribution = memberPerformance.map(m => ({
+    const workloadDistribution = memberPerformance.map((m) => ({
       memberId: m.memberId,
       memberName: m.memberName,
       taskCount: m.totalTasks,
@@ -258,7 +163,6 @@ export function useTeamAnalytics(workspaceId?: string) {
       totalTasks: allTasks.length,
       memberPerformance,
       avgCompletionRate,
-      avgVelocity,
       workloadDistribution,
     };
   }, [workspaceId, allTasks, members, rosterFailed]);
@@ -277,7 +181,7 @@ export function useTeamAnalytics(workspaceId?: string) {
 
 /**
  * Workspace Overview Analytics Hook
- * Returns high-level KPIs for the entire workspace
+ * The workspace's headline figures and its six-month completion trend.
  */
 export function useWorkspaceAnalytics(workspaceId?: string) {
   const projectsQuery = useProjects(workspaceId);
@@ -294,45 +198,25 @@ export function useWorkspaceAnalytics(workspaceId?: string) {
   const data = useMemo(() => {
     if (!workspaceId || !projects || !sprints || !allTasks) return null;
 
-    // Project health
-    const planningProjects = projects.filter(p => p.status === 'PLANNING').length;
-    const activeProjects = projects.filter(p => p.status === 'ACTIVE').length;
-    const completedProjects = projects.filter(p => p.status === 'COMPLETED').length;
-    const onHoldProjects = projects.filter(p => p.status === 'ON_HOLD').length;
-
-    // Sprint health
-    const activeSprints = sprints.filter(s => s.status === 'ACTIVE').length;
-    const completedSprints = sprints.filter(s => s.status === 'COMPLETED').length;
-
-    // Overall task metrics
     const totalTasks = allTasks.length;
-    const completedTasks = allTasks.filter(t => t.status === 'DONE').length;
-    const inProgressTasks = allTasks.filter(t => t.status === 'IN_PROGRESS').length;
-
-    // Time metrics
-    const totalEstimatedHours = allTasks.reduce((sum, t) => sum + (t.estimatedHours || 0), 0);
-    const totalActualHours = allTasks.reduce((sum, t) => sum + (t.actualHours || 0), 0);
-
-    // Budget: uses estimated vs actual hours as a proxy for planned vs spent effort.
-    // To track monetary budget, add `budget` and `hourlyRate` fields to the Project type.
-    const totalBudget = totalEstimatedHours;
-    const spentBudget = totalActualHours;
+    const completedTasks = allTasks.filter((t) => t.status === 'DONE').length;
 
     // Members that currently hold at least one task
     const teamMembers = new Set<string>();
-    allTasks.forEach(task => {
-      (task.assigneeIds || []).forEach(id => teamMembers.add(id));
+    allTasks.forEach((task) => {
+      (task.assigneeIds || []).forEach((id) => teamMembers.add(id));
     });
 
-    // Monthly trends (last 6 months), bucketed on the real completion date.
+    // The last six calendar months, bucketed on the real completion date. Each
+    // month is built from its first day: stepping today's date back with
+    // setMonth overflows on the 29th–31st (31 March back to "31 November" is
+    // 1 December), which listed one month twice and skipped another.
+    const now = new Date();
     const monthlyTrends = Array.from({ length: 6 }, (_, i) => {
-      const date = new Date();
-      date.setMonth(date.getMonth() - (5 - i));
+      const monthStart = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
+      const nextMonthStart = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1);
 
-      const monthStart = new Date(date.getFullYear(), date.getMonth(), 1);
-      const nextMonthStart = new Date(date.getFullYear(), date.getMonth() + 1, 1);
-
-      const tasksCompletedInMonth = allTasks.filter(t => {
+      const tasksCompletedInMonth = allTasks.filter((t) => {
         if (t.status !== 'DONE') return false;
         const completed = completionDate(t);
         if (!completed) return false;
@@ -341,7 +225,7 @@ export function useWorkspaceAnalytics(workspaceId?: string) {
       }).length;
 
       return {
-        month: date.toLocaleString('default', { month: 'short', year: 'numeric' }),
+        month: monthStart.toLocaleString('default', { month: 'short', year: 'numeric' }),
         completed: tasksCompletedInMonth,
       };
     });
@@ -349,32 +233,16 @@ export function useWorkspaceAnalytics(workspaceId?: string) {
     return {
       projects: {
         total: projects.length,
-        planning: planningProjects,
-        active: activeProjects,
-        completed: completedProjects,
-        onHold: onHoldProjects,
+        active: projects.filter((p) => p.status === 'ACTIVE').length,
       },
       sprints: {
-        total: sprints.length,
-        active: activeSprints,
-        completed: completedSprints,
+        active: sprints.filter((s) => s.status === 'ACTIVE').length,
       },
       tasks: {
         total: totalTasks,
         completed: completedTasks,
-        inProgress: inProgressTasks,
+        inProgress: allTasks.filter((t) => t.status === 'IN_PROGRESS').length,
         completionRate: totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0,
-      },
-      budget: {
-        total: totalBudget,
-        spent: spentBudget,
-        remaining: totalBudget - spentBudget,
-        utilization: totalBudget > 0 ? (spentBudget / totalBudget) * 100 : 0,
-      },
-      time: {
-        estimated: totalEstimatedHours,
-        actual: totalActualHours,
-        efficiency: computeTimeEfficiency(totalEstimatedHours, totalActualHours),
       },
       team: {
         // Roster size, not assignee count — see useTeamAnalytics for the same

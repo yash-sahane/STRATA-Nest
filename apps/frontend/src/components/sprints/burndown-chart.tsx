@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Area, AreaChart } from 'recharts';
 import type { Task } from '@/types';
 import { legendLabel } from '@/lib/chart-legend';
+import type { SprintFigures } from '@/lib/sprint-figures';
 import { format, eachDayOfInterval, startOfDay, endOfDay, parseISO } from 'date-fns';
 
 // Design tokens, not raw hex: the previous slate/blue literals ignored dark mode
@@ -25,21 +26,50 @@ interface BurndownChartProps {
   tasks: Task[];
   sprintStartDate: string;
   sprintEndDate: string;
+  /**
+   * How far the sprint got (sprintFigures). Closing a sprint rolls its
+   * unfinished tasks out, so `tasks` then holds the finished ones alone and
+   * counting them read 100% on every closed sprint, against the board's own
+   * stat card and Analytics. The totals come from here when it is given.
+   */
+  figures?: SprintFigures;
 }
 
 interface ChartDataPoint {
   day: string;
   date: Date;
   ideal: number;
-  actual: number;
-  completed: number;
+  actual: number | null;
+  completed: number | null;
+}
+
+interface BurndownTooltipProps {
+  active?: boolean;
+  payload?: Array<{
+    name?: React.ReactNode;
+    value?: number | string | null;
+    color?: string;
+    payload: ChartDataPoint;
+  }>;
 }
 
 export function BurndownChart({
   tasks,
   sprintStartDate,
-  sprintEndDate
+  sprintEndDate,
+  figures,
 }: BurndownChartProps) {
+  const doneTasks = tasks.filter((t) => t.status === 'DONE').length;
+  const totalTasks = figures?.total ?? tasks.length;
+  const completedTasks = figures?.completed ?? doneTasks;
+  // Closed before figures were kept: there is no true rate, and none is invented.
+  const unrecorded = figures?.source === 'unrecorded';
+  const completionRate = figures
+    ? figures.completionRate
+    : totalTasks > 0
+      ? Math.round((completedTasks / totalTasks) * 100)
+      : 0;
+
   const chartData = React.useMemo(() => {
     // Sprint dates arrive date-only ("2026-08-11"). `new Date(...)` parses that
     // as UTC midnight, which lands on the previous local day west of UTC and
@@ -51,8 +81,9 @@ export function BurndownChart({
     // Get all days in sprint
     const sprintDays = eachDayOfInterval({ start, end });
     
-    // Calculate total tasks (story points removed)
-    const totalPoints = tasks.length;
+    // Calculate total tasks (story points removed). On a closed sprint that is
+    // what it closed with, rolled-over work included, as on Analytics.
+    const totalPoints = totalTasks;
     const totalDays = sprintDays.length;
 
     // Build chart data
@@ -79,24 +110,24 @@ export function BurndownChart({
         day: `Day ${dayNumber}`,
         date: day,
         ideal: Math.max(0, Math.round(idealRemaining)),
-        actual: day <= today ? Math.round(actualRemaining) : null as any,
-        completed: day <= today ? Math.round(completedPoints) : null as any,
+        actual: day <= today ? Math.round(actualRemaining) : null,
+        completed: day <= today ? Math.round(completedPoints) : null,
       };
     });
 
     return { data, totalPoints };
-  }, [tasks, sprintStartDate, sprintEndDate]);
+  }, [tasks, totalTasks, sprintStartDate, sprintEndDate]);
 
-  const CustomTooltip = ({ active, payload }: any) => {
+  const CustomTooltip = ({ active, payload }: BurndownTooltipProps) => {
     if (active && payload && payload.length) {
       const data = payload[0].payload;
       return (
         <div className="bg-background border rounded-lg p-3 shadow-lg">
           <p className="font-medium text-sm mb-1">
-            {format(data.date, 'MMM dd, yyyy')}
+            {format(data.date, 'MMM d, yyyy')}
           </p>
           <p className="text-sm text-muted-foreground mb-1">{data.day}</p>
-          {payload.map((entry: any, index: number) => (
+          {payload.map((entry, index) => (
             <p key={index} className="text-sm" style={{ color: entry.color }}>
               {entry.name}: {entry.value} tasks
             </p>
@@ -107,9 +138,6 @@ export function BurndownChart({
     return null;
   };
 
-  const completedTasks = tasks.filter(t => t.status === 'DONE').length;
-  const completionRate = tasks.length > 0 ? Math.round((completedTasks / tasks.length) * 100) : 0;
-
   return (
     <Card>
       <CardHeader>
@@ -117,11 +145,13 @@ export function BurndownChart({
           <div>
             <CardTitle>Sprint Burndown</CardTitle>
             <CardDescription>
-              Ideal vs actual remaining tasks
+              {unrecorded
+                ? 'Not recorded — this sprint was closed before completion figures were kept'
+                : 'Ideal vs actual remaining tasks'}
             </CardDescription>
           </div>
           <div className="text-right">
-            <div className="text-2xl font-bold">{completionRate}%</div>
+            <div className="text-2xl font-bold">{unrecorded ? '—' : `${completionRate}%`}</div>
             <p className="text-xs text-muted-foreground">Complete</p>
           </div>
         </div>
@@ -187,14 +217,16 @@ export function BurndownChart({
           </div>
           <div className="text-center">
             <p className="text-sm text-muted-foreground">Completed</p>
-            <p className="text-2xl font-bold text-green-700 dark:text-green-400">
-              {tasks.filter(t => t.status === 'DONE').length}
-            </p>
+            <p className="text-2xl font-bold text-success-text">{completedTasks}</p>
           </div>
           <div className="text-center">
-            <p className="text-sm text-muted-foreground">Remaining</p>
-            <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">
-              {tasks.filter(t => t.status !== 'DONE').length}
+            {/* A closed sprint has nothing remaining in it: what was unfinished
+                left it, back to the backlog. */}
+            <p className="text-sm text-muted-foreground">
+              {figures?.source === 'snapshot' ? 'Rolled Over' : 'Remaining'}
+            </p>
+            <p className="text-2xl font-bold text-info-text">
+              {Math.max(0, totalTasks - completedTasks)}
             </p>
           </div>
         </div>

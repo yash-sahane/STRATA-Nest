@@ -1,15 +1,16 @@
 import { useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { resources } from '@/lib/api/client';
 import { query } from '@/lib/api/client';
 import {
     attendanceWindowStart,
     getCurrentDate,
-    getMonthDateRange,
     isWorkingDay,
 } from '@/lib/attendance-utils';
 import { useHolidays } from '@/hooks/use-holidays';
 import type { HolidayDates } from '@/lib/utils/working-days';
+import type { Attendance } from '@/types';
+import { toast } from 'sonner';
 
 // ============================================================================
 // Types
@@ -30,6 +31,7 @@ export interface TeamMemberAttendance {
         workHours?: number;
         status: string;
         lateMinutes?: number;
+        notes?: string;
     };
     /**
       * UNKNOWN: the day is in the future, or predates this membership, so there
@@ -37,6 +39,19 @@ export interface TeamMemberAttendance {
       * judgement about a day the person could have attended.
       */
     status: 'PRESENT' | 'ABSENT' | 'LATE' | 'ON_LEAVE' | 'WEEKEND' | 'HALF_DAY' | 'UNKNOWN';
+}
+
+/** A workspace_members row, as far as the roster below reads it. */
+interface WorkspaceMemberRow {
+    userId: string;
+    /** The member's display name — the field the API sends (workspaces/mappers.ts). */
+    name?: string;
+    userName?: string;
+    email: string;
+    avatar?: string | null;
+    userAvatar?: string;
+    role?: string;
+    joinedAt?: string;
 }
 
 export interface TeamAttendanceAnalytics {
@@ -78,22 +93,22 @@ export function useTeamAttendance(workspaceId?: string, date?: string) {
 
             // Fetch all workspace members (listAll: a single page silently
             // truncates the roster past 100 members and skews every counter)
-            const membersResponse = await resources.listAll('workspace_members', [
+            const membersResponse = await resources.listAll<WorkspaceMemberRow>('workspace_members', [
                 query.equal('workspaceId', workspaceId),
                 query.equal('status', 'ACTIVE'),
             ]
             );
 
             // Fetch attendance records for the date
-            const attendanceResponse = await resources.listAll('attendance', [
+            const attendanceResponse = await resources.listAll<Attendance>('attendance', [
                 query.equal('workspaceId', workspaceId),
                 query.equal('date', targetDate),
             ]
             );
 
             // Create a map of attendance by userId
-            const attendanceMap = new Map();
-            attendanceResponse.items.forEach((record: any) => {
+            const attendanceMap = new Map<string, Attendance>();
+            attendanceResponse.items.forEach((record) => {
                 attendanceMap.set(record.userId, record);
             });
 
@@ -105,7 +120,7 @@ export function useTeamAttendance(workspaceId?: string, date?: string) {
             const dateIsFuture = targetDate > getCurrentDate();
 
             // Combine member data with attendance
-            const teamAttendance: TeamMemberAttendance[] = membersResponse.items.map((member: any) => {
+            const teamAttendance: TeamMemberAttendance[] = membersResponse.items.map((member) => {
                 const attendance = attendanceMap.get(member.userId);
 
                 // A persisted row always wins over the "no check-in ⇒ absent"
@@ -128,9 +143,14 @@ export function useTeamAttendance(workspaceId?: string, date?: string) {
 
                 return {
                     userId: member.userId,
-                    userName: member.userName || member.email,
+                    // `name` is what a workspace_members row carries. This read
+                    // `userName` alone — a field the API never sends — so every
+                    // person on Team Attendance was listed by email address,
+                    // twice, under the same people the Team page shows by name.
+                    userName: member.name || member.userName || member.email,
                     userEmail: member.email,
-                    userAvatar: member.userAvatar,
+                    // The API sends `avatar`; `userAvatar` was read and never there.
+                    userAvatar: member.avatar ?? member.userAvatar,
                     role: member.role || 'MEMBER',
                     attendance: attendance ? {
                         id: attendance.id,
@@ -143,6 +163,7 @@ export function useTeamAttendance(workspaceId?: string, date?: string) {
                         workHours: attendance.workHours,
                         status: attendance.status,
                         lateMinutes: attendance.lateMinutes,
+                        notes: attendance.notes,
                     } : undefined,
                     status,
                 };
@@ -225,36 +246,93 @@ export function useTeamAttendanceAnalytics(workspaceId?: string, date?: string) 
     return { ...rest, data: analytics };
 }
 
+// ============================================================================
+// HR corrections
+// ============================================================================
+
 /**
- * Get team attendance for a date range (for reports)
- * Manager-only feature
+ * What a correction may say about a day.
+ *
+ * `status` is only ever sent to OVERRIDE what the times work out to: the server
+ * derives the hours, the lateness and the status from the two stamps, and an
+ * explicit status is how a day is restated as an absence or a half day anyway.
  */
-export function useTeamAttendanceRange(
-    workspaceId?: string,
-    year?: number,
-    month?: number
-) {
-    const currentDate = new Date();
-    const targetYear = year ?? currentDate.getFullYear();
-    const targetMonth = month ?? currentDate.getMonth();
-    const { start, end } = getMonthDateRange(targetYear, targetMonth);
+export interface AttendanceCorrection {
+    /** ISO instant. */
+    checkInTime: string;
+    /** ISO instant, or null for a day that is still open. */
+    checkOutTime: string | null;
+    status?: 'ABSENT' | 'HALF_DAY';
+    notes?: string;
+}
 
-    return useQuery({
-        queryKey: ['teamAttendanceRange', workspaceId, targetYear, targetMonth],
-        queryFn: async () => {
-            if (!workspaceId) return [];
+/** Every cache a changed attendance row is read from: the member's own Today /
+ *  Calendar / Analytics, the Team roster, and the monthly report. */
+function invalidateAttendance(queryClient: QueryClient): void {
+    queryClient.invalidateQueries({ queryKey: ['attendance'] });
+    queryClient.invalidateQueries({ queryKey: ['teamAttendance'] });
+    queryClient.invalidateQueries({ queryKey: ['teamAttendanceRange'] });
+}
 
-            // Fetch attendance records for the date range
-            const response = await resources.listAll('attendance', [
-                query.equal('workspaceId', workspaceId),
-                query.greaterThanEqual('date', start),
-                query.lessThanEqual('date', end),
-                query.orderDesc('date'),
-            ]
-            );
+const reasonOf = (error: unknown) =>
+    error instanceof Error && error.message ? error.message : 'Please try again.';
 
-            return response.items as any[];
+/** Restate a day that already has a record. */
+export function useCorrectAttendance() {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: async ({
+            attendanceId,
+            ...correction
+        }: AttendanceCorrection & { attendanceId: string }) =>
+            resources.update('attendance', attendanceId, { ...correction }),
+        onSuccess: () => {
+            invalidateAttendance(queryClient);
+            toast.success('Attendance corrected');
         },
-        enabled: !!workspaceId,
+        onError: (error: unknown) => {
+            toast.error("Couldn't correct the record", { description: reasonOf(error) });
+        },
+    });
+}
+
+/** File a day for a member who has no record for it — a forgotten check-in, or
+ *  work done on a day the Today tab offers no control for. */
+export function useFileAttendance() {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: async ({
+            checkOutTime,
+            ...rest
+        }: AttendanceCorrection & { workspaceId: string; userId: string; date: string }) =>
+            resources.create('attendance', {
+                ...rest,
+                // The create route takes an absent check-out, not a null one.
+                ...(checkOutTime ? { checkOutTime } : {}),
+            }),
+        onSuccess: () => {
+            invalidateAttendance(queryClient);
+            toast.success('Attendance filed');
+        },
+        onError: (error: unknown) => {
+            toast.error("Couldn't file the record", { description: reasonOf(error) });
+        },
+    });
+}
+
+/** Remove a record outright, leaving the day with nothing filed. */
+export function useDeleteAttendance() {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: async ({ attendanceId }: { attendanceId: string }) => {
+            await resources.remove('attendance', attendanceId);
+        },
+        onSuccess: () => {
+            invalidateAttendance(queryClient);
+            toast.success('Attendance record deleted');
+        },
+        onError: (error: unknown) => {
+            toast.error("Couldn't delete the record", { description: reasonOf(error) });
+        },
     });
 }

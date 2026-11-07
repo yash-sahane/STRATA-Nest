@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { resources, query, id } from '@/lib/api/client';
+import { resources, query } from '@/lib/api/client';
 import type { TaskComment } from '@/types';
-import { toast } from '@/hooks/use-toast';
+import { toast } from 'sonner';
 
 /**
  * Task comments.
@@ -37,11 +37,10 @@ export function useCreateTaskComment() {
 
   return useMutation({
     mutationFn: async ({ taskId, content }: { taskId: string; content: string }) => {
-      const response = await resources.create('task_comments', id.unique(), {
+      const response = await resources.create('task_comments', {
         taskId,
         content,
         mentions: [],
-        attachments: [],
       });
       return response as unknown as TaskComment;
     },
@@ -49,11 +48,7 @@ export function useCreateTaskComment() {
       queryClient.invalidateQueries({ queryKey: taskCommentKey(comment.taskId) });
     },
     onError: (error: unknown) => {
-      toast({
-        title: 'Comment not posted',
-        description: error instanceof Error ? error.message : 'Please try again.',
-        variant: 'destructive',
-      });
+      toast.error('Comment not posted', { description: error instanceof Error ? error.message : 'Please try again.' });
     },
   });
 }
@@ -77,11 +72,7 @@ export function useUpdateTaskComment() {
       queryClient.invalidateQueries({ queryKey: taskCommentKey(variables.taskId) });
     },
     onError: (error: unknown) => {
-      toast({
-        title: 'Comment not updated',
-        description: error instanceof Error ? error.message : 'Please try again.',
-        variant: 'destructive',
-      });
+      toast.error('Comment not updated', { description: error instanceof Error ? error.message : 'Please try again.' });
     },
   });
 }
@@ -98,11 +89,7 @@ export function useDeleteTaskComment() {
       queryClient.invalidateQueries({ queryKey: taskCommentKey(variables.taskId) });
     },
     onError: (error: unknown) => {
-      toast({
-        title: 'Comment not deleted',
-        description: error instanceof Error ? error.message : 'Please try again.',
-        variant: 'destructive',
-      });
+      toast.error('Comment not deleted', { description: error instanceof Error ? error.message : 'Please try again.' });
     },
   });
 }

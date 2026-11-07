@@ -3,24 +3,21 @@
  * React hooks for checking user permissions
  */
 
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
-import { query, resources } from '@/lib/api/client';
-import {
-    Permission,
-    isAdmin,
-    isBuiltInRole,
-    isManager,
-    permissionsOfRole,
-    getRolePermissions,
-    type Role,
-} from '@/lib/permissions';
+import { restClient } from '@/lib/api/rest-client';
+import { useWorkspaceRoles } from '@/hooks/use-workspace-roles';
+import { canGrantKeys, keysOfRole } from '@/lib/role-catalogue';
+import { Permission, permissionsFromKeys, type Role } from '@/lib/permissions';
 
 /** Stable identity for "no permissions", so the memos below don't see a new
  *  array on every render of a workspace the caller is not a member of. */
 const NO_PERMISSIONS: Permission[] = [];
+const NO_KEYS: readonly string[] = [];
+/** What the API answers for a platform admin: every permission, by wildcard. */
+const EVERY_KEY: ReadonlySet<string> = new Set(['*']);
 
 /**
  * Platform admins (`isSuperuser || isAdminFlag` on the API side) bypass every
@@ -35,129 +32,44 @@ function useIsPlatformAdmin(): boolean {
 }
 
 /**
- * EVERY membership the caller holds, anywhere — one request, whatever the number
- * of workspaces on screen.
+ * What the caller may do in every workspace they are ACTIVE in — one request,
+ * answered by the server (GET /auth/me/access), whatever the number of
+ * workspaces on screen.
  *
- * `useWorkspaceRole` used to answer by fetching the target workspace's whole
- * roster (`['team-members', workspaceId]`) and reading a single row out of it.
- * On the /workspaces list that is one distinct cache key — so one network round
- * trip, of the ENTIRE member list — per rendered card, none of them
- * deduplicated, to learn N facts the server could state in one reply. This query
- * is keyed on the USER, so N cards cost one request and every card reads it from
- * cache.
- */
-function useMyMemberships() {
-    const { user } = useAuth();
-    return useQuery({
-        queryKey: ['my-memberships', user?.id],
-        enabled: Boolean(user?.id),
-        queryFn: async () => {
-            if (!user?.id) return [];
-            const response = await resources.listAll('workspace_members', [
-                query.equal('userId', user.id),
-            ]);
-            return response.items as Array<{
-                workspaceId: string;
-                role?: string;
-                status?: string;
-            }>;
-        },
-    });
-}
-
-/**
- * The CUSTOM role definitions of the workspaces the caller belongs to.
- *
- * A workspace may define `WorkspaceRole` rows with any name, and the API
- * resolves a membership holding one against that row's own permission array
- * (`WorkspaceAccessService.permissionsOfRole`). The client resolved names
- * against the hardcoded matrix of the seven built-ins ONLY, so a custom role
- * was answered with the read-only floor no matter what it granted — a role
- * holding `member:invite` rendered zero Invite buttons while the API returned
- * 201 for the very same principal.
- *
- * One UNFILTERED request: `/api/v1/workspace_roles` is membership-scoped
- * server-side, so it already returns exactly this caller's workspaces' roles.
- * Asking per workspace would be a round trip per card on /workspaces, which is
- * the trap `useMyMemberships` above exists to avoid. Skipped altogether while
- * every membership names a built-in role, which is the ordinary case.
- */
-function useMyRoleDefinitions(enabled: boolean) {
-    const { user } = useAuth();
-    return useQuery({
-        queryKey: ['my-role-definitions', user?.id],
-        enabled: Boolean(user?.id) && enabled,
-        queryFn: async () => {
-            const response = await resources.listAll('workspace_roles');
-            return response.items as Array<{
-                workspaceId: string;
-                name: string;
-                permissions?: string[];
-            }>;
-        },
-        // Role definitions change when an admin edits the RBAC config, which is
-        // rare; every screen asks this question, so don't refetch it per mount.
-        staleTime: 5 * 60 * 1000,
-    });
-}
-
-/** A role name is only unique WITHIN a workspace, so the definition lookup has
- *  to be keyed on both. NUL separator: neither id nor name can contain one. */
-const grantKey = (workspaceId: string, role: string) => `${workspaceId}\u0000${role}`;
-
-/**
- * What the caller may do in each workspace they are ACTIVE in.
- *
- * ACTIVE only, because that is the server's own rule: WorkspaceAccessService
- * resolves permissions from `activeMembership`, so an INVITED or deactivated
- * membership carries none. Matching on any status handed those users their
- * former role's affordances and every submit came back 403.
+ * The browser used to resolve this itself from the caller's memberships, a
+ * hand-kept copy of the API's role matrix, and (for a custom role) the role's
+ * stored keys — without the keys the API adds by implication, so a custom role
+ * holding `task:write` showed no edit controls the API would have allowed.
+ * ACTIVE only, as the server's own checks: an invited or switched-off
+ * membership carries nothing.
  */
 function useMyAccess(): {
-    byWorkspace: Map<string, { role: Role; permissions: Permission[] }>;
+    byWorkspace: Map<string, { role: Role; permissions: Permission[]; keys: readonly string[] }>;
     isLoading: boolean;
     isError: boolean;
 } {
-    const { data: memberships = [], isLoading, isError } = useMyMemberships();
-
-    const active = useMemo(
-        () => memberships.filter((m): m is { workspaceId: string; role: string; status: string } =>
-            m.status === 'ACTIVE' && Boolean(m.role),
-        ),
-        [memberships],
-    );
-    const hasCustomRole = useMemo(() => active.some(m => !isBuiltInRole(m.role)), [active]);
-    const { data: definitions = [], isLoading: definitionsLoading } =
-        useMyRoleDefinitions(hasCustomRole);
-
+    const { user } = useAuth();
+    const { data, isLoading, isError } = useQuery({
+        queryKey: ['my-access', user?.id],
+        enabled: Boolean(user?.id),
+        queryFn: async () =>
+            (await restClient.get('/api/v1/auth/me/access/')) as {
+                platformAdmin: boolean;
+                workspaces: Array<{ workspaceId: string; role: string; permissions: string[] }>;
+            },
+    });
     const byWorkspace = useMemo(() => {
-        const granted = new Map<string, string[]>();
-        for (const definition of definitions) {
-            granted.set(
-                grantKey(definition.workspaceId, definition.name),
-                Array.isArray(definition.permissions) ? definition.permissions : [],
-            );
-        }
-        const map = new Map<string, { role: Role; permissions: Permission[] }>();
-        for (const membership of active) {
-            const role = membership.role as Role;
+        const map = new Map<string, { role: Role; permissions: Permission[]; keys: readonly string[] }>();
+        for (const membership of data?.workspaces ?? []) {
             map.set(membership.workspaceId, {
-                role,
-                permissions: permissionsOfRole(role, granted.get(grantKey(membership.workspaceId, role))),
+                role: membership.role as Role,
+                permissions: permissionsFromKeys(membership.permissions),
+                keys: membership.permissions,
             });
         }
         return map;
-    }, [active, definitions]);
-
-    return {
-        byWorkspace,
-        // A custom role is not RESOLVED until its definition lands. Reporting
-        // "loaded" in that window answers with the read-only floor for a frame,
-        // which blinks away the very affordances the definition is about to
-        // grant — the same "no vs not yet" confusion the flag exists for.
-        isLoading: isLoading || (hasCustomRole && definitionsLoading),
-        isError,
-    };
+    }, [data]);
+    return { byWorkspace, isLoading, isError };
 }
 
 /**
@@ -182,6 +94,8 @@ function useMyAccess(): {
 export function useWorkspaceRole(workspaceId?: string): {
     role: Role | null;
     permissions: Permission[];
+    /** The same grant as API permission keys — see `useMyPermissionKeys`. */
+    keys: readonly string[];
     isLoading: boolean;
     isError: boolean;
 } {
@@ -191,9 +105,40 @@ export function useWorkspaceRole(workspaceId?: string): {
     return {
         role: access?.role ?? null,
         permissions: access?.permissions ?? NO_PERMISSIONS,
+        keys: access?.keys ?? NO_KEYS,
         isLoading: Boolean(workspaceId) && isLoading,
         isError,
     };
+}
+
+/**
+ * The API permission keys the caller holds in a workspace (`*` for a platform
+ * admin, who is not ranked).
+ *
+ * For what `useHasPermission` cannot express. That hook answers in the
+ * screen-level enum, which folds several API keys together and has no entry at
+ * all for `role:manage`, `invite:manage` or `join:manage` — so "may this person
+ * edit roles?" had nothing to ask.
+ */
+export function useMyPermissionKeys(workspaceId: string | undefined): {
+    keys: ReadonlySet<string>;
+    isLoading: boolean;
+} {
+    const platformAdmin = useIsPlatformAdmin();
+    const { keys, isLoading } = useWorkspaceRole(workspaceId);
+    return useMemo(
+        () =>
+            platformAdmin
+                ? { keys: EVERY_KEY, isLoading: false }
+                : { keys: new Set(keys), isLoading },
+        [platformAdmin, keys, isLoading],
+    );
+}
+
+/** Whether the caller holds one API permission key in a workspace. */
+export function useHasPermissionKey(workspaceId: string | undefined, key: string): boolean {
+    const { keys } = useMyPermissionKeys(workspaceId);
+    return keys.has('*') || keys.has(key);
 }
 
 /**
@@ -233,6 +178,32 @@ export function useHasPermissionIn(
 }
 
 /**
+ * Which roles the caller may hand out — or touch — in a workspace.
+ *
+ * The API refuses a role grant above the caller's own (and refuses to change or
+ * remove a member who outranks them), so every role picker and member action
+ * asks this first rather than offering a choice that comes back 403. Platform
+ * admins are not ranked.
+ *
+ * Answered in API keys, against the workspace's own role definitions. It used to
+ * compare screen-level permissions with no definition in hand, so every custom
+ * role resolved to the read-only floor and looked grantable by anybody — a role
+ * carrying `workspace:delete` was offered to a member who could add people, and
+ * the server refused it.
+ */
+export function useCanGrantRole(workspaceId: string | undefined): (role: Role) => boolean {
+    const { keys } = useMyPermissionKeys(workspaceId);
+    const { data: customRoles } = useWorkspaceRoles(workspaceId);
+    return useCallback(
+        (role: Role) => {
+            const definition = customRoles?.find((custom) => custom.name === role);
+            return canGrantKeys(keys, keysOfRole(role, definition?.permissions));
+        },
+        [keys, customRoles],
+    );
+}
+
+/**
  * `useHasPermission` for the CURRENT workspace that distinguishes "no" from
  * "not yet".
  *
@@ -258,35 +229,6 @@ export function useHasPermission(permission: Permission): boolean {
 }
 
 /**
- * Check if current user is admin (Manager or Assistant Manager)
- */
-export function useIsAdmin(): boolean {
-    const role = useUserRole();
-    const platformAdmin = useIsPlatformAdmin();
-
-    return useMemo(() => {
-        if (platformAdmin) return true;
-        if (!role) return false;
-        return isAdmin(role);
-    }, [role, platformAdmin]);
-}
-
-/**
- * Check if current user is manager
- */
-export function useIsManager(): boolean {
-    const role = useUserRole();
-    const platformAdmin = useIsPlatformAdmin();
-
-    return useMemo(() => {
-        if (platformAdmin) return true;
-        if (!role) return false;
-        return isManager(role);
-    }, [role, platformAdmin]);
-}
-
-
-/**
  * The caller's whole permission set for the current workspace, as a Set, with
  * the loading flag alongside.
  *
@@ -301,7 +243,7 @@ export function useNavigationPermissions(): { permissions: Set<Permission>; isLo
 
     return useMemo(() => {
         if (platformAdmin) {
-            return { permissions: new Set(getRolePermissions('MANAGER')), isLoading: false };
+            return { permissions: new Set(permissionsFromKeys(['*'])), isLoading: false };
         }
         return { permissions: new Set(permissions), isLoading };
     }, [platformAdmin, permissions, isLoading]);

@@ -2,8 +2,6 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { resources } from '@/lib/api/client';
 import { query } from '@/lib/api/client';
 import { restClient } from '@/lib/api/rest-client';
-import { toast } from '@/hooks/use-toast';
-import { createNotificationFromTemplate } from '@/hooks/use-notification';
 import {
   getCurrentDate,
   getMonthDateRange,
@@ -20,6 +18,7 @@ import {
 } from '@/lib/utils/working-days';
 import { useHolidays } from '@/hooks/use-holidays';
 import { useTeamMembers } from './use-team';
+import { toast } from 'sonner';
 
 export interface Attendance {
   id: string;
@@ -87,30 +86,54 @@ export function useHolidayCalendar(workspaceId?: string) {
   });
 }
 
-export function useTodayAttendance(userId?: string, workspaceId?: string) {
-  const today = getCurrentDate();
+/** Where the caller stands right now, as `GET /attendance/current` answers it. */
+interface AttendanceStanding {
+  /** The row Check Out would close: today's, or yesterday's shift still running. */
+  record: Attendance | null;
+  /** True when `record` is a shift that began on the previous day. */
+  continuing: boolean;
+  /** The most recent earlier day that was checked into and never closed. */
+  unclosed: Attendance | null;
+}
+
+/**
+ * The caller's own attendance, as the API sees it.
+ *
+ * This used to ask for "the row dated today" — the browser's today. After
+ * midnight that found nothing and offered Check In to somebody in the middle
+ * of a shift; and a day whose check-out was forgotten vanished from this
+ * screen the next morning, still open, with nobody told. The API answers the
+ * real question: which row Check Out would close, and whether an earlier day
+ * was left open.
+ */
+function useAttendanceNow<T>(
+  userId: string | undefined,
+  workspaceId: string | undefined,
+  select: (standing: AttendanceStanding) => T
+) {
   return useQuery({
-    queryKey: ['attendance', 'today', userId, workspaceId, today],
-    queryFn: async () => {
-      if (!userId) return null;
-
-      const queries = [
-        query.equal('userId', userId),
-        query.equal('date', today)
-      ];
-
-      // Add workspaceId filter if provided
-      if (workspaceId) {
-        queries.push(query.equal('workspaceId', workspaceId));
-      }
-
-      const response = await resources.listAll('attendance', queries);
-      if (response.items.length === 0) return null;
-      return response.items[0] as unknown as Attendance;
-    },
-    enabled: !!userId,
+    queryKey: ['attendance', 'now', userId, workspaceId],
+    queryFn: async (): Promise<AttendanceStanding> =>
+      (await restClient.get('/api/v1/attendance/current/', {
+        params: { workspaceId },
+      })) as AttendanceStanding,
+    enabled: !!userId && !!workspaceId,
     refetchInterval: 60000,
+    select,
   });
+}
+
+/** The row the widget's Check Out would close, or null. */
+export function useTodayAttendance(userId?: string, workspaceId?: string) {
+  return useAttendanceNow(userId, workspaceId, (standing) => standing.record);
+}
+
+/** What the widget has to SAY about that row, and about a day left open. */
+export function useAttendanceStanding(userId?: string, workspaceId?: string) {
+  return useAttendanceNow(userId, workspaceId, (standing) => ({
+    continuing: standing.continuing,
+    unclosed: standing.unclosed,
+  }));
 }
 
 export function useCheckIn() {
@@ -135,39 +158,20 @@ export function useCheckIn() {
       });
       return attendance as Attendance;
     },
-    onSuccess: async (attendance, variables) => {
+    onSuccess: async (attendance) => {
       queryClient.invalidateQueries({ queryKey: ['attendance'] });
 
-      // Send notification if user checked in late
-      const isLate = attendance.status === 'LATE';
-      if (isLate) {
-        await createNotificationFromTemplate({
-          workspaceId: variables.workspaceId,
-          userId: attendance.userId,
-          type: 'ATTENDANCE_LATE',
-          data: {
-            checkInTime: new Date(attendance.checkInTime).toLocaleTimeString('en-US', {
-              hour: '2-digit',
-              minute: '2-digit',
-            }),
-            lateMinutes: attendance.lateMinutes || 0,
-            date: attendance.date,
-            entityType: 'ATTENDANCE',
-          },
-        });
-      }
+      // No "you checked in late" notification to the person who has just
+      // checked in: the confirmation below says it, and a notice about your
+      // own act a second earlier was noise in the bell.
 
       // A shut day (declared holiday, weekend) is now FILED rather than
       // refused, so the confirmation has to say so: a bare "successfully checked
       // in" hides that the row is deliberately absent from the attendance rate,
       // and the member would only discover it from a number that never moved.
-      toast({
-        title: 'Checked In',
-        description:
-          attendance.isHoliday || attendance.isWeekend
+      toast.success('Checked In', { description: attendance.isHoliday || attendance.isWeekend
             ? 'Recorded as work on a closed day. You are not marked late, and today does not count towards your attendance rate.'
-            : 'You have successfully checked in for today.',
-      });
+            : 'You have successfully checked in for today.' });
     },
     onError: (error: Error) => {
       const errorMessage = error.message || 'Failed to check in';
@@ -187,11 +191,7 @@ export function useCheckIn() {
         description = 'Network error. Please check your internet connection and try again.';
       }
 
-      toast({
-        title: 'Check-in Failed',
-        description,
-        variant: 'destructive'
-      });
+      toast.error('Check-in Failed', { description: description });
     },
   });
 }
@@ -210,7 +210,7 @@ export function useCheckOut() {
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['attendance'] });
-      toast({ title: 'Checked Out', description: `You worked ${(data.workHours ?? 0).toFixed(1)} hours today.` });
+      toast.success('Checked Out', { description: `You worked ${(data.workHours ?? 0).toFixed(1)} hours today.` });
     },
     onError: (error: Error) => {
       const errorMessage = error.message || 'Failed to check out';
@@ -226,11 +226,7 @@ export function useCheckOut() {
         description = 'Network error. Please check your internet connection and try again.';
       }
 
-      toast({
-        title: 'Check-out Failed',
-        description,
-        variant: 'destructive'
-      });
+      toast.error('Check-out Failed', { description: description });
     },
   });
 }
@@ -310,8 +306,8 @@ export function useAttendanceAnalytics(userId?: string, workspaceId?: string, ye
         query.equal('workspaceId', workspaceId!),
       ];
 
-      const response = await resources.listAll('attendance', queries);
-      const records = response.items as any[];
+      const response = await resources.listAll<Attendance>('attendance', queries);
+      const records = response.items;
 
       // Only days that have already happened can be attended, so the rate's
       // denominator stops at today for the current month (using the whole

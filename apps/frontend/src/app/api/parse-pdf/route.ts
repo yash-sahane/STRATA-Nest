@@ -2,14 +2,25 @@
 import { writeFile, unlink } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import PDFParser from 'pdf2json';
-import { hasApiSession } from '@/lib/api/server-proxy';
+import PDFParser, { type Output } from 'pdf2json';
+import { checkWorkspacePermissions, hasApiSession } from '@/lib/api/server-proxy';
+import { refuseCrossSite } from '@/lib/api/server-proxy';
+import { GENERATION_PERMISSIONS, MAX_PDF_BYTES } from '@/lib/ai-generator';
 import { logger } from '@/lib/logger';
 
-/** Upload ceiling. The parse is CPU-bound and buffers the whole file in memory. */
-const MAX_PDF_BYTES = 20 * 1024 * 1024;
+/**
+ * How long one parse may take. pdf2json reports through two events, and a PDF
+ * that fires neither left the request open forever — and, the clean-up being
+ * after the await, its temp file on disk for good.
+ */
+const PARSE_TIMEOUT_MS = 30_000;
+
+/** Room for the multipart envelope around the file itself. */
+const MULTIPART_OVERHEAD_BYTES = 64 * 1024;
 
 export async function POST(request: NextRequest) {
+    const refused = refuseCrossSite(request);
+    if (refused) return NextResponse.json({ error: refused }, { status: 403 });
   let tempFilePath: string | null = null;
 
   try {
@@ -18,6 +29,25 @@ export async function POST(request: NextRequest) {
     // arbitrarily nasty PDF.
     if (!(await hasApiSession(request))) {
       return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+    }
+    // And signed-in was not enough either: any member, a read-only one included,
+    // could have this server parse PDFs of up to 20 MB on demand. The parse exists
+    // only to feed AI generation, so it takes what generating takes
+    // (GENERATION_PERMISSIONS) — checked from the query string, before the upload
+    // is read at all.
+    const access = await checkWorkspacePermissions(
+      request,
+      request.nextUrl.searchParams.get('workspaceId'),
+      GENERATION_PERMISSIONS,
+      'You do not have permission to generate a plan in this workspace, so documents cannot be read for one.',
+    );
+    if (!access.ok) return NextResponse.json({ error: access.error }, { status: access.status });
+    // A declared size over the limit is refused before the body is buffered.
+    if (Number(request.headers.get('content-length')) > MAX_PDF_BYTES + MULTIPART_OVERHEAD_BYTES) {
+      return NextResponse.json(
+        { error: `PDF is too large (max ${MAX_PDF_BYTES / (1024 * 1024)}MB)` },
+        { status: 413 }
+      );
     }
 
     const formData = await request.formData();
@@ -55,23 +85,38 @@ export async function POST(request: NextRequest) {
     // Parse PDF using pdf2json
     const pdfParser = new PDFParser();
 
-    const parsedData = await new Promise<any>((resolve, reject) => {
-      pdfParser.on('pdfParser_dataError', (errData: any) => {
+    let parseTimer: ReturnType<typeof setTimeout> | undefined;
+    const parsedData = await new Promise<Output>((resolve, reject) => {
+      // A PDF that never fires either event is answered as unreadable, and the
+      // finally below still removes its temp file.
+      parseTimer = setTimeout(() => {
+        const err = new Error(`Parse did not finish within ${PARSE_TIMEOUT_MS / 1000}s`) as Error & {
+          isParseFailure?: boolean;
+          timedOut?: boolean;
+        };
+        err.isParseFailure = true;
+        err.timedOut = true;
+        reject(err);
+      }, PARSE_TIMEOUT_MS);
+
+      pdfParser.on('pdfParser_dataError', (errData) => {
         // Tagged so the catch below can tell "this upload is unreadable" (the
         // caller's problem, 422) from an actual server fault (500). The magic-byte
         // check above only rejects non-PDFs; a real PDF that is truncated,
         // encrypted or corrupt reaches pdf2json and fails here.
-        const err = new Error(String(errData?.parserError ?? 'Unreadable PDF'));
+        const reason = errData instanceof Error ? undefined : errData?.parserError;
+        const err = new Error(String(reason ?? 'Unreadable PDF'));
         (err as Error & { isParseFailure?: boolean }).isParseFailure = true;
         reject(err);
       });
 
-      pdfParser.on('pdfParser_dataReady', (pdfData: any) => {
+      pdfParser.on('pdfParser_dataReady', (pdfData) => {
         resolve(pdfData);
       });
 
-      pdfParser.loadPDF(tempFilePath!);
-    });
+      // Its promise was dropped: a failure to read the file was an unhandled rejection.
+      Promise.resolve(pdfParser.loadPDF(tempFilePath!)).catch(reject);
+    }).finally(() => clearTimeout(parseTimer));
 
     // Extract text from all pages
     let fullText = '';
@@ -102,11 +147,6 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Clean up temp file
-    if (tempFilePath) {
-      await unlink(tempFilePath).catch(() => { });
-    }
-
     const numPages = parsedData?.Pages?.length || 0;
 
     return NextResponse.json({
@@ -114,18 +154,14 @@ export async function POST(request: NextRequest) {
       pages: numPages,
       info: { pages: numPages },
     });
-  } catch (error: any) {
-    // Clean up temp file on error
-    if (tempFilePath) {
-      await unlink(tempFilePath).catch(() => { });
-    }
-
-    if (error?.isParseFailure) {
+  } catch (error: unknown) {
+    if (error instanceof Error && (error as Error & { isParseFailure?: boolean }).isParseFailure) {
       logger.warn('PDF could not be parsed', { error: error.message });
       return NextResponse.json(
         {
-          error:
-            'Could not read this PDF. It may be damaged, encrypted, or password-protected — try re-exporting it.',
+          error: (error as Error & { timedOut?: boolean }).timedOut
+            ? 'This PDF took too long to read. Try a shorter document, or paste its text instead.'
+            : 'Could not read this PDF. It may be damaged, encrypted, or password-protected — try re-exporting it.',
         },
         { status: 422 }
       );
@@ -133,8 +169,13 @@ export async function POST(request: NextRequest) {
 
     logger.error('PDF parsing error', { error });
     return NextResponse.json(
-      { error: 'Failed to parse PDF: ' + error.message },
+      { error: 'Failed to parse PDF: ' + (error instanceof Error ? error.message : String(error)) },
       { status: 500 }
     );
+  } finally {
+    // Every way out — success, refusal, failure, timeout — removes the temp file.
+    if (tempFilePath) {
+      await unlink(tempFilePath).catch(() => { });
+    }
   }
 }

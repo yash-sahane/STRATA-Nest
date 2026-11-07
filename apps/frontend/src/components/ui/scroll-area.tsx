@@ -19,7 +19,9 @@ const ScrollArea = React.forwardRef<
         overflows — so no scrollbar appears — and the Root's `overflow-hidden`
         silently clips the rest. */}
     {/* tabIndex 0: a region that scrolls must be reachable by keyboard, or its
-        overflowing content is unreachable without a mouse (WCAG 2.1.1). */}
+        overflowing content is unreachable without a mouse (WCAG 2.1.1). Its focus
+        ring is drawn INSIDE: the Root clips its overflow, so a ring outside the
+        viewport was cut away and focus was invisible. */}
     {/* `[&>div]:!block`: Radix puts a `display:table; min-width:100%` wrapper in
         here. `display:table` shrink-wraps to content and `min-width` is only a
         floor, so the wrapper grows to the content's max-content width while the
@@ -32,7 +34,7 @@ const ScrollArea = React.forwardRef<
         <ScrollBar /> and should override this. */}
     <ScrollAreaPrimitive.Viewport
       tabIndex={0}
-      className="h-full max-h-[inherit] w-full rounded-[inherit] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 [&>div]:!block"
+      className="h-full max-h-[inherit] w-full rounded-[inherit] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [&>div]:!block"
     >
       {children}
     </ScrollAreaPrimitive.Viewport>

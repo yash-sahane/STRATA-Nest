@@ -29,18 +29,24 @@ import {
   Upload,
   Download,
   FileSpreadsheet,
+  KeyRound,
   AlertCircle,
   CheckCircle2,
   XCircle,
   Loader2,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { useCreateUser } from '@/hooks/use-admin';
+import { describeInviteResult, useCreateUser } from '@/hooks/use-admin';
+import { TempPasswordNotice, type IssuedCredential } from '@/components/team/temp-password-notice';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useHasPermission } from '@/hooks/use-permissions';
+import { useRoleOptions } from '@/hooks/use-role-options';
 import { Permission } from '@/lib/permissions';
 import { parseCSV, type ParsedUser } from '@/lib/csv-parser';
 import { logger } from '@/lib/logger';
+import { NoAccess } from '@/components/ui/no-access';
+import { InviteCodePanel, InviteRoleSelect } from '@/components/workspace/invite-code-panel';
+import { cn } from '@/lib/utils';
 
 interface AddMembersSectionProps {
   workspaceId: string;
@@ -66,6 +72,11 @@ export function AddMembersSection({
   // Form ref for resetting
   const formRef = React.useRef<HTMLFormElement>(null);
 
+  // Accounts created on a server that cannot send mail: their temporary
+  // passwords come back in the response and are shown until dismissed.
+  const [issued, setIssued] = React.useState<IssuedCredential[]>([]);
+  const [codeRole, setCodeRole] = React.useState('MEMBER');
+
   // Individual form state
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [selectedRoleId, setSelectedRoleId] = React.useState<string>('');
@@ -81,19 +92,18 @@ export function AddMembersSection({
     errors: Array<{ row: number; email: string; error: string }>;
   } | null>(null);
 
-  // Get available roles from workspace (fallback to simple role list)
-  const availableRoles = React.useMemo(() => {
-    // Return updated role list for selection
-    return [
-      { id: 'MANAGER', name: 'Manager (Admin)' },
-      { id: 'ASSISTANT_MANAGER', name: 'Assistant Manager' },
-      { id: 'SOFTWARE_DEVELOPER', name: 'Software Developer' },
-      { id: 'DEVELOPER_INTERN', name: 'Software Developer Intern' },
-      { id: 'TESTER', name: 'Tester' },
-      { id: 'CONTENT_ENGINEER', name: 'Content Engineer' },
-      { id: 'MEMBER', name: 'Member' },
-    ];
-  }, []);
+  // Only the roles the caller may hand out — the API refuses a role above their
+  // own — and every one of them, the workspace's custom roles included.
+  const { all: allRoles, grantable } = useRoleOptions(workspaceId);
+  const availableRoles = React.useMemo(
+    () => grantable.map((role) => ({ id: role.value, name: role.label })),
+    [grantable]
+  );
+  // What a CSV's `role` column may name besides the built-in keys.
+  const customRoleNames = React.useMemo(
+    () => allRoles.filter((role) => role.custom).map((role) => role.value),
+    [allRoles]
+  );
 
   // Handle individual user form submission
   const handleIndividualSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -115,13 +125,22 @@ export function AddMembersSection({
     };
 
     try {
-      await createUser.mutateAsync(userData);
-      toast.success('User added successfully! Welcome email sent.');
+      const result = await createUser.mutateAsync(userData);
+      const { temporaryPassword } = result;
+      if (temporaryPassword) {
+        setIssued((prev) => [
+          ...prev.filter((c) => c.email !== userData.email),
+          { name: userData.name, email: userData.email, temporaryPassword },
+        ]);
+      }
+      // Said as it happened — this used to announce "Welcome email sent" on a
+      // server that had sent nothing.
+      toast.success('User added', { description: describeInviteResult(result, userData.email) });
 
       // Reset form
       formRef.current?.reset();
       setSelectedRoleId('');
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast.error((error instanceof Error ? error.message : String(error)) || 'Failed to add user');
       logger.error('Unexpected error', { error: error });
     } finally {
@@ -130,8 +149,22 @@ export function AddMembersSection({
   }; // Handle CSV file selection
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (file) await takeFile(file);
+  };
 
+  // A dropped file goes through the same door as a picked one. "Drag and drop
+  // your file here" had no drop handler: the browser opened the file in the tab
+  // instead, and the page — temporary passwords on it included — was gone.
+  const [dragging, setDragging] = React.useState(false);
+  const csvInputRef = React.useRef<HTMLInputElement>(null);
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) void takeFile(file);
+  };
+
+  const takeFile = async (file: File) => {
     if (!file.name.endsWith('.csv')) {
       toast.error('Please upload a CSV file');
       return;
@@ -141,10 +174,10 @@ export function AddMembersSection({
     setImportResults(null);
 
     try {
-      const users = await parseCSV(file);
+      const users = await parseCSV(file, customRoleNames);
       setParsedUsers(users);
       toast.success(`Parsed ${users.length} users from CSV`);
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast.error(
         (error instanceof Error ? error.message : String(error)) || 'Failed to parse CSV'
       );
@@ -165,13 +198,14 @@ export function AddMembersSection({
       failed: 0,
       errors: [] as Array<{ row: number; email: string; error: string }>,
     };
+    const issuedNow: IssuedCredential[] = [];
 
     for (let i = 0; i < parsedUsers.length; i++) {
       const parsedUser = parsedUsers[i];
       const roleId = parsedUser.role;
 
       try {
-        await createUser.mutateAsync({
+        const result = await createUser.mutateAsync({
           name: parsedUser.name,
           email: parsedUser.email,
           roleId,
@@ -181,9 +215,16 @@ export function AddMembersSection({
           createdBy: currentUserId,
           createdByName: user?.name || 'Admin',
         });
+        if (result.temporaryPassword) {
+          issuedNow.push({
+            name: parsedUser.name,
+            email: parsedUser.email,
+            temporaryPassword: result.temporaryPassword,
+          });
+        }
 
         results.success++;
-      } catch (error: any) {
+      } catch (error: unknown) {
         results.failed++;
         results.errors.push({
           row: i + 2, // +2 because of header row and 0-indexing
@@ -200,9 +241,20 @@ export function AddMembersSection({
 
     setImportResults(results);
     setIsProcessing(false);
+    if (issuedNow.length > 0) {
+      setIssued((prev) => [
+        ...prev.filter((c) => !issuedNow.some((n) => n.email === c.email)),
+        ...issuedNow,
+      ]);
+    }
 
     if (results.success > 0) {
-      toast.success(`Successfully added ${results.success} users!`);
+      toast.success(`Successfully added ${results.success} users!`, {
+        description:
+          issuedNow.length > 0
+            ? 'No email was sent — their temporary passwords are listed at the top of this tab.'
+            : undefined,
+      });
     }
     if (results.failed > 0) {
       toast.error(`Failed to add ${results.failed} users. Check the results below.`);
@@ -233,39 +285,31 @@ export function AddMembersSection({
     setProcessingProgress(0);
   };
 
-  // Access control - show error if user doesn't have permission
+  // Reached by a typed URL or a stale tab: the Team page does not offer this
+  // tab to somebody who cannot use it.
   if (!canInviteMembers) {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Access Denied</CardTitle>
-          <CardDescription>
-            You don&apos;t have permission to add members to this workspace.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Alert>
-            <AlertCircle className="h-4 w-4" />
-            <AlertDescription>
-              Only workspace managers can add new members. Please contact your workspace
-              administrator if you need to add members.
-            </AlertDescription>
-          </Alert>
-        </CardContent>
-      </Card>
-    );
+    return <NoAccess what="add people to this workspace" />;
   }
 
   return (
+    <div className="space-y-6">
+    <TempPasswordNotice credentials={issued} onDismiss={() => setIssued([])} />
     <Tabs defaultValue="individual" className="space-y-6">
-      <TabsList className="grid w-full grid-cols-2">
+      {/* Every way into the workspace, in one place. People were added from
+          here, from a dialog on the Workspaces page, and — by code — from
+          Settings as well; each place had its own features and its own words. */}
+      <TabsList className="grid w-full grid-cols-3">
         <TabsTrigger value="individual">
           <UserPlus className="h-4 w-4 mr-2" />
-          Individual User
+          One person
         </TabsTrigger>
         <TabsTrigger value="bulk">
           <FileSpreadsheet className="h-4 w-4 mr-2" />
-          Bulk CSV Import
+          Several (CSV)
+        </TabsTrigger>
+        <TabsTrigger value="code">
+          <KeyRound className="h-4 w-4 mr-2" />
+          Invite code
         </TabsTrigger>
       </TabsList>
 
@@ -273,10 +317,11 @@ export function AddMembersSection({
       <TabsContent value="individual">
         <Card>
           <CardHeader>
-            <CardTitle>Add Individual User</CardTitle>
+            <CardTitle>Add a person</CardTitle>
             <CardDescription>
-              Create a new user account and add them to this workspace. They&apos;ll receive an email
-              with a temporary password.
+              Create a new user account and add them to this workspace. They are emailed a
+              temporary password — or, if this server cannot send email, it is shown to you here
+              to pass on.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -337,8 +382,8 @@ export function AddMembersSection({
               <Alert>
                 <AlertCircle className="h-4 w-4" />
                 <AlertDescription>
-                  The user will receive an email with a temporary password. They&apos;ll be required to
-                  change it on their first login.
+                  The user has to replace the temporary password the first time they sign in.
+                  Someone who already has an account is simply added to this workspace.
                 </AlertDescription>
               </Alert>
 
@@ -352,12 +397,38 @@ export function AddMembersSection({
                   ) : (
                     <>
                       <UserPlus className="h-4 w-4 mr-2" />
-                      Add User
+                      Add member
                     </>
                   )}
                 </Button>
               </div>
             </form>
+          </CardContent>
+        </Card>
+      </TabsContent>
+
+      {/* Invite code: for people who already have an account and should let
+          themselves in, at the role the code grants. */}
+      <TabsContent value="code">
+        <Card>
+          <CardHeader>
+            <CardTitle>Invite code</CardTitle>
+            <CardDescription>
+              Somebody who already has an account enters the code on their workspace screen and
+              joins at the role it grants. For somebody new, add them under One person instead.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-2">
+              <Label htmlFor="add-members-code-role">Role granted by the code</Label>
+              <InviteRoleSelect
+                id="add-members-code-role"
+                workspaceId={workspaceId}
+                value={codeRole}
+                onChange={setCodeRole}
+              />
+            </div>
+            <InviteCodePanel workspaceId={workspaceId} role={codeRole} idPrefix="add-members-code" />
           </CardContent>
         </Card>
       </TabsContent>
@@ -386,7 +457,8 @@ export function AddMembersSection({
                       </li>
                       <li>
                         Valid roles: MANAGER, ASSISTANT_MANAGER, SOFTWARE_DEVELOPER,
-                        DEVELOPER_INTERN, TESTER, CONTENT_ENGINEER, MEMBER
+                        DEVELOPER_INTERN, TESTER, CONTENT_ENGINEER, MEMBER, or the exact name
+                        of one of this workspace&apos;s custom roles
                       </li>
                       <li>Email addresses must be unique and valid</li>
                     </ul>
@@ -403,23 +475,36 @@ export function AddMembersSection({
 
               {/* File Upload */}
               {!csvFile && (
-                <div className="border-2 border-dashed rounded-lg p-8 text-center">
+                <div
+                  className={cn(
+                    'border-2 border-dashed rounded-lg p-8 text-center transition-colors',
+                    dragging && 'border-primary bg-primary/5'
+                  )}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setDragging(true);
+                  }}
+                  onDragLeave={() => setDragging(false)}
+                  onDrop={handleDrop}
+                >
                   <Upload className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
                   <div className="space-y-2">
-                    <Label
-                      htmlFor="csv-upload"
-                      className="text-base font-medium cursor-pointer hover:text-primary"
-                    >
-                      Click to upload CSV file
-                    </Label>
-                    <p className="text-sm text-muted-foreground">or drag and drop your file here</p>
+                    {/* A button: the label it replaces pointed at an input
+                        hidden with display:none, which a keyboard cannot reach. */}
+                    <Button type="button" variant="outline" onClick={() => csvInputRef.current?.click()}>
+                      Choose a CSV file
+                    </Button>
+                    <p className="text-sm text-muted-foreground">or drop one here</p>
                   </div>
                   <Input
+                    ref={csvInputRef}
                     id="csv-upload"
                     type="file"
                     accept=".csv"
                     onChange={handleFileChange}
-                    className="hidden"
+                    className="sr-only"
+                    tabIndex={-1}
+                    aria-hidden="true"
                   />
                 </div>
               )}
@@ -496,14 +581,14 @@ export function AddMembersSection({
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="grid gap-4 md:grid-cols-2">
-                  <div className="flex items-center gap-3 p-4 border rounded-lg bg-green-50 dark:bg-green-950/20">
+                  <div className="flex items-center gap-3 p-4 border rounded-lg bg-success/10">
                     <CheckCircle2 className="h-8 w-8 text-success-text" />
                     <div>
                       <div className="text-2xl font-bold">{importResults.success}</div>
                       <div className="text-sm text-muted-foreground">Successfully added</div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3 p-4 border rounded-lg bg-red-50 dark:bg-red-950/20">
+                  <div className="flex items-center gap-3 p-4 border rounded-lg bg-destructive/10">
                     <XCircle className="h-8 w-8 text-destructive-text" />
                     <div>
                       <div className="text-2xl font-bold">{importResults.failed}</div>
@@ -547,5 +632,6 @@ export function AddMembersSection({
         </div>
       </TabsContent>
     </Tabs>
+    </div>
   );
 }

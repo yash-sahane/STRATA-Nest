@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import Link from 'next/link';
 import { cn } from '@/lib/utils';
 
 /**
@@ -65,3 +66,38 @@ export const RowActivator = React.forwardRef<HTMLButtonElement, RowActivatorProp
     );
   },
 );
+
+/**
+ * The same, for a row that goes somewhere: its label is a link — so it opens in a
+ * new tab, shows where it leads, and reads as one — and the row keeps its own
+ * onClick as the mouse convenience.
+ */
+export interface RowLinkProps extends Omit<React.ComponentPropsWithoutRef<typeof Link>, 'aria-label'> {
+  /** What following the row does, for a screen reader — "Open task: Fix login". */
+  label: string;
+}
+
+export const RowLink = React.forwardRef<HTMLAnchorElement, RowLinkProps>(function RowLink(
+  { label, className, children, onClick, ...rest },
+  ref,
+) {
+  return (
+    <Link
+      ref={ref}
+      aria-label={label}
+      className={cn(
+        'rounded-sm outline-none hover:underline underline-offset-4',
+        'focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+        className,
+      )}
+      onClick={(event) => {
+        // The row around this carries the same destination for mouse users.
+        event.stopPropagation();
+        onClick?.(event);
+      }}
+      {...rest}
+    >
+      {children}
+    </Link>
+  );
+});

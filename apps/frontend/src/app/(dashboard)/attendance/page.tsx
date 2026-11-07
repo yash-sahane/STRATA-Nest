@@ -9,7 +9,9 @@ import { AttendanceWidget } from '@/components/attendance/attendance-widget';
 import { AttendanceCalendar } from '@/components/attendance/attendance-calendar';
 import { AttendanceStats } from '@/components/attendance/attendance-stats';
 import { TeamAttendanceTab } from '@/components/attendance/team-attendance-tab';
-import { useIsManager } from '@/hooks/use-permissions';
+import { useHasPermissionResolved } from '@/hooks/use-permissions';
+import { InlineLoader } from '@/components/ui/page-loader';
+import { Permission } from '@/lib/permissions';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useAttendanceRealtime } from '@/hooks/use-realtime';
 import { Clock, Calendar, BarChart3, Users, FileText } from 'lucide-react';
@@ -18,8 +20,18 @@ const ATTENDANCE_TABS = ['today', 'calendar', 'analytics', 'team'] as const;
 type AttendanceTab = (typeof ATTENDANCE_TABS)[number];
 
 export default function AttendancePage() {
-  const [tab, setTab] = useTabParam<AttendanceTab>(ATTENDANCE_TABS, 'today');
-  const isManager = useIsManager();
+  const [requestedTab, setTab] = useTabParam<AttendanceTab>(ATTENDANCE_TABS, 'today');
+  // The permission the API reads everyone's attendance by, not the MANAGER role
+  // by name: an Assistant Manager holds it and had no Team tab, and a custom
+  // role granted it had none either.
+  const team = useHasPermissionResolved(Permission.APPROVE_LEAVE);
+  const canSeeTeam = team.allowed;
+  // `?tab=team` in a link somebody without the permission follows would
+  // otherwise select a tab that is not rendered and leave the page blank.
+  // Decided once the permission is KNOWN: read while it loads it says "no", so
+  // every deep link to Team showed Today first and then jumped.
+  const tab: AttendanceTab =
+    requestedTab === 'team' && !team.isLoading && !canSeeTeam ? 'today' : requestedTab;
   const { currentWorkspace } = useCurrentWorkspace();
   // Live updates: the gateway already broadcasts every write on this
   // collection, this page just never subscribed — so another member's
@@ -30,8 +42,12 @@ export default function AttendancePage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Attendance Management"
-        description="Track your daily attendance, view calendar, and analyze your work patterns"
+        title="Attendance"
+        description={
+          currentWorkspace
+            ? `Check in and out of ${currentWorkspace.name}, and see your calendar and monthly figures there.`
+            : 'Check in and out, and see your calendar and monthly figures.'
+        }
         icon={Clock}
         actions={
           // Leave lives on /leave — link to the single canonical entry point
@@ -62,7 +78,7 @@ export default function AttendancePage() {
             <BarChart3 className="h-4 w-4" />
             Analytics
           </TabsTrigger>
-          {isManager && (
+          {canSeeTeam && (
             <TabsTrigger value="team" className="gap-2">
               <Users className="h-4 w-4" />
               Team
@@ -90,11 +106,12 @@ export default function AttendancePage() {
           <AttendanceStats />
         </TabsContent>
 
-        {isManager && (
+        {canSeeTeam && (
           <TabsContent value="team" className="space-y-4">
             <TeamAttendanceTab />
           </TabsContent>
         )}
+        {tab === 'team' && team.isLoading && <InlineLoader />}
       </Tabs>
     </div>
   );

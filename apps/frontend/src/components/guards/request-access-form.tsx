@@ -30,6 +30,7 @@ export function RequestAccessForm() {
 
   const selected = workspaces.find((w) => w.id === workspaceId);
   const alreadyAsked = workspaces.filter((w) => w.requested);
+  const declined = workspaces.filter((w) => !w.requested && w.declinedAt);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -71,7 +72,13 @@ export function RequestAccessForm() {
               // "did my request go through?", which an absent row is not.
               <SelectItem key={w.id} value={w.id} disabled={w.requested}>
                 {w.name}
-                {w.requested ? ' — requested' : ''}
+                {w.requested
+                  ? ' — requested'
+                  : w.accessSwitchedOff
+                    ? ' — your access was switched off'
+                    : w.declinedAt
+                      ? ' — declined, you can ask again'
+                      : ''}
               </SelectItem>
             ))}
           </SelectContent>
@@ -109,6 +116,23 @@ export function RequestAccessForm() {
       {alreadyAsked.length > 0 && (
         <p className="text-xs text-muted-foreground">
           Awaiting a decision on {alreadyAsked.map((w) => w.name).join(', ')}.
+        </p>
+      )}
+      {declined.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {declined
+            .map(
+              (w) =>
+                `Your request to join ${w.name} was declined on ${new Date(w.declinedAt as string).toLocaleDateString()}.`
+            )
+            .join(' ')}{' '}
+          You can ask again.
+        </p>
+      )}
+      {selected?.accessSwitchedOff && (
+        <p className="text-xs text-muted-foreground">
+          You were a member of {selected.name} and a manager switched your access off. Asking
+          here tells its managers you want it back on.
         </p>
       )}
     </form>

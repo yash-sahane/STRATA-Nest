@@ -7,7 +7,6 @@ import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -18,29 +17,16 @@ import {
 import { cn } from '@/lib/utils';
 import { useTasksRealtime } from '@/hooks/use-realtime';
 import type { Task, TaskStatus } from '@/types';
-import { MoreVertical, Clock, Calendar } from 'lucide-react';
-import { formatDate } from '@/lib/utils';
-
-// Helper function to parse label format "color:text"
-const parseLabel = (label: string) => {
-  const parts = label.split(':');
-  if (parts.length === 2) {
-    return { color: parts[0], text: parts[1] };
-  }
-  return { color: 'gray', text: label };
-};
-
-// Color mapping for label backgrounds
-const labelColorMap: Record<string, string> = {
-  red: 'bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/20',
-  orange: 'bg-orange-500/10 text-orange-700 dark:text-orange-400 border-orange-500/20',
-  yellow: 'bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border-yellow-500/20',
-  green: 'bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20',
-  blue: 'bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20',
-  purple: 'bg-purple-500/10 text-purple-700 dark:text-purple-400 border-purple-500/20',
-  pink: 'bg-pink-500/10 text-pink-700 dark:text-pink-400 border-pink-500/20',
-  gray: 'bg-gray-500/10 text-gray-700 dark:text-gray-400 border-gray-500/20',
-};
+import { MoreVertical, Clock } from 'lucide-react';
+import { sortTasks } from '@/lib/task-sort';
+import { TASK_STATUSES } from '@/lib/semantic/status';
+import {
+  BoardColumnHeader,
+  CardAssignees,
+  TaskDueDate,
+  labelColorClass,
+  labelText,
+} from '@/components/tasks/task-display';
 
 interface TaskBoardProps {
   tasks: Task[];
@@ -63,15 +49,17 @@ interface TaskBoardProps {
   onTaskClick: (task: Task) => void;
   onTaskEdit: (task: Task) => void;
   onTaskDelete: (taskId: string) => void;
+  /**
+   * Whether this person signs work off (the Done transition, and reopening).
+   * `false` closes the Done column to their drops and keeps finished cards
+   * where they are; `undefined` (not known yet) blocks nothing.
+   */
+  canComplete?: boolean;
 }
 
-const COLUMNS: { id: TaskStatus; title: string; color: string }[] = [
-  { id: 'BACKLOG', title: 'Backlog', color: 'bg-gray-100 dark:bg-gray-800' },
-  { id: 'TODO', title: 'To Do', color: 'bg-blue-100 dark:bg-blue-900' },
-  { id: 'IN_PROGRESS', title: 'In Progress', color: 'bg-yellow-100 dark:bg-yellow-900' },
-  { id: 'REVIEW', title: 'Review', color: 'bg-purple-100 dark:bg-purple-900' },
-  { id: 'DONE', title: 'Done', color: 'bg-green-100 dark:bg-green-900' },
-];
+// The columns, in workflow order; their names and colours are the status's own
+// (lib/semantic/status.ts), the same as on the sprint board.
+const COLUMNS = TASK_STATUSES as TaskStatus[];
 
 export function TaskBoard({
   tasks,
@@ -84,95 +72,20 @@ export function TaskBoard({
   onTaskClick,
   onTaskEdit,
   onTaskDelete,
+  canComplete,
 }: TaskBoardProps) {
+  const signOffOnly = canComplete === false;
   // Enable real-time updates for tasks
   useTasksRealtime(projectId);
 
-  // Priority order for sorting (higher number = higher priority)
-  const priorityOrder: Record<string, number> = React.useMemo(
-    () => ({
-      CRITICAL: 4,
-      HIGH: 3,
-      MEDIUM: 2,
-      LOW: 1,
-    }),
-    []
-  );
-
-  // Calculate urgency score based on due date
-  const getUrgencyScore = React.useCallback((task: Task): number => {
-    if (!task.dueDate) return 0;
-    const now = new Date();
-    const dueDate = new Date(task.dueDate);
-    const daysUntilDue = Math.ceil((dueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-
-    if (daysUntilDue < 0) return 100;
-    if (daysUntilDue === 0) return 90;
-    if (daysUntilDue === 1) return 80;
-    if (daysUntilDue <= 3) return 70;
-    if (daysUntilDue <= 7) return 50;
-    return Math.max(1, 30 - daysUntilDue);
-  }, []);
-
-  // Compare by a single field
-  const compareByField = React.useCallback(
-    (a: Task, b: Task, field: string): number => {
-      switch (field) {
-        case 'priority':
-          return (priorityOrder[a.priority] || 0) - (priorityOrder[b.priority] || 0);
-        case 'urgency':
-          return getUrgencyScore(a) - getUrgencyScore(b);
-        case 'dueDate': {
-          const dateA = a.dueDate ? new Date(a.dueDate).getTime() : Infinity;
-          const dateB = b.dueDate ? new Date(b.dueDate).getTime() : Infinity;
-          return dateA - dateB;
-        }
-        case 'status':
-          // Every card in a column already shares its status, so this field can
-          // never order them. Without the case it fell through to `position`
-          // and a "Status" sort silently reversed every column.
-          return 0;
-        case 'title':
-          return a.title.localeCompare(b.title);
-        case 'hierarchyId':
-          return a.hierarchyId.localeCompare(b.hierarchyId);
-        case 'createdAt':
-          return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-        case 'updatedAt':
-          return new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime();
-        case 'labels':
-          return (a.labels?.length || 0) - (b.labels?.length || 0);
-        case 'estimatedHours':
-          return (a.estimatedHours || 0) - (b.estimatedHours || 0);
-        case 'position':
-        default:
-          return a.position - b.position;
-      }
-    },
-    [priorityOrder, getUrgencyScore]
-  );
-
-  // Sort tasks within each column using multi-field sorting
+  // Within each column, in the page's order (lib/task-sort.ts — the one sort
+  // both use); with no criteria, the hand-made order.
   const sortTasksInColumn = React.useCallback(
-    (tasksToSort: Task[]): Task[] => {
-      if (sortCriteria.length === 0) {
-        return [...tasksToSort].sort((a, b) => a.position - b.position);
-      }
-
-      // `position` used to short-circuit here ignoring `direction`, which made
-      // the board render ascending while the caller's own copy of the sort ran
-      // descending — the two orders have to agree for a drop to mean anything.
-      return [...tasksToSort].sort((a, b) => {
-        for (const criterion of sortCriteria) {
-          const comparison = compareByField(a, b, criterion.field);
-          if (comparison !== 0) {
-            return criterion.direction === 'asc' ? comparison : -comparison;
-          }
-        }
-        return 0;
-      });
-    },
-    [sortCriteria, compareByField]
+    (tasksToSort: Task[]): Task[] =>
+      sortCriteria.length === 0
+        ? [...tasksToSort].sort((a, b) => a.position - b.position)
+        : sortTasks(tasksToSort, sortCriteria),
+    [sortCriteria]
   );
 
   // Group tasks by status
@@ -245,9 +158,9 @@ export function TaskBoard({
   return (
     <DragDropContext onDragEnd={handleDragEnd}>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
-        {COLUMNS.map((column) => {
-          const allColumnTasks = tasksByStatus[column.id];
-          const expanded = expandedColumns[column.id] === true;
+        {COLUMNS.map((columnId) => {
+          const allColumnTasks = tasksByStatus[columnId];
+          const expanded = expandedColumns[columnId] === true;
           const columnTasks =
             expanded || allColumnTasks.length <= COLUMN_RENDER_LIMIT
               ? allColumnTasks
@@ -256,19 +169,21 @@ export function TaskBoard({
           const hasItems = allColumnTasks.length > 0;
 
           return (
-            <div key={column.id} className="flex flex-col min-h-50">
-              {/* Column Header */}
-              <div className={cn('rounded-t-lg p-3 border-b', column.color)}>
-                <div className="flex items-center justify-between">
-                  <h3 className="font-semibold text-sm">
-                    {column.title}
-                    <span className="ml-2 text-xs font-normal">({allColumnTasks.length})</span>
-                  </h3>
-                </div>
-              </div>
+            <div key={columnId} className="flex flex-col min-h-50">
+              <BoardColumnHeader
+                status={columnId}
+                count={allColumnTasks.length}
+                hint={
+                  columnId === 'DONE' && signOffOnly && canEdit
+                    ? 'Signed off by a manager'
+                    : undefined
+                }
+              />
 
-              {/* Droppable Column */}
-              <Droppable droppableId={column.id}>
+              {/* Droppable Column. Done takes no drop from somebody who cannot
+                  sign work off: the card moved, the server refused, and it
+                  snapped back with an error. */}
+              <Droppable droppableId={columnId} isDropDisabled={columnId === 'DONE' && signOffOnly}>
                 {(provided, snapshot) => (
                   <div
                     ref={provided.innerRef}
@@ -284,7 +199,7 @@ export function TaskBoard({
                         key={task.id}
                         draggableId={task.id}
                         index={index}
-                        isDragDisabled={!canEdit}
+                        isDragDisabled={!canEdit || (signOffOnly && task.status === 'DONE')}
                       >
                         {(provided, snapshot) => (
                           <Card
@@ -300,7 +215,10 @@ export function TaskBoard({
                             {/* Outside the drag handle on purpose: a role="button"
                                 handle must not contain focusable descendants, which is what
                                 made every card an axe "nested-interactive" violation. */}
-                            <div className="absolute right-1 top-1 z-10">
+                            {/* Clicks in the menu stay in it: React carries a
+                                portalled menu's events up through this tree, so a
+                                click on its padding opened the task behind it. */}
+                            <div className="absolute right-1 top-1 z-10" onClick={(e) => e.stopPropagation()}>
                                   {showMenu === true && (canEdit || canDelete) && (
                                     <DropdownMenu>
                                       <DropdownMenuTrigger
@@ -349,7 +267,11 @@ export function TaskBoard({
                                 Space still reaches react-beautiful-dnd's drag
                                 handle when a drag is in progress. */}
                             <div
-                              {...provided.dragHandleProps}
+                              // With dragging off the library hands back no
+                              // handle props, and the card lost its tab stop and
+                              // role with them: nobody who may not drag could
+                              // open a task from the keyboard.
+                              {...(provided.dragHandleProps ?? { role: 'button', tabIndex: 0 })}
                               aria-label={`Open task: ${task.title}`}
                               onKeyDown={(event) => {
                                 if (snapshot.isDragging) return;
@@ -362,19 +284,30 @@ export function TaskBoard({
                             >
                             <CardHeader className="p-3 pb-2">
                               <div className="flex items-start gap-2 pr-7">
-                                <div className="flex-1 space-y-1">
-                                  <div className="flex items-center gap-2">
-                                    {/* <Badge variant="outline" className="font-mono text-xs">
+                                {/* min-w-0 + a wrapping row: a long hierarchy id
+                                    (ECOM-CUS-CHE-CAR-04-…) used to push this row past
+                                    the pr-7 kept clear for the ⋮ button, so the
+                                    priority was crushed to "Critic / al" UNDER the
+                                    button. The priority now drops to its own line
+                                    instead, whole. */}
+                                <div className="min-w-0 flex-1 space-y-1">
+                                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                                    {/* The id commits name a task by ("Fixes ECOM-T04"),
+                                        so it has to be readable off the card. */}
+                                    <span
+                                      className="max-w-full truncate font-mono text-[11px] text-muted-foreground"
+                                      title={task.hierarchyId}
+                                    >
                                       {task.hierarchyId}
-                                    </Badge> */}
-                                    <div className="flex items-center gap-1.5">
+                                    </span>
+                                    <div className="flex shrink-0 items-center gap-1.5">
                                       <span
                                         className={cn(
                                           'h-2 w-2 rounded-full',
                                           getPriorityConfig(task.priority).dot
                                         )}
                                       />
-                                      <span className="text-xs text-muted-foreground font-medium">
+                                      <span className="whitespace-nowrap text-xs text-muted-foreground font-medium">
                                         {
                                           getPriorityConfig(task.priority).label
                                         }
@@ -399,21 +332,18 @@ export function TaskBoard({
                               {/* Labels */}
                               {task.labels && task.labels.length > 0 && (
                                 <div className="flex flex-wrap gap-1">
-                                  {task.labels.slice(0, 3).map((label, i) => {
-                                    const { color, text } = parseLabel(label);
-                                    return (
-                                      <Badge
-                                        key={i}
-                                        variant="outline"
-                                        className={cn(
-                                          'text-xs border',
-                                          labelColorMap[color] || labelColorMap.gray
-                                        )}
-                                      >
-                                        {text}
-                                      </Badge>
-                                    );
-                                  })}
+                                  {task.labels.slice(0, 3).map((label, i) => (
+                                    <Badge
+                                      key={i}
+                                      variant="outline"
+                                      className={cn(
+                                        'text-xs border whitespace-normal',
+                                        labelColorClass(label)
+                                      )}
+                                    >
+                                      {labelText(label)}
+                                    </Badge>
+                                  ))}
                                   {task.labels.length > 3 && (
                                     // "+2" on its own withholds the very thing it is
                                     // counting. The remaining labels are already in
@@ -422,9 +352,10 @@ export function TaskBoard({
                                     <Badge
                                       variant="secondary"
                                       className="text-xs"
-                                      title={task.labels.slice(3).join(', ')}
+                                      title={task.labels.slice(3).map(labelText).join(', ')}
                                       aria-label={`${task.labels.length - 3} more: ${task.labels
                                         .slice(3)
+                                        .map(labelText)
                                         .join(', ')}`}
                                     >
                                       +{task.labels.length - 3}
@@ -433,48 +364,27 @@ export function TaskBoard({
                                 </div>
                               )}
 
-                              {/* Footer */}
-                              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                                <div className="flex items-center gap-2">
-                                  {task.dueDate && (
-                                    <div className="flex items-center gap-1">
-                                      <Calendar className="h-3 w-3" />
-                                      <span>{formatDate(task.dueDate)}</span>
-                                    </div>
-                                  )}
+                              {/* Footer: due, then who — the order the sprint board
+                                  draws a card in too. */}
+                              <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                                {/* Wraps as whole items: when the due label is long the
+                                    estimate moves under it rather than being folded
+                                    into "4 / h" beside it. */}
+                                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+                                  <TaskDueDate task={task} />
                                   {/* `task.estimatedHours && …` short-circuits to the
                                       NUMBER 0 when there is no estimate, and React
                                       renders 0 — a bare "0" under the clock icon.
                                       Compare rather than test truthiness. */}
                                   {(task.estimatedHours ?? 0) > 0 && (
-                                    <div className="flex items-center gap-1">
+                                    <div className="flex shrink-0 items-center gap-1 whitespace-nowrap">
                                       <Clock className="h-3 w-3" />
                                       <span>{task.estimatedHours}h</span>
                                     </div>
                                   )}
                                 </div>
 
-                                <div className="flex items-center gap-1">
-                                  {/* Check both task assignment fields while the UI model is normalized. */}
-                                  {((task.assignedTo && task.assignedTo.length > 0) ||
-                                    (task.assigneeIds && task.assigneeIds.length > 0)) && (
-                                    <Avatar className="h-5 w-5">
-                                      <AvatarFallback className="text-xs bg-primary/10 text-primary">
-                                        {task.assignedToNames && task.assignedToNames.length > 0
-                                          ? task.assignedToNames[0]
-                                              .split(' ')
-                                              .map((n) => n[0])
-                                              .join('')
-                                              .toUpperCase()
-                                              .slice(0, 2)
-                                          : (task.assignedTo?.length || task.assigneeIds?.length) >
-                                              1
-                                            ? `+${task.assignedTo?.length || task.assigneeIds?.length}`
-                                            : 'U'}
-                                      </AvatarFallback>
-                                    </Avatar>
-                                  )}
-                                </div>
+                                <CardAssignees task={task} />
                               </div>
                             </CardContent>
                             </div>
@@ -488,7 +398,7 @@ export function TaskBoard({
                       <button
                         type="button"
                         onClick={() =>
-                          setExpandedColumns((prev) => ({ ...prev, [column.id]: true }))
+                          setExpandedColumns((prev) => ({ ...prev, [columnId]: true }))
                         }
                         className="w-full rounded-md border border-dashed border-border py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       >

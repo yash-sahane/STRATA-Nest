@@ -49,8 +49,8 @@ export function TimesheetTable({
   emptyDescription = 'Start a timer on a task, or add an entry by hand.',
 }: TimesheetTableProps) {
   const hasActions = !!(renderActions || onEdit || onDelete);
-  // Date, Task, Description, Duration, Billable, Status + the optional two.
-  const columnCount = 6 + (showWho ? 1 : 0) + (hasActions ? 1 : 0);
+  // Date, Work, Duration, Status + the optional two.
+  const columnCount = 4 + (showWho ? 1 : 0) + (hasActions ? 1 : 0);
 
   if (isLoading) {
     return (
@@ -85,10 +85,13 @@ export function TimesheetTable({
           <TableRow>
             {showWho && <TableHead>Member</TableHead>}
             <TableHead>Date</TableHead>
-            <TableHead>Task</TableHead>
-            <TableHead>Description</TableHead>
+            {/* One column for what the time was spent on. Task and Description
+                were separate fixed-width truncated columns (16rem + 20rem that
+                could never shrink), which pushed Status and the Approve /
+                Reject buttons off the right edge of the approvals table at an
+                ordinary 1440px window. */}
+            <TableHead>Work</TableHead>
             <TableHead className="text-right">Duration</TableHead>
-            <TableHead>Billable</TableHead>
             <TableHead>Status</TableHead>
             {hasActions && <TableHead className="text-right">Actions</TableHead>}
           </TableRow>
@@ -112,14 +115,23 @@ export function TimesheetTable({
                   <TableCell className="whitespace-nowrap">
                     {entry.startTime ? format(new Date(entry.startTime), 'MMM d, yyyy') : '—'}
                   </TableCell>
-                  <TableCell className="max-w-[16rem] truncate">
-                    {entry.taskHierarchyId ? (
-                      <span className="text-muted-foreground">{entry.taskHierarchyId} </span>
-                    ) : null}
-                    {entry.taskTitle || entry.projectName || '—'}
-                  </TableCell>
-                  <TableCell className="max-w-[20rem]">
-                    <div className="truncate">{entry.description || '—'}</div>
+                  <TableCell className="min-w-48">
+                    <div className="line-clamp-2 font-medium">
+                      {entry.taskHierarchyId ? (
+                        <span className="font-mono text-xs font-normal text-muted-foreground">
+                          {entry.taskHierarchyId}{' '}
+                        </span>
+                      ) : null}
+                      {entry.taskTitle || entry.projectName || '—'}
+                    </div>
+                    {entry.description && (
+                      <div
+                        className="mt-0.5 line-clamp-2 text-sm text-muted-foreground"
+                        title={entry.description}
+                      >
+                        {entry.description}
+                      </div>
+                    )}
                     {/* The Log Time dialog asks for "Tags (comma-separated)", the API
                         stores them and the mapper returns them — and nothing rendered
                         them, so filling the field in was busywork. Under the
@@ -128,7 +140,7 @@ export function TimesheetTable({
                     {entry.tags && entry.tags.length > 0 && (
                       <div className="mt-1 flex flex-wrap gap-1">
                         {entry.tags.map((tag) => (
-                          <Badge key={tag} variant="outline" className="text-xs font-normal">
+                          <Badge key={tag} variant="outline" className="text-xs font-normal whitespace-normal">
                             {tag}
                           </Badge>
                         ))}
@@ -136,10 +148,12 @@ export function TimesheetTable({
                     )}
                   </TableCell>
                   <TableCell className="text-right tabular-nums whitespace-nowrap">
-                    {formatMinutesHuman(entry.duration)}
-                  </TableCell>
-                  <TableCell>
-                    {entry.isBillable ? <Badge variant="secondary">Billable</Badge> : '—'}
+                    <div>{formatMinutesHuman(entry.duration)}</div>
+                    {entry.isBillable && (
+                      <Badge variant="secondary" className="mt-1">
+                        Billable
+                      </Badge>
+                    )}
                   </TableCell>
                   <TableCell>
                     <Badge variant={status.badgeVariant}>{status.label}</Badge>

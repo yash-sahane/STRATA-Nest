@@ -18,10 +18,10 @@ import {
   useTeamMembers,
   useMemberTaskCounts,
   getWorkloadLevel,
-  ROLE_CONFIG,
 } from '@/hooks/use-team';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { roleDisplayName } from '@/hooks/use-role-options';
 
 interface TeamMemberSelectorProps {
   workspaceId: string;
@@ -30,6 +30,13 @@ interface TeamMemberSelectorProps {
   placeholder?: string;
   multiSelect?: boolean;
   className?: string;
+  /** Shown, not changeable — for somebody who may not change it. */
+  disabled?: boolean;
+  /**
+   * Names the record itself holds for the ids in `value` (a task's
+   * `assigneeNames`), for anybody no longer in the workspace's member list.
+   */
+  knownNames?: Record<string, string>;
 }
 
 export function TeamMemberSelector({
@@ -39,9 +46,11 @@ export function TeamMemberSelector({
   placeholder = 'Select team members...',
   multiSelect = true,
   className,
+  disabled = false,
+  knownNames,
 }: TeamMemberSelectorProps) {
   const [open, setOpen] = React.useState(false);
-  const { data: teamMembers = [], isLoading } = useTeamMembers(workspaceId);
+  const { data: teamMembers = [], isLoading, isSuccess } = useTeamMembers(workspaceId);
   const { data: taskCounts } = useMemberTaskCounts(workspaceId);
 
   // Filter only active members
@@ -52,6 +61,28 @@ export function TeamMemberSelector({
   const selectedMembers = React.useMemo(() => {
     return activeMembers.filter((member) => value.includes(member.userId));
   }, [activeMembers, value]);
+
+  // People in `value` who are not active members any more. They were drawn
+  // nowhere — no badge, no row in the list — yet stayed in the value, so
+  // somebody who had left could never be taken off the task. Shown here, marked,
+  // and removable. Only once the member list has answered: before that, every
+  // id would look like a leaver.
+  const formerMembers = React.useMemo(() => {
+    if (!isSuccess) return [];
+    const active = new Set(activeMembers.map((member) => member.userId));
+    return value
+      .filter((id) => !active.has(id))
+      .map((id) => ({
+        userId: id,
+        name:
+          teamMembers.find((member) => member.userId === id)?.name ||
+          knownNames?.[id] ||
+          'A former member',
+      }));
+  }, [isSuccess, activeMembers, teamMembers, value, knownNames]);
+
+  /** Off the list, whichever mode the picker is in. */
+  const removeFormer = (userId: string) => onChange(value.filter((id) => id !== userId));
 
   // Sort members by workload (lowest first for optimal assignment)
   const sortedMembers = React.useMemo(() => {
@@ -92,30 +123,57 @@ export function TeamMemberSelector({
             role="combobox"
             aria-label={placeholder}
             aria-expanded={open}
+            disabled={disabled}
             className={cn('w-full justify-between', className)}
           >
             <div className="flex flex-wrap gap-1 flex-1">
-              {selectedMembers.length === 0 ? (
+              {selectedMembers.length === 0 && formerMembers.length === 0 ? (
                 <span className="text-muted-foreground">{placeholder}</span>
               ) : (
                 selectedMembers.map((member) => (
-                  <Badge key={member.userId} variant="secondary" className="gap-1 pr-1">
+                  <Badge key={member.userId} variant="secondary" className="gap-1 pr-1 whitespace-normal">
                     <Avatar className="h-4 w-4">
                       <AvatarImage src={member.avatar} alt={member.name} />
                       <AvatarFallback className="text-xs">
                         {getInitials(member.name)}
                       </AvatarFallback>
                     </Avatar>
-                    <span className="max-w-[100px] truncate">{member.name}</span>
-                    {multiSelect && (
+                    <span className="max-w-[100px] truncate" title={member.name}>{member.name}</span>
+                    {multiSelect && !disabled && (
+                      // Inside the picker's own button, where a second button
+                      // cannot go: a mouse shortcut, hidden from assistive tech —
+                      // the list in the picker removes a person as well.
                       <X
-                        className="h-3 w-3 cursor-pointer hover:text-destructive-text"
+                        aria-hidden="true"
+                        className="h-4 w-4 cursor-pointer rounded-full p-0.5 hover:bg-destructive/20 hover:text-destructive-text"
                         onClick={(e) => handleRemove(member.userId, e)}
                       />
                     )}
                   </Badge>
                 ))
               )}
+              {formerMembers.map((member) => (
+                <Badge
+                  key={member.userId}
+                  variant="outline"
+                  className="gap-1 pr-1 whitespace-normal text-muted-foreground"
+                  title={`${member.name} has left the workspace`}
+                >
+                  <span className="max-w-[100px] truncate">{member.name}</span>
+                  <span className="text-2xs">(left the workspace)</span>
+                  {!disabled && (
+                    // A mouse shortcut, like the X above; the list removes them too.
+                    <X
+                      aria-hidden="true"
+                      className="h-4 w-4 cursor-pointer rounded-full p-0.5 hover:bg-destructive/20 hover:text-destructive-text"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeFormer(member.userId);
+                      }}
+                    />
+                  )}
+                </Badge>
+              ))}
             </div>
             <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
           </Button>
@@ -163,7 +221,7 @@ export function TeamMemberSelector({
                           </AvatarFallback>
                         </Avatar>
                         <div className="flex-1 min-w-0">
-                          <div className="font-medium truncate">{member.name}</div>
+                          <div className="font-medium truncate" title={member.name}>{member.name}</div>
                           <div className="text-xs text-muted-foreground truncate">
                             {member.email}
                           </div>
@@ -196,7 +254,7 @@ export function TeamMemberSelector({
                             </TooltipContent>
                           </Tooltip>
                           <Badge variant="outline" className="text-xs shrink-0">
-                            {ROLE_CONFIG[member.role].label}
+                            {roleDisplayName(member.rawRole)}
                           </Badge>
                         </div>
                       </div>
@@ -204,6 +262,34 @@ export function TeamMemberSelector({
                   );
                 })}
               </CommandGroup>
+              {/* The keyboard's way to take a leaver off: they are not in the
+                  list above, which holds only people who can be assigned. */}
+              {formerMembers.length > 0 && (
+                <CommandGroup heading="No longer in the workspace">
+                  {formerMembers.map((member) => (
+                    <CommandItem
+                      key={member.userId}
+                      value={`${member.name} ${member.userId}`}
+                      onSelect={() => removeFormer(member.userId)}
+                      className="cursor-pointer"
+                    >
+                      <div className="flex items-center gap-3 flex-1">
+                        <div className="flex h-4 w-4 items-center justify-center rounded-sm border border-primary bg-primary text-primary-foreground">
+                          <Check className="h-3 w-3" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium truncate" title={member.name}>
+                            {member.name}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            Left the workspace. Select to take them off.
+                          </div>
+                        </div>
+                      </div>
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              )}
             </ScrollArea>
           </Command>
         </PopoverContent>

@@ -1,17 +1,18 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/providers/auth-provider';
-import { useWorkspaces, useJoinWorkspace } from '@/hooks/use-workspace';
+import { useWorkspaces } from '@/hooks/use-workspace';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { PageLoader } from '@/components/ui/page-loader';
 import { AlertTriangle, Loader2, Users } from 'lucide-react';
 import { RequestAccessForm } from '@/components/guards/request-access-form';
+import { InviteCodeForm } from '@/components/workspace/invite-code-form';
 import { TempPasswordGuard } from '@/components/guards/temp-password-guard';
+import { useQueryClient } from '@tanstack/react-query';
+import { RecentNotices } from '@/components/guards/recent-notices';
 
 /**
  * The membership check runs BEHIND the temporary-password gate, not beside it.
@@ -39,9 +40,6 @@ function WorkspaceMembershipGuard({ children }: { children: React.ReactNode }) {
     isFetching,
     refetch,
   } = useWorkspaces(user?.id);
-  const joinWorkspace = useJoinWorkspace();
-  const [inviteCode, setInviteCode] = useState('');
-
   // A failed workspace fetch is an ERROR, not an answer. React Query leaves
   // `data` undefined once it has exhausted its retries, and reading that as
   // "this account belongs to no workspace" threw the whole app into first-run
@@ -49,7 +47,18 @@ function WorkspaceMembershipGuard({ children }: { children: React.ReactNode }) {
   // /onboarding and asked to "Create Your Workspace", and a member was told
   // they were in none. `isError` is consulted first, and the array is only
   // trusted when it actually arrived.
-  const hasNoWorkspace = !!user && !isError && Array.isArray(workspaces) && workspaces.length === 0;
+  //
+  // ...and once it HAS arrived, a later failure does not take it away. React
+  // Query flags `isError` for a failed background refetch too, with the last
+  // good list still in `data`: one blip in a long-open tab (a deploy restarting
+  // the API, a realtime-triggered refetch on a bad moment) swapped the whole app
+  // for "Could not load your workspaces" over a list it was holding, and while
+  // somebody waited on "No workspace open to you" a single failed 30-second poll
+  // did the same and stopped the polling with it. The blocking card is for a
+  // list that never came; a refetch that fails keeps the last one.
+  const listed = Array.isArray(workspaces) ? workspaces : undefined;
+  const loadFailed = isError && listed === undefined;
+  const hasNoWorkspace = !!user && listed !== undefined && listed.length === 0;
   // Only administrators may create one, and /onboarding bounces everyone else
   // straight back here — redirecting a non-admin would ping-pong forever.
   const canOnboard = user?.isAdmin === true;
@@ -60,25 +69,40 @@ function WorkspaceMembershipGuard({ children }: { children: React.ReactNode }) {
     }
   }, [hasNoWorkspace, canOnboard, authLoading, workspacesLoading, router]);
 
+  /**
+   * Somebody waiting here is waiting on another person: a manager approving
+   * their request, or adding them. Nothing told this screen when that happened,
+   * so they sat on "No workspace yet" until they thought to press Reload.
+   *
+   * Ask again every half minute while the card is up, and leave the moment a
+   * workspace appears — by a full navigation, for the same reason as after
+   * redeeming a code: every provider cached "none" and has to re-read.
+   */
+  const waited = useRef(false);
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (!hasNoWorkspace || canOnboard) return;
+    waited.current = true;
+    // The directory as well: it says whether a request was declined, which the
+    // card otherwise went on calling "awaiting a decision" until a reload.
+    const timer = window.setInterval(() => {
+      void refetch();
+      void queryClient.invalidateQueries({ queryKey: ['workspace-directory'] });
+      void queryClient.invalidateQueries({ queryKey: ['notifications'] });
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, [hasNoWorkspace, canOnboard, refetch, queryClient]);
+  useEffect(() => {
+    if (waited.current && Array.isArray(workspaces) && workspaces.length > 0) {
+      window.location.href = '/dashboard';
+    }
+  }, [workspaces]);
+
   if (authLoading || workspacesLoading) {
     return <PageLoader />;
   }
 
-  const handleJoin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const code = inviteCode.trim();
-    if (!code) return;
-    try {
-      await joinWorkspace.mutateAsync({ inviteCode: code });
-      // A full navigation, not router.refresh(): every provider needs to
-      // re-read the workspace list it cached while the user had none.
-      window.location.href = '/dashboard';
-    } catch {
-      // the mutation surfaces the reason as a toast
-    }
-  };
-
-  if (isError) {
+  if (loadFailed) {
     return (
       <div className="flex min-h-[calc(100vh-4rem)] items-center justify-center p-6">
         <Card className="w-full max-w-md">
@@ -120,43 +144,29 @@ function WorkspaceMembershipGuard({ children }: { children: React.ReactNode }) {
         <Card className="w-full max-w-md">
           <CardHeader className="items-center text-center">
             <Users className="h-10 w-10 text-muted-foreground/60" />
-            <CardTitle>No workspace yet</CardTitle>
+            <CardTitle>No workspace open to you</CardTitle>
             <CardDescription>
-              You are not a member of any workspace. Enter an invite code, or request access to
-              one and a manager will review it.
+              Enter an invite code, or request access to a workspace and one of its managers will
+              review it.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* Why there is nothing here, when something happened: removed,
+                switched off, declined. Those notices were written — filed under
+                the workspace lost — and this screen, which has no header and no
+                bell, never showed them. */}
+            <RecentNotices />
             {/* The API has accepted invite codes at
                 POST /workspaces/accept-invitation since the beginning, but this
                 screen offered no way to enter one — a user holding a valid code
                 had no path forward from here except asking to be added by hand. */}
-            <form onSubmit={handleJoin} className="space-y-2">
-              {/* Both kinds of secret land here — see useJoinWorkspace, which
-                  routes by shape — so the label should not promise only one. */}
-              <Label htmlFor="invite-code">Invite code or invitation link token</Label>
-              <div className="flex gap-2">
-                <Input
-                  id="invite-code"
-                  value={inviteCode}
-                  onChange={(e) => setInviteCode(e.target.value)}
-                  placeholder="e.g. VCWVFFSF-Y"
-                  autoComplete="off"
-                  spellCheck={false}
-                  disabled={joinWorkspace.isPending}
-                />
-                <Button type="submit" disabled={!inviteCode.trim() || joinWorkspace.isPending}>
-                  {joinWorkspace.isPending ? (
-                    <>
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Joining
-                    </>
-                  ) : (
-                    'Join'
-                  )}
-                </Button>
-              </div>
-            </form>
+            <InviteCodeForm
+              onJoined={() => {
+                // A full navigation, not router.refresh(): every provider needs
+                // to re-read the workspace list it cached while the user had none.
+                window.location.href = '/dashboard';
+              }}
+            />
 
             <div className="relative">
               <div className="absolute inset-0 flex items-center">
@@ -169,6 +179,9 @@ function WorkspaceMembershipGuard({ children }: { children: React.ReactNode }) {
 
             {/* No code? Ask a manager directly. */}
             <RequestAccessForm />
+            <p className="text-center text-xs text-muted-foreground">
+              This page opens your workspace by itself once you have been let in.
+            </p>
 
             <div className="flex justify-center gap-2 pt-2">
               <Button variant="outline" onClick={() => window.location.reload()}>

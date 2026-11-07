@@ -8,13 +8,13 @@ import {
   getFunctionalRequirementStatusConfig,
 } from '@/lib/semantic/status';
 import { getPriorityConfig } from '@/lib/semantic/priority';
-import { getComplexityConfig } from '@/lib/semantic/complexity';
+import { ComplexityBadge } from '@/components/requirements/complexity-badge';
 import { EmptyState } from '@/components/ui/empty-state';
 import { InlineLoader, PageLoader } from '@/components/ui/page-loader';
 
 import * as React from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
-import { useAuth } from '@/components/providers/auth-provider';
+import { useSearchParams } from 'next/navigation';
+import { useCreateActionParam } from '@/hooks/use-create-action-param';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useConsumeParam } from '@/hooks/use-tab-param';
 import { useFunctionalRequirementsRealtime } from '@/hooks/use-realtime';
@@ -52,18 +52,20 @@ import { formatDate } from '@/lib/utils';
 import type { FunctionalRequirement } from '@/types';
 import { CreateFunctionalRequirementDialog } from '@/components/requirements/create-functional-requirement-dialog';
 import { FunctionalRequirementDetailDialog } from '@/components/requirements/functional-requirement-detail-dialog';
-import { useIsAdmin, useHasPermission } from '@/hooks/use-permissions';
+import { useHasPermission } from '@/hooks/use-permissions';
 import { Permission } from '@/lib/permissions';
+import { ProjectPicker } from '@/components/projects/project-picker';
+import { useProjectSelectionSync } from '@/hooks/use-project-selection-sync';
+import { useSprints } from '@/hooks/use-sprint';
+
+const FR_CREATE_CARRIES = ['epicId'];
 
 function FunctionalRequirementsPageContent() {
-  const { user } = useAuth();
   const { currentWorkspace } = useCurrentWorkspace();
   const { data: projects = [], isLoading: projectsLoading } = useProjects(currentWorkspace?.id);
-  const router = useRouter();
   const searchParams = useSearchParams();
 
   // Permission checks
-  const isAdmin = useIsAdmin();
   const canCreateFR = useHasPermission(Permission.CREATE_FUNCTIONAL_REQUIREMENT);
   const canEditFR = useHasPermission(Permission.EDIT_FUNCTIONAL_REQUIREMENT);
   const canDeleteFR = useHasPermission(Permission.DELETE_FUNCTIONAL_REQUIREMENT);
@@ -72,9 +74,21 @@ function FunctionalRequirementsPageContent() {
   // Realtime for this list.
   useFunctionalRequirementsRealtime(selectedProjectId);
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
+  // ?action=create&epicId=… — added from an epic (the command palette's plain
+  // ?action=create lands here too).
+  const [createForEpic, setCreateForEpic] = React.useState('');
+  useCreateActionParam(
+    (asked) => {
+      setCreateForEpic(asked.get('epicId') ?? '');
+      setCreateDialogOpen(true);
+    },
+    !!selectedProjectId,
+    FR_CREATE_CARRIES
+  );
   // Hold the id, not a snapshot: an object captured here never sees the refetch
   // that follows a save, so the dialog kept rendering stale values.
   const [selectedRequirementId, setSelectedRequirementId] = React.useState<string | null>(null);
+  const [editingRequirementId, setEditingRequirementId] = React.useState<string | null>(null);
   const [searchQuery, setSearchQuery] = React.useState('');
   const [statusFilter, setStatusFilter] = React.useState<string>('all');
 
@@ -90,29 +104,14 @@ function FunctionalRequirementsPageContent() {
   // FR notification for a DIFFERENT project then did literally nothing — no
   // switch, no dialog, and `?frId=` never stripped. Storing the applied VALUE
   // lets the user re-pick freely while still honouring a new deep link.
-  const lastAppliedUrlProject = React.useRef<string | null>(null);
-
-  // Project selection: URL param (notification deep links) > localStorage > first project
-  React.useEffect(() => {
-    const STORAGE_KEY = 'selected-project-id';
-    const urlParam = searchParams.get('projectId');
-    const urlProjectId = urlParam && urlParam !== lastAppliedUrlProject.current ? urlParam : null;
-    const savedProjectId = localStorage.getItem(STORAGE_KEY);
-
-    if (urlProjectId && projects.some((p) => p.id === urlProjectId)) {
-      lastAppliedUrlProject.current = urlProjectId;
-      setSelectedProjectId(urlProjectId);
-      localStorage.setItem(STORAGE_KEY, urlProjectId);
-    } else if (savedProjectId && projects.some((p) => p.id === savedProjectId)) {
-      // Restore saved project if it still exists
-      setSelectedProjectId(savedProjectId);
-    } else if (projects.length > 0 && !selectedProjectId) {
-      // Default to first project if no saved selection
-      const firstProjectId = projects[0].id;
-      setSelectedProjectId(firstProjectId);
-      localStorage.setItem(STORAGE_KEY, firstProjectId);
-    }
-  }, [projects, selectedProjectId, searchParams]);
+  // Project selection: URL param (notification deep links, once per value) >
+  // remembered project > first project. Shared with the other project pages.
+  useProjectSelectionSync({
+    projects,
+    urlProjectId: searchParams.get('projectId'),
+    selectedProjectId,
+    setSelectedProjectId,
+  });
 
   // Save project selection to localStorage when changed
   const handleProjectChange = React.useCallback((projectId: string) => {
@@ -128,15 +127,16 @@ function FunctionalRequirementsPageContent() {
   } = useFunctionalRequirements(selectedProjectId);
   const { data: clientRequirements = [] } = useClientRequirements(selectedProjectId);
   const { data: epics = [] } = useEpics(selectedProjectId);
+  const { data: sprints = [] } = useSprints(selectedProjectId);
   const { data: tasks = [] } = useTasks(selectedProjectId);
 
   // Open the FR detail dialog when a notification deep-links to one (?frId=…)
   const frIdFromUrl = searchParams.get('frId');
 
-  // Global search / the /requirements?reqId= redirect send an frId with NO
-  // projectId, so the target FR often lives in a project other than the one
-  // restored from localStorage — and then nothing below ever matches it. Resolve
-  // the FR on its own and switch the picker to its project first.
+  // A link that names only the requirement (one pasted or bookmarked without its
+  // projectId) may point into a project other than the one restored from
+  // localStorage — and then nothing below ever matches it. Resolve the FR on its
+  // own and switch the picker to its project first.
   const { data: deepLinkedFR } = useFunctionalRequirement(frIdFromUrl ?? undefined);
   React.useEffect(() => {
     // Skip when the URL pins a project: both effects would fight over the picker.
@@ -239,10 +239,13 @@ function FunctionalRequirementsPageContent() {
   const selectedProject = projects.find((p) => p.id === selectedProjectId);
   // Read the live row out of the query data so the dialog re-renders after a save.
   const selectedRequirement = requirements.find((r) => r.id === selectedRequirementId) ?? null;
+  const editingRequirement = requirements.find((r) => r.id === editingRequirementId) ?? null;
 
   const renderRequirement = (req: FunctionalRequirement, depth = 0) => {
-    const complexity = getComplexityConfig(req.complexity);
     const clientReq = clientRequirements.find((cr) => cr.id === req.clientRequirementId);
+    const statusConfig = getFunctionalRequirementStatusConfig(req.status);
+    const epic = epics.find((e) => e.id === req.epicId);
+    const sprint = sprints.find((s) => s.id === req.sprintId);
 
     // Calculate progress from linked tasks if stored progress is 0
     const linkedTasks = tasks.filter((t) => t.functionalRequirementId === req.id);
@@ -287,17 +290,29 @@ function FunctionalRequirementsPageContent() {
             <div className="text-xs text-muted-foreground mt-1">Linked to: {clientReq.title}</div>
           )}
         </TableCell>
+        {/* The page filters by status and its tiles count by it; the table
+            did not show it, nor where the requirement sits. */}
         <TableCell>
-          {req.priority ? (
-            <Badge variant={getPriorityConfig(req.priority).badgeVariant}>
-              {getPriorityConfig(req.priority).label}
-            </Badge>
-          ) : (
-            <span className="text-muted-foreground text-sm">-</span>
-          )}
+          <Badge
+            variant={statusConfig.badgeVariant}
+            className={statusConfig.badgeClassName}
+          >
+            {statusConfig.label}
+          </Badge>
+        </TableCell>
+        <TableCell className="text-sm">
+          {epic ? epic.name : <span className="text-muted-foreground">No epic</span>}
+        </TableCell>
+        <TableCell className="text-sm">
+          {sprint ? sprint.name : <span className="text-muted-foreground">Not planned</span>}
         </TableCell>
         <TableCell>
-          <Badge variant={complexity.badgeVariant}>{complexity.label}</Badge>
+          <Badge variant={getPriorityConfig(req.priority).badgeVariant}>
+            {getPriorityConfig(req.priority).label}
+          </Badge>
+        </TableCell>
+        <TableCell>
+          <ComplexityBadge complexity={req.complexity} />
         </TableCell>
         <TableCell>
           <div className="flex items-center gap-2">
@@ -315,9 +330,9 @@ function FunctionalRequirementsPageContent() {
       {/* Header */}
       <PageHeader
         title="Functional Requirements"
-        description="Technical specifications derived from client requirements"
+        description="What the team will build to meet each client requirement. Tasks are created from these."
         actions={
-          (canCreateFR || isAdmin) && (
+          (canCreateFR) && (
             <Button onClick={() => setCreateDialogOpen(true)} disabled={!selectedProjectId}>
               <Plus className="mr-2 h-4 w-4" />
               New Functional Requirement
@@ -339,7 +354,7 @@ function FunctionalRequirementsPageContent() {
           icon={FolderPlus}
           title="No projects yet"
           description="Create a project before breaking work down into functional requirements."
-          action={{ label: 'Go to Projects', onClick: () => router.push('/projects') }}
+          action={{ label: 'Go to Projects', href: '/projects' }}
         />
       )}
 
@@ -350,18 +365,12 @@ function FunctionalRequirementsPageContent() {
           <CardTitle>Select Project</CardTitle>
         </CardHeader>
         <CardContent>
-          <Select value={selectedProjectId} onValueChange={handleProjectChange}>
-            <SelectTrigger aria-label="Select a project" className="w-full md:w-[400px]">
-              <SelectValue placeholder="Select a project..." />
-            </SelectTrigger>
-            <SelectContent>
-              {projects.map((project) => (
-                <SelectItem key={project.id} value={project.id}>
-                  {project.shortCode} - {project.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <ProjectPicker
+            projects={projects}
+            value={selectedProjectId}
+            onChange={handleProjectChange}
+            className="md:w-[400px]"
+          />
         </CardContent>
       </Card>
       )}
@@ -369,7 +378,7 @@ function FunctionalRequirementsPageContent() {
       {selectedProjectId && (
         <>
           {/* Stats */}
-          <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-7">
+          <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium">Total</CardTitle>
@@ -387,17 +396,12 @@ function FunctionalRequirementsPageContent() {
                 <div className="text-2xl font-bold">{stats.draft}</div>
               </CardContent>
             </Card>
+            {/* No "Review" tile: nothing sets that status, so it always read 0. */}
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Review</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{stats.review}</div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Approved</CardTitle>
+                <CardTitle className="text-sm font-medium">
+                  {getFunctionalRequirementStatusConfig('APPROVED').label}
+                </CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">{stats.approved}</div>
@@ -405,7 +409,9 @@ function FunctionalRequirementsPageContent() {
             </Card>
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Implemented</CardTitle>
+                <CardTitle className="text-sm font-medium">
+                  {getFunctionalRequirementStatusConfig('IMPLEMENTED').label}
+                </CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">{stats.implemented}</div>
@@ -413,7 +419,9 @@ function FunctionalRequirementsPageContent() {
             </Card>
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Tested</CardTitle>
+                <CardTitle className="text-sm font-medium">
+                  {getFunctionalRequirementStatusConfig('TESTED').label}
+                </CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">{stats.tested}</div>
@@ -421,7 +429,9 @@ function FunctionalRequirementsPageContent() {
             </Card>
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Deployed</CardTitle>
+                <CardTitle className="text-sm font-medium">
+                  {getFunctionalRequirementStatusConfig('DEPLOYED').label}
+                </CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">{stats.deployed}</div>
@@ -454,7 +464,7 @@ function FunctionalRequirementsPageContent() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Statuses</SelectItem>
-                    {FUNCTIONAL_REQUIREMENT_STATUSES.map((value) => (
+                    {FUNCTIONAL_REQUIREMENT_STATUSES.filter((value) => value !== 'REVIEW').map((value) => (
                       <SelectItem key={value} value={value}>
                         {getFunctionalRequirementStatusConfig(value).label}
                       </SelectItem>
@@ -492,9 +502,9 @@ function FunctionalRequirementsPageContent() {
                       : 'Break client requirements down into functional requirements to get started.'
                   }
                   action={
-                    canCreateFR || isAdmin
+                    canCreateFR
                       ? {
-                          label: 'Create First Requirement',
+                          label: 'New Functional Requirement',
                           onClick: () => setCreateDialogOpen(true),
                         }
                       : undefined
@@ -507,6 +517,9 @@ function FunctionalRequirementsPageContent() {
                       <TableRow>
                         <TableHead>ID</TableHead>
                         <TableHead>Title</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Epic</TableHead>
+                        <TableHead>Sprint</TableHead>
                         <TableHead>Priority</TableHead>
                         <TableHead>Complexity</TableHead>
                         <TableHead>Progress</TableHead>
@@ -529,11 +542,14 @@ function FunctionalRequirementsPageContent() {
       {/* Create Dialog */}
       <CreateFunctionalRequirementDialog
         open={createDialogOpen}
-        onOpenChange={setCreateDialogOpen}
+        onOpenChange={(next) => {
+          setCreateDialogOpen(next);
+          if (!next) setCreateForEpic('');
+        }}
+        defaultEpicId={createForEpic}
         projectId={selectedProjectId}
         projectCode={selectedProject?.shortCode || ''}
         workspaceId={currentWorkspace?.id || ''}
-        userId={user?.id || ''}
         clientRequirements={clientRequirements}
         functionalRequirements={requirements}
         epics={epics}
@@ -548,10 +564,27 @@ function FunctionalRequirementsPageContent() {
           projectId={selectedProjectId}
           workspaceId={currentWorkspace?.id || ''}
           clientRequirements={clientRequirements}
-          canEdit={canEditFR || isAdmin}
-          canDelete={canDeleteFR || isAdmin}
+          canEdit={canEditFR}
+          canDelete={canDeleteFR}
+          onEdit={() => {
+            setEditingRequirementId(selectedRequirement.id);
+            setSelectedRequirementId(null);
+          }}
         />
       )}
+
+      {/* The same form as Create, opened on an existing requirement. */}
+      <CreateFunctionalRequirementDialog
+        open={editingRequirement !== null}
+        onOpenChange={(next) => !next && setEditingRequirementId(null)}
+        requirement={editingRequirement}
+        projectId={selectedProjectId}
+        projectCode={selectedProject?.shortCode || ''}
+        workspaceId={currentWorkspace?.id || ''}
+        clientRequirements={clientRequirements}
+        functionalRequirements={requirements}
+        epics={epics}
+      />
     </div>
   );
 }

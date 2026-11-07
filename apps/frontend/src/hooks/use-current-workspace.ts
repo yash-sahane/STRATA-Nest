@@ -7,31 +7,16 @@ import { toast } from 'sonner';
 
 /**
  * Hook to get the current active workspace
- * Automatically selects first workspace if none is selected
  * Persists selection in localStorage via WorkspaceProvider
+ *
+ * Choosing a workspace when none is selected — and moving off one that has
+ * gone — is WorkspaceProvider's job, done once there. It used to run here, once
+ * per component using this hook, and every copy raised its own toast.
  */
 export function useCurrentWorkspace() {
     const { user } = useAuth();
     const { currentWorkspaceId, setCurrentWorkspaceId: setWorkspaceId } = useWorkspaceContext();
-    const { data: workspaces, isLoading, isFetching } = useWorkspaces(user?.id);
-
-    // Auto-select the first workspace when none is selected — and self-heal when
-    // the persisted id no longer resolves against the fetched list (workspace
-    // deleted, or the user's membership revoked). Guarding on `!currentWorkspaceId`
-    // alone left a stale localStorage id in place forever, so `currentWorkspace`
-    // stayed undefined and every page rendered "No Workspace Found".
-    //
-    // `isFetching` is part of the condition because this effect can now OVERRIDE
-    // an explicit selection: while an invalidated list is refetching, the cached
-    // array is the pre-write one, and a workspace that was just created (or just
-    // joined) legitimately is not in it yet. Deciding on in-flight data reverted
-    // the user to workspaces[0] and rewrote localStorage behind them.
-    useEffect(() => {
-        if (isFetching) return;
-        if (!workspaces || workspaces.length === 0) return;
-        if (workspaces.some((w) => w.id === currentWorkspaceId)) return;
-        setWorkspaceId(workspaces[0].id);
-    }, [currentWorkspaceId, workspaces, isFetching, setWorkspaceId]);
+    const { data: workspaces, isLoading } = useWorkspaces(user?.id);
 
     // Find current workspace object
     const currentWorkspace = workspaces?.find(w => w.id === currentWorkspaceId);

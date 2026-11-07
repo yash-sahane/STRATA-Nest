@@ -31,10 +31,16 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
-import { useCreateTimeEntry, useUpdateTimeEntry } from '@/hooks/use-time-entry';
-import { useWorkspaceTasks } from '@/hooks/use-task';
+import {
+  overlapsWorkedTime,
+  useCreateTimeEntry,
+  useTimeEntriesAround,
+  useUpdateTimeEntry,
+  type TimeEntryUpdate,
+} from '@/hooks/use-time-entry';
+import { useTasksAssignedTo, useTasksByIds } from '@/hooks/use-task';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
-import { parseTimeToMinutes } from '@/lib/utils/time-format';
+import { formatMinutesHuman, parseTimeToMinutes } from '@/lib/utils/time-format';
 import type { Task, TimeEntry } from '@/types';
 
 /**
@@ -49,8 +55,6 @@ const NO_TASK = '__none__';
 
 interface ManualTimeEntryDialogProps {
   userId: string;
-  userName: string;
-  userEmail: string;
   taskId?: string;
   trigger?: React.ReactNode;
   /** Supplied to EDIT that entry instead of logging a new one. */
@@ -77,10 +81,23 @@ const toTimeInput = (iso: string, fallback: string) => {
   return Number.isNaN(d.getTime()) ? fallback : format(d, 'HH:mm');
 };
 
+const pad = (n: number) => String(n).padStart(2, '0');
+const clock = (minutes: number) => `${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}`;
+
+/**
+ * The window a new entry opens on: 09:00–17:00, but ending no later than now.
+ * An entry may not end in the future, so a fixed 17:00 made the form open
+ * already refused for anyone logging their morning before the day was out.
+ */
+function defaultWindow(): { start: string; end: string } {
+  const current = new Date();
+  const nowMinutes = Math.floor((current.getHours() * 60 + current.getMinutes()) / 5) * 5;
+  const end = Math.min(17 * 60, nowMinutes);
+  return { start: clock(Math.max(0, Math.min(9 * 60, end - 60))), end: clock(end) };
+}
+
 export function ManualTimeEntryDialog({
   userId,
-  userName,
-  userEmail,
   taskId,
   trigger,
   entry,
@@ -96,25 +113,43 @@ export function ManualTimeEntryDialog({
     onOpenChange?.(next);
   };
 
+  /**
+   * What the date and time fields open on, kept so a save can tell whether the
+   * window was touched at all. The fields hold minutes; the entry, seconds — and
+   * a timer's entry records its window less any time it was paused. Sending the
+   * window back on every save made the server recompute the duration from it,
+   * so fixing a typo gave a paused entry its pause back, and an entry longer
+   * than these fields can show was cut down to whatever they made.
+   */
+  const [opened] = useState(() =>
+    entry
+      ? {
+          day: format(toLocalDay(entry.startTime, new Date()), 'yyyy-MM-dd'),
+          start: toTimeInput(entry.startTime, '09:00'),
+          end: toTimeInput(entry.endTime, '17:00'),
+        }
+      : null
+  );
   const [date, setDate] = useState<Date>(() =>
     entry ? toLocalDay(entry.startTime, new Date()) : new Date()
   );
-  const [startTime, setStartTime] = useState(() =>
-    entry ? toTimeInput(entry.startTime, '09:00') : '09:00'
-  );
-  const [endTime, setEndTime] = useState(() =>
-    entry ? toTimeInput(entry.endTime, '17:00') : '17:00'
-  );
+  const [startTime, setStartTime] = useState(() => opened?.start ?? defaultWindow().start);
+  const [endTime, setEndTime] = useState(() => opened?.end ?? defaultWindow().end);
   const [selectedTaskId, setSelectedTaskId] = useState(entry?.taskId || taskId || '');
   const [description, setDescription] = useState(entry?.description ?? '');
   const [isBillable, setIsBillable] = useState(entry?.isBillable ?? false);
-  const [billableRate, setBillableRate] = useState(
-    entry?.billableRate != null ? String(entry.billableRate) : ''
-  );
   const [tags, setTags] = useState(entry?.tags?.join(', ') ?? '');
 
   const { currentWorkspace: workspace } = useCurrentWorkspace();
-  const { data: tasks } = useWorkspaceTasks(workspace?.id);
+  // The tasks you might have worked on: yours, and the one this form was
+  // opened for. It listed every task in the workspace — a download of all of
+  // them, and a select nobody could find anything in.
+  const { data: mine = [] } = useTasksAssignedTo(workspace?.id, userId);
+  const named = entry?.taskId || taskId || '';
+  const { data: namedTask = [] } = useTasksByIds(
+    named && !mine.some((t) => t.id === named) ? [named] : []
+  );
+  const tasks = React.useMemo(() => [...namedTask, ...mine], [namedTask, mine]);
   const createTimeEntryMutation = useCreateTimeEntry();
   const updateTimeEntryMutation = useUpdateTimeEntry();
   const isPending = createTimeEntryMutation.isPending || updateTimeEntryMutation.isPending;
@@ -147,45 +182,78 @@ export function ManualTimeEntryDialog({
   // local midnight and comparing against `new Date()` would disable today.
   const today = useMemo(() => startOfDay(new Date()), []);
 
+  const day = format(date, 'yyyy-MM-dd');
+  /** The window as it would be saved. */
+  const { windowStart, windowEnd } = useMemo(() => {
+    const start = new Date(`${day}T${startTime}:00`);
+    const end = new Date(`${day}T${endTime}:00`);
+    // An overnight window ends on the FOLLOWING day. setDate on the local date
+    // rolls month ends and DST correctly; adding 24h of milliseconds would not.
+    if (endsNextDay) end.setDate(end.getDate() + 1);
+    return { windowStart: start, windowEnd: end };
+  }, [day, startTime, endTime, endsNextDay]);
+
+  /** A new entry always states its window; an edit only once a field of it changes. */
+  const windowTouched =
+    !opened || day !== opened.day || startTime !== opened.start || endTime !== opened.end;
+
   // Time is a record of work already done. Nothing stopped the picker walking
   // into May 2027, and the entry was booked, added to Total logged and queued
   // for the manager exactly like a real one. The server refuses a future start
   // ("Time cannot be logged for work that has not happened yet"); this mirrors
   // that rule so the refusal is never reached with a filled-in form.
-  const startsInTheFuture = useMemo(() => {
-    const startAt = new Date(`${format(date, 'yyyy-MM-dd')}T${startTime}:00`);
-    return !Number.isNaN(startAt.getTime()) && startAt.getTime() > Date.now();
-  }, [date, startTime]);
+  const startsInTheFuture =
+    !Number.isNaN(windowStart.getTime()) && windowStart.getTime() > Date.now();
+  // ...and a future END, which the server refuses too: "today 09:00–17:00"
+  // logged at lunchtime was eight hours worked, five of them still to come.
+  const endsInTheFuture =
+    !startsInTheFuture && !Number.isNaN(windowEnd.getTime()) && windowEnd.getTime() > Date.now();
+
+  // The same person's time, logged twice: the server refuses a window that
+  // lands on time already logged in this workspace, by the rule mirrored in
+  // overlapsWorkedTime. Checked here against the entries around the chosen day.
+  const scopeWorkspaceId = entry?.workspaceId || workspace?.id;
+  const { data: nearby = [] } = useTimeEntriesAround(
+    isOpen ? userId : undefined,
+    scopeWorkspaceId,
+    day
+  );
+  const clash = useMemo(() => {
+    if (!windowTouched || durationMinutes <= 0) return null;
+    return (
+      nearby.find(
+        (other) =>
+          other.id !== entry?.id &&
+          other.status !== 'REJECTED' &&
+          overlapsWorkedTime(other, windowStart, windowEnd)
+      ) ?? null
+    );
+  }, [nearby, windowTouched, durationMinutes, entry?.id, windowStart, windowEnd]);
+
+  /** What stops this window being saved, if anything. Unchanged windows are not re-judged. */
+  const windowBlocked =
+    windowTouched && (durationMinutes <= 0 || startsInTheFuture || endsInTheFuture || !!clash);
+
+  /**
+   * The stored entry's own figures, for an edit that leaves the window alone: a
+   * timer's entry leaves its paused time out, and an older one may be longer
+   * than these fields can show. Either way it is what will still be logged.
+   */
+  const storedWindowMinutes = entry
+    ? Math.round((new Date(entry.endTime).getTime() - new Date(entry.startTime).getTime()) / 60_000)
+    : 0;
+  const shownMinutes = entry && !windowTouched ? entry.duration : durationMinutes;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!workspace) return;
 
-    if (durationMinutes <= 0 || startsInTheFuture) {
+    if (windowBlocked) {
       return;
     }
 
     const selectedTask = tasks?.find((t: Task) => t.id === selectedTaskId);
-
-    // Create ISO timestamps
-    const dateStr = format(date, 'yyyy-MM-dd');
-    const startDateTime = new Date(`${dateStr}T${startTime}:00`);
-    const endAt = new Date(`${dateStr}T${endTime}:00`);
-    // An overnight window ends on the FOLLOWING day. setDate on the local date
-    // rolls month ends and DST correctly; adding 24h of milliseconds would not.
-    if (endsNextDay) {
-      endAt.setDate(endAt.getDate() + 1);
-    }
-
-    // `null`, never `undefined`: JSON.stringify drops an undefined key, so the
-    // PATCH carried no rate at all and the server (which only copies a rate it
-    // was actually sent) left the stored one standing — clearing the box, or
-    // switching the entry to non-billable, reported success and changed
-    // nothing. A rate also belongs to a billable entry only, so the value still
-    // sitting in state behind a switched-off toggle must not be sent.
-    const typedRate = Number.parseFloat(billableRate);
-    const ratePayload = isBillable && Number.isFinite(typedRate) ? typedRate : null;
 
     // Parse tags
     const tagArray = tags
@@ -195,38 +263,33 @@ export function ManualTimeEntryDialog({
 
     try {
       if (entry) {
-        // The server recomputes duration from the window and, for an entry that
-        // was already approved or rejected, clears the decision and puts it back
-        // in the queue — an approval must never outlive the numbers it signed off.
-        await updateTimeEntryMutation.mutateAsync({
-          id: entry.id,
-          userId,
-          updates: {
-            description,
-            startTime: startDateTime.toISOString(),
-            endTime: endAt.toISOString(),
-            isBillable,
-            billableRate: ratePayload,
-            tags: tagArray,
-          },
-        });
+        // Only what was changed. The server recomputes the duration from a
+        // window it is SENT and, for an entry that was already approved or
+        // rejected, clears the decision and puts it back in the queue — an
+        // approval must never outlive the numbers it signed off. A field left
+        // alone is not sent, so a save cannot quietly re-time or re-open an
+        // entry over a change nobody made.
+        const updates: TimeEntryUpdate = {};
+        if (description !== (entry.description ?? '')) updates.description = description;
+        if (isBillable !== entry.isBillable) updates.isBillable = isBillable;
+        if (tagArray.join('\n') !== (entry.tags ?? []).join('\n')) updates.tags = tagArray;
+        if (windowTouched) {
+          updates.startTime = windowStart.toISOString();
+          updates.endTime = windowEnd.toISOString();
+        }
+        if (Object.keys(updates).length > 0) {
+          await updateTimeEntryMutation.mutateAsync({ id: entry.id, userId, updates });
+        }
       } else {
         await createTimeEntryMutation.mutateAsync({
           workspaceId: workspace.id,
           userId,
-          userName,
-          userEmail,
           taskId: selectedTaskId || undefined,
-          taskTitle: selectedTask?.title,
-          taskHierarchyId: selectedTask?.hierarchyId,
           projectId: selectedTask?.projectId,
-          projectName: undefined,
           description,
-          startTime: startDateTime.toISOString(),
-          endTime: endAt.toISOString(),
-          duration: durationMinutes,
+          startTime: windowStart.toISOString(),
+          endTime: windowEnd.toISOString(),
           isBillable,
-          billableRate: ratePayload,
           tags: tagArray.length > 0 ? tagArray : undefined,
         });
       }
@@ -245,14 +308,14 @@ export function ManualTimeEntryDialog({
     }
 
     // Reset form
+    const fresh = defaultWindow();
     setDescription('');
-    setStartTime('09:00');
-    setEndTime('17:00');
+    setStartTime(fresh.start);
+    setEndTime(fresh.end);
     if (!taskId) {
       setSelectedTaskId('');
     }
     setIsBillable(false);
-    setBillableRate('');
     setTags('');
   };
 
@@ -284,10 +347,11 @@ export function ManualTimeEntryDialog({
           <div className="space-y-4 py-4">
             {/* Date Picker */}
             <div className="space-y-2">
-              <Label>Date</Label>
+              <Label htmlFor="manual-entry-date">Date</Label>
               <Popover>
                 <PopoverTrigger asChild>
                   <Button
+                    id="manual-entry-date"
                     variant="outline"
                     className={cn(
                       'w-full justify-start text-left font-normal',
@@ -295,7 +359,7 @@ export function ManualTimeEntryDialog({
                     )}
                   >
                     <CalendarIcon className="mr-2 h-4 w-4" />
-                    {date ? format(date, 'PPP') : <span>Pick a date</span>}
+                    {date ? format(date, 'MMM d, yyyy') : <span>Pick a date</span>}
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-auto p-0" align="start">
@@ -338,18 +402,36 @@ export function ManualTimeEntryDialog({
               </div>
             </div>
 
-            {startsInTheFuture && (
+            {windowTouched && startsInTheFuture && (
               <p className="text-sm text-destructive-text">
                 Time can only be logged for work that has already happened — pick an earlier date
                 or start time.
+              </p>
+            )}
+            {windowTouched && endsInTheFuture && (
+              <p className="text-sm text-destructive-text">
+                This ends later than now. Log the time once it has been worked — or pick an earlier
+                end time.
+              </p>
+            )}
+            {clash && (
+              <p className="text-sm text-destructive-text">
+                This overlaps time you have already logged:{' '}
+                {[clash.taskHierarchyId, clash.taskTitle].filter(Boolean).join(' ') ||
+                  clash.projectName ||
+                  clash.description ||
+                  'another entry'}
+                , {format(new Date(clash.startTime), 'MMM d, h:mm a')}–
+                {format(new Date(clash.endTime), 'h:mm a')}. Change the times, or edit that entry
+                instead.
               </p>
             )}
 
             {/* Duration Display */}
             <div className="rounded-md bg-muted p-3 text-sm">
               <span className="font-medium">Duration:</span>{' '}
-              {durationMinutes} minutes ({(durationMinutes / 60).toFixed(2)} hours)
-              {endsNextDay && (
+              {formatMinutesHuman(shownMinutes)} ({(shownMinutes / 60).toFixed(2)} hours)
+              {windowTouched && endsNextDay && (
                 // An overnight window is legitimate, but it is also what a
                 // mistyped end time looks like — so name the day it lands on
                 // rather than quietly booking an extra 24 hours.
@@ -357,6 +439,14 @@ export function ManualTimeEntryDialog({
                   {' '}
                   — ends {format(addDays(date, 1), 'MMM d')} (next day)
                 </span>
+              )}
+              {entry && !windowTouched && Math.abs(storedWindowMinutes - entry.duration) >= 1 && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {storedWindowMinutes > MINUTES_PER_DAY
+                    ? 'This entry is longer than the times above can show.'
+                    : 'Paused time is left out of this entry.'}{' '}
+                  It stays as it is unless you change the date or times.
+                </p>
               )}
             </div>
 
@@ -420,22 +510,6 @@ export function ManualTimeEntryDialog({
               />
             </div>
 
-            {/* Billable Rate */}
-            {isBillable && (
-              <div className="space-y-2">
-                <Label htmlFor="rate">Hourly Rate ($)</Label>
-                <Input
-                  id="rate"
-                  type="number"
-                  value={billableRate}
-                  onChange={(e) => setBillableRate(e.target.value)}
-                  placeholder="0.00"
-                  min="0"
-                  step="0.01"
-                />
-              </div>
-            )}
-
             {/* Tags */}
             <div className="space-y-2">
               <Label htmlFor="tags">Tags (comma-separated)</Label>
@@ -459,12 +533,7 @@ export function ManualTimeEntryDialog({
             </Button>
             <Button
               type="submit"
-              disabled={
-                !description.trim() ||
-                durationMinutes <= 0 ||
-                startsInTheFuture ||
-                isPending
-              }
+              disabled={!description.trim() || windowBlocked || isPending}
             >
               {isPending
                 ? isEditing

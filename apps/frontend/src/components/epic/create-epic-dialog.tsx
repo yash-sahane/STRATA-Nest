@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -55,16 +56,17 @@ interface CreateEpicDialogProps {
   projectId: string;
   projectCode: string;
   workspaceId: string;
-  userId: string;
+  /** The client requirement it is raised from, when it is raised from one. */
+  defaultRequirementId?: string;
 }
 
 export function CreateEpicDialog({
   open,
   onOpenChange,
+  defaultRequirementId = '',
   projectId,
   projectCode,
   workspaceId,
-  userId,
 }: CreateEpicDialogProps) {
   const createEpic = useCreateEpic();
   const { data: requirements = [] } = useClientRequirements(projectId); // ✅ NEW: Load requirements for mapping
@@ -80,13 +82,16 @@ export function CreateEpicDialog({
     },
   });
 
+  useEffect(() => {
+    if (open && defaultRequirementId) form.setValue('requirementId', defaultRequirementId);
+  }, [open, defaultRequirementId, form]);
+
   const onSubmit = async (values: FormData) => {
     try {
       await createEpic.mutateAsync({
         projectId,
         projectCode,
         workspaceId,
-        createdBy: userId,
         name: values.name.trim(),
         description: values.description || '',
         requirementId: values.requirementId || undefined, // ✅ NEW: Pass requirement mapping
@@ -118,7 +123,8 @@ export function CreateEpicDialog({
         <DialogHeader>
           <DialogTitle>Create Epic</DialogTitle>
           <DialogDescription>
-            Create a new epic to group related user stories and features
+            An epic is a feature that delivers a client requirement; its functional
+            requirements are the pieces it is built and planned in.
           </DialogDescription>
         </DialogHeader>
 
@@ -178,7 +184,8 @@ export function CreateEpicDialog({
                       <SelectItem value="none">No requirement</SelectItem>
                       {requirements.map((req) => (
                         <SelectItem key={req.id} value={req.id}>
-                          {req.id} - {req.title}
+                          {req.title}
+                          {req.clientName ? ` · ${req.clientName}` : ''}
                         </SelectItem>
                       ))}
                     </SelectContent>

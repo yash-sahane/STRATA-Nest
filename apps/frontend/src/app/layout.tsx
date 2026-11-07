@@ -51,7 +51,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                     connection stalls exactly the same way, and says just as little. */}
                 <OfflineNotice />
               </ConfirmProvider>
-              <Toaster position="top-right" richColors />
+              {/* Bottom right: at the top they sat over the header's bell and
+                  account menu for as long as they stayed up. */}
+              <Toaster position="bottom-right" richColors />
             </AuthProvider>
           </QueryProvider>
         </ThemeProvider>

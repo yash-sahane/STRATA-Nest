@@ -3,7 +3,12 @@
 import * as React from 'react';
 import { getInitials } from '@/lib/utils';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
-import { useTeamAttendance, useTeamAttendanceAnalytics } from '@/hooks/use-team-attendance';
+import {
+  useTeamAttendance,
+  useTeamAttendanceAnalytics,
+  type TeamMemberAttendance,
+} from '@/hooks/use-team-attendance';
+import { AttendanceRecordDialog } from '@/components/attendance/attendance-record-dialog';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
@@ -26,8 +31,11 @@ import {
   Search,
   TrendingUp,
   Download,
+  Pencil,
+  Plus,
 } from 'lucide-react';
 import { ROLE_CONFIG } from '@/hooks/use-team';
+import { roleDisplayName as roleLabel } from '@/hooks/use-role-options';
 import {
   formatMinutes,
   formatTime,
@@ -35,14 +43,33 @@ import {
   getCurrentDate,
 } from '@/lib/attendance-utils';
 import { ErrorState } from '@/components/ui/error-state';
+import { humanizeEnum } from '@/lib/semantic/status';
+import { useAuth } from '@/components/providers/auth-provider';
+import { useLeaveApprovers } from '@/hooks/use-leave';
+
+
+/** One CSV cell. Quoted always; a leading =, +, - or @ is defused, because a
+ *  spreadsheet runs such a cell as a formula and a display name is free text. */
+function csvCell(value: string | number | undefined): string {
+  const text = value === undefined ? '' : String(value);
+  const safe = /^[=+\-@]/.test(text) ? `'${text}` : text;
+  return `"${safe.replace(/"/g, '""')}"`;
+}
 
 export function TeamAttendanceTab() {
   const { currentWorkspace } = useCurrentWorkspace();
+  const { user } = useAuth();
+  // Your own day is restated by another HR manager — the server refuses it
+  // otherwise — unless you are the only one there is.
+  const { data: approvers = [] } = useLeaveApprovers(currentWorkspace?.id);
+  const anotherHrManager = approvers.some((a) => a.userId !== user?.id);
 
   const [selectedDate, setSelectedDate] = React.useState(getCurrentDate());
   const [searchQuery, setSearchQuery] = React.useState('');
   const [statusFilter, setStatusFilter] = React.useState<string>('ALL');
   const [roleFilter, setRoleFilter] = React.useState<string>('ALL');
+  // The roster row whose record is open in the correction dialog.
+  const [editing, setEditing] = React.useState<TeamMemberAttendance | null>(null);
 
   const { data: teamAttendance, isLoading, isError, refetch } = useTeamAttendance(
     currentWorkspace?.id,
@@ -69,23 +96,71 @@ export function TeamAttendanceTab() {
   // UNKNOWN is a real state — a date in the future, or one before this person
   // joined — but "UNKNOWN" is not a word to put on a badge. Say what it means.
   const statusLabel = (status: string) =>
-    status === 'UNKNOWN' ? 'No record' : status.replace('_', ' ');
+    status === 'UNKNOWN' ? 'No record' : humanizeEnum(status);
 
   const statusHint = (status: string) =>
     status === 'UNKNOWN'
       ? 'Nothing to report for this date — it is in the future, or before this member joined the workspace.'
       : undefined;
 
+  // Nothing can be filed for a day that has not happened; the API refuses it.
+  const dateIsFuture = selectedDate > getCurrentDate();
+
+  // The roles actually on this roster, in the product's own order — the list
+  // used to be four hand-written options, so an Assistant Manager, a Content
+  // Engineer or a plain Member could not be filtered for at all.
+  const rolesPresent = React.useMemo(() => {
+    const present = new Set((teamAttendance ?? []).map((m) => m.role));
+    const known = Object.keys(ROLE_CONFIG).filter((role) => present.has(role));
+    const custom = [...present].filter((role) => !(role in ROLE_CONFIG)).sort();
+    return [...known, ...custom];
+  }, [teamAttendance]);
+
+  /** The roster as filtered on screen, as a CSV — what the Download button was
+   *  drawn for and never did. */
+  const downloadRoster = () => {
+    const header = [
+      'Name',
+      'Email',
+      'Role',
+      'Status',
+      'Check in',
+      'Check out',
+      'Hours worked',
+      'Late (minutes)',
+    ];
+    const rows = filteredTeam.map((m) => [
+      m.userName,
+      m.userEmail,
+      roleLabel(m.role),
+      statusLabel(m.status),
+      m.attendance?.checkInTime ? formatTime(m.attendance.checkInTime) : '',
+      m.attendance?.checkOutTime ? formatTime(m.attendance.checkOutTime) : '',
+      m.attendance?.workHours != null ? m.attendance.workHours.toFixed(2) : '',
+      m.attendance?.lateMinutes ?? '',
+    ]);
+    const csv = [header, ...rows].map((row) => row.map(csvCell).join(',')).join('\n');
+    // The BOM is what makes a spreadsheet read the file as UTF-8.
+    const url = window.URL.createObjectURL(new Blob(['\ufeff', csv], { type: 'text/csv' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `attendance-${selectedDate}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
+  };
+
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'PRESENT':
-        return <CheckCircle className="h-4 w-4 text-green-700 dark:text-green-400" />;
+        return <CheckCircle className="h-4 w-4 text-success-text" />;
       case 'ABSENT':
-        return <XCircle className="h-4 w-4 text-red-600 dark:text-red-400" />;
+        return <XCircle className="h-4 w-4 text-destructive-text" />;
       case 'LATE':
-        return <Clock className="h-4 w-4 text-orange-700 dark:text-orange-400" />;
+        return <Clock className="h-4 w-4 text-warning-text" />;
       case 'ON_LEAVE':
-        return <Calendar className="h-4 w-4 text-blue-600 dark:text-blue-400" />;
+        return <Calendar className="h-4 w-4 text-info-text" />;
       default:
         return null;
     }
@@ -94,7 +169,7 @@ export function TeamAttendanceTab() {
   return (
     <div className="space-y-6">
       {/* Header with Date Selector */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="text-2xl font-bold flex items-center gap-2">
             <Users className="h-6 w-6" />
@@ -107,11 +182,19 @@ export function TeamAttendanceTab() {
         <div className="flex items-center gap-2">
           <Input
             type="date"
+            aria-label="Day to show"
             value={selectedDate}
             onChange={(e) => setSelectedDate(e.target.value)}
             className="w-auto"
           />
-          <Button variant="outline" size="icon" aria-label="Download attendance for this day">
+          <Button
+            variant="outline"
+            size="icon"
+            aria-label="Download attendance for this day"
+            title="Download as CSV"
+            onClick={downloadRoster}
+            disabled={filteredTeam.length === 0}
+          >
             <Download className="h-4 w-4" />
           </Button>
         </div>
@@ -155,10 +238,10 @@ export function TeamAttendanceTab() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">Present</CardTitle>
-              <CheckCircle className="h-4 w-4 text-green-700 dark:text-green-400" />
+              <CheckCircle className="h-4 w-4 text-success-text" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-green-700 dark:text-green-400">{analytics.presentCount}</div>
+              <div className="text-2xl font-bold text-success-text">{analytics.presentCount}</div>
               <p className="text-xs text-muted-foreground">
                 {!analytics.isWorkingDay
                   ? 'Non-working day'
@@ -172,10 +255,10 @@ export function TeamAttendanceTab() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">Absent</CardTitle>
-              <XCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
+              <XCircle className="h-4 w-4 text-destructive-text" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-red-600 dark:text-red-400">{analytics.absentCount}</div>
+              <div className="text-2xl font-bold text-destructive-text">{analytics.absentCount}</div>
               <p className="text-xs text-muted-foreground">
                 {analytics.lateCount} late &middot; {analytics.onLeaveCount} on leave
               </p>
@@ -221,6 +304,7 @@ export function TeamAttendanceTab() {
                 <SelectItem value="PRESENT">Present</SelectItem>
                 <SelectItem value="ABSENT">Absent</SelectItem>
                 <SelectItem value="LATE">Late</SelectItem>
+                <SelectItem value="HALF_DAY">Half Day</SelectItem>
                 <SelectItem value="ON_LEAVE">On Leave</SelectItem>
               </SelectContent>
             </Select>
@@ -231,10 +315,11 @@ export function TeamAttendanceTab() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="ALL">All Roles</SelectItem>
-                <SelectItem value="MANAGER">Manager</SelectItem>
-                <SelectItem value="SOFTWARE_DEVELOPER">Software Developer</SelectItem>
-                <SelectItem value="TESTER">Tester</SelectItem>
-                <SelectItem value="DEVELOPER_INTERN">Developer Intern</SelectItem>
+                {rolesPresent.map((role) => (
+                  <SelectItem key={role} value={role}>
+                    {roleLabel(role)}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
@@ -251,7 +336,15 @@ export function TeamAttendanceTab() {
         </CardHeader>
         <CardContent>
           <div className="space-y-3">
-            {filteredTeam.length === 0 ? (
+            {isLoading ? (
+              // Not the "no members match" line below: that is a statement
+              // about the roster, and there is no roster yet.
+              [1, 2, 3].map((i) => <Skeleton key={i} className="h-[72px] w-full" />)
+            ) : isError ? (
+              <div className="text-center py-8 text-muted-foreground">
+                The roster could not be loaded.
+              </div>
+            ) : filteredTeam.length === 0 ? (
               <div className="text-center py-8 text-muted-foreground">
                 No team members found matching your filters.
               </div>
@@ -259,23 +352,26 @@ export function TeamAttendanceTab() {
               filteredTeam.map((member) => (
                 <div
                   key={member.userId}
-                  className="flex items-center justify-between p-4 rounded-lg border hover:bg-accent transition-colors"
+                  className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-lg border"
                 >
-                  <div className="flex items-center gap-4 flex-1">
+                  <div className="flex min-w-0 flex-1 items-center gap-4">
                     <Avatar className="h-10 w-10">
                       <AvatarImage src={member.userAvatar} alt={member.userName} />
                       <AvatarFallback>{getInitials(member.userName)}</AvatarFallback>
                     </Avatar>
 
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2">
-                        <p className="font-medium">{member.userName}</p>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="min-w-0 truncate font-medium" title={member.userName}>
+                          {member.userName}
+                        </p>
                         <Badge variant="outline" className="text-xs">
-                          {ROLE_CONFIG[member.role as keyof typeof ROLE_CONFIG]?.label ||
-                            member.role}
+                          {roleLabel(member.role)}
                         </Badge>
                       </div>
-                      <p className="text-sm text-muted-foreground">{member.userEmail}</p>
+                      <p className="truncate text-sm text-muted-foreground" title={member.userEmail}>
+                        {member.userEmail}
+                      </p>
                     </div>
                   </div>
 
@@ -290,6 +386,18 @@ export function TeamAttendanceTab() {
                             <> - {formatTime(member.attendance.checkOutTime)}</>
                           )}
                         </div>
+                        {/* A day that is over, with an arrival and no departure:
+                            the hours are unknown, not zero, and whoever is
+                            reading this is the person who can put them right.
+                            It used to look exactly like somebody still at work. */}
+                        {!member.attendance.checkOutTime &&
+                          selectedDate < getCurrentDate() &&
+                          member.attendance.status !== 'ON_LEAVE' &&
+                          member.attendance.status !== 'ABSENT' && (
+                            <div className="text-xs font-medium text-warning-text">
+                              No check-out recorded
+                            </div>
+                          )}
                         {member.attendance.workHours != null &&
                           member.attendance.workHours !== undefined && (
                             <div className="text-xs text-muted-foreground">
@@ -297,7 +405,7 @@ export function TeamAttendanceTab() {
                             </div>
                           )}
                         {(member.attendance.lateMinutes ?? 0) > 0 && (
-                          <div className="text-xs text-orange-700 dark:text-orange-400">
+                          <div className="text-xs text-warning-text">
                             Late by {formatMinutes(member.attendance.lateMinutes ?? 0)}
                           </div>
                         )}
@@ -312,6 +420,35 @@ export function TeamAttendanceTab() {
                       {getStatusIcon(member.status)}
                       {statusLabel(member.status)}
                     </Badge>
+
+                    {/* Correct what is filed, or file the day when nothing is.
+                        Kept in the layout on a future date so the badges stay
+                        in one column. */}
+                    {(() => {
+                      const ownDay = member.userId === user?.id && anotherHrManager;
+                      return (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className={dateIsFuture || ownDay ? 'invisible' : undefined}
+                      disabled={dateIsFuture || ownDay}
+                      aria-hidden={ownDay || undefined}
+                      aria-label={
+                        member.attendance
+                          ? `Correct attendance for ${member.userName}`
+                          : `File attendance for ${member.userName}`
+                      }
+                      title={member.attendance ? 'Correct this record' : 'File attendance'}
+                      onClick={() => setEditing(member)}
+                    >
+                      {member.attendance ? (
+                        <Pencil className="h-4 w-4" />
+                      ) : (
+                        <Plus className="h-4 w-4" />
+                      )}
+                    </Button>
+                      );
+                    })()}
                   </div>
                 </div>
               ))
@@ -319,6 +456,15 @@ export function TeamAttendanceTab() {
           </div>
         </CardContent>
       </Card>
+
+      {currentWorkspace?.id && (
+        <AttendanceRecordDialog
+          workspaceId={currentWorkspace.id}
+          date={selectedDate}
+          member={editing}
+          onClose={() => setEditing(null)}
+        />
+      )}
     </div>
   );
 }
