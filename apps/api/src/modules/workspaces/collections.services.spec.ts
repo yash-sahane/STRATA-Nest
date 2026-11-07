@@ -1,16 +1,16 @@
 import { ForbiddenException } from '@nestjs/common';
+import type { EventEmitter2 } from '@nestjs/event-emitter';
 import type { PrismaService } from '@strata/prisma';
 import type { User } from '@prisma/client';
+import { capabilitiesOrphaned, type AdministrationChange } from '../authz/administration';
 import { Permission } from '../authz/permissions';
 import { DENY_MESSAGE, type WorkspaceAccessService } from '../authz/workspace-access.service';
 import {
-  EmailInvitationsService,
   InviteCodesService,
   JoinRequestsService,
-  PendingAccessService,
   WorkspaceRolesService,
 } from './collections.services';
-import type { CreateEmailInvitationDto, CreateInviteCodeDto } from './dto';
+import type { CreateInviteCodeDto } from './dto';
 
 const user = { id: 'u1' } as User;
 
@@ -21,12 +21,12 @@ function build(held: string[]) {
   const prisma = {
     workspaceRole: { create, update, findFirst: jest.fn().mockResolvedValue({ id: 'r1', workspaceId: 'w1' }) },
     inviteCode: { create, update, findFirst: jest.fn().mockResolvedValue({ id: 'c1', workspaceId: 'w1' }) },
-    emailInvitation: { create, update, findFirst: jest.fn().mockResolvedValue({ id: 'i1', workspaceId: 'w1' }) },
   } as unknown as PrismaService;
   const access = {
     scopeWhere: jest.fn().mockResolvedValue({}),
     assertPermission: jest.fn().mockResolvedValue(undefined),
     assertValidRole: jest.fn().mockResolvedValue(undefined),
+    assertCanGrantRole: jest.fn().mockResolvedValue(undefined),
     isPlatformAdmin: jest.fn().mockReturnValue(false),
     permissions: jest.fn().mockResolvedValue(new Set(held)),
   } as unknown as WorkspaceAccessService;
@@ -79,6 +79,59 @@ describe('WorkspaceRolesService — custom roles cannot escalate', () => {
   });
 });
 
+describe('WorkspaceRolesService.remove — a role in use stays', () => {
+  function buildRemove(counts: { members?: number; codes?: number }) {
+    const remove = jest.fn().mockResolvedValue({});
+    const prisma = {
+      workspaceRole: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'r1', workspaceId: 'w1', name: 'Lead' }),
+        delete: remove,
+      },
+      workspaceMember: { count: jest.fn().mockResolvedValue(counts.members ?? 0) },
+      inviteCode: { count: jest.fn().mockResolvedValue(counts.codes ?? 0) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+    } as unknown as PrismaService;
+    const access = {
+      scopeWhere: jest.fn().mockResolvedValue({}),
+      assertPermission: jest.fn().mockResolvedValue(undefined),
+      isPlatformAdmin: jest.fn().mockReturnValue(false),
+    } as unknown as WorkspaceAccessService;
+    return { svc: new WorkspaceRolesService(prisma, access), prisma, access, remove };
+  }
+
+  it('refuses while members hold it — deleting would drop them to read-only unannounced', async () => {
+    const { svc, prisma, remove } = buildRemove({ members: 3 });
+    await expect(svc.remove(user, 'r1')).rejects.toThrow(
+      '3 members hold the "Lead" role. Give them another role first.',
+    );
+    expect(prisma.workspaceMember.count).toHaveBeenCalledWith({
+      where: { workspaceId: 'w1', role: 'Lead' },
+    });
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('refuses while an invite code still hands it out', async () => {
+    const { svc, remove } = buildRemove({ codes: 1 });
+    await expect(svc.remove(user, 'r1')).rejects.toThrow(
+      'An invite code still hands out the "Lead" role. Delete that code first.',
+    );
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('checks role:manage before saying anything about who holds the role', async () => {
+    const { svc, prisma, access } = buildRemove({ members: 3 });
+    (access.assertPermission as jest.Mock).mockRejectedValue(new Error('denied'));
+    await expect(svc.remove(user, 'r1')).rejects.toThrow('denied');
+    expect(prisma.workspaceMember.count).not.toHaveBeenCalled();
+  });
+
+  it('deletes a role nobody holds', async () => {
+    const { svc, remove } = buildRemove({});
+    await svc.remove(user, 'r1');
+    expect(remove).toHaveBeenCalledWith({ where: { id: 'r1' } });
+  });
+});
+
 describe('Invitations — server-owned secrets and validated roles', () => {
   it('ignores a caller-supplied invite code and generates one', async () => {
     const { prisma, access, create } = build([Permission.InviteManage]);
@@ -92,45 +145,67 @@ describe('Invitations — server-owned secrets and validated roles', () => {
     expect(access.assertValidRole).toHaveBeenCalledWith('w1', 'MEMBER');
   });
 
-  it('ignores a caller-supplied token/status on an e-mail invitation', async () => {
+  it('refuses a code at a role the caller could not grant directly', async () => {
     const { prisma, access, create } = build([Permission.InviteManage]);
-    const svc = new EmailInvitationsService(prisma, access);
-    // Same over-posting model as above: neither `token` nor `status` is on the DTO.
-    await svc.create(user, {
-      workspaceId: 'w1',
-      email: 'A@Example.com',
-      token: 'short',
-      status: 'ACCEPTED',
-      expiresAt: new Date().toISOString(),
-    } as CreateEmailInvitationDto);
-    const data = create.mock.calls[0][0].data;
-    expect(data.token).not.toBe('short');
-    expect(data.status).toBe('PENDING');
-    expect(data.email).toBe('a@example.com');
+    (access.assertCanGrantRole as jest.Mock).mockRejectedValue(new Error('rank'));
+    await expect(
+      new InviteCodesService(prisma, access).create(user, { workspaceId: 'w1', role: 'MANAGER' }),
+    ).rejects.toThrow('rank');
+    expect(access.assertCanGrantRole).toHaveBeenCalledWith(user, 'w1', 'MANAGER');
+    expect(create).not.toHaveBeenCalled();
   });
 
-  it('hides pending invitations from a member without invite:manage', async () => {
+  it('hides invite codes from a member without invite:manage', async () => {
     const { prisma, access, findMany } = buildRequests({ holdsManage: false });
-    const svc = new EmailInvitationsService(prisma, access);
-    await svc.list(user, {});
-    // The scope collapses to an empty id list, so the query can return nothing —
-    // no `?workspaceId=` filter can widen it back.
-    expect(findMany.mock.calls[0][0].where.AND[0]).toEqual({ workspaceId: { in: [] } });
-  });
-
-  it('shows them to a member who does hold invite:manage', async () => {
-    const { prisma, access, findMany } = buildRequests({ holdsManage: true });
     const svc = new InviteCodesService(prisma, access);
     await svc.list(user, {});
-    expect(findMany.mock.calls[0][0].where.AND[0]).toEqual({ workspaceId: { in: ['w1'] } });
+    // Nothing but the never-matching arm is left, so the query can return
+    // nothing — no `?workspaceId=` filter can widen it back.
+    expect(findMany.mock.calls[0][0].where.AND[0]).toEqual({ OR: [{ workspaceId: { in: [] } }] });
+  });
+
+  // Reading a code is holding it. An Assistant Manager used to be shown the
+  // Manager-level codes too, and could redeem one after leaving the workspace.
+  it('shows a holder of invite:manage only the codes for roles they could grant', async () => {
+    const { prisma, access, findMany } = buildRequests({ holdsManage: true });
+    (access.grantableRoles as jest.Mock).mockResolvedValue(['MEMBER', 'TESTER']);
+    const svc = new InviteCodesService(prisma, access);
+    await svc.list(user, {});
+    expect(access.grantableRoles).toHaveBeenCalledWith(user, 'w1');
+    expect(findMany.mock.calls[0][0].where.AND[0]).toEqual({
+      OR: [{ workspaceId: { in: [] } }, { workspaceId: 'w1', role: { in: ['MEMBER', 'TESTER'] } }],
+    });
+  });
+
+  it('treats reviving a spent code as offering its role again', async () => {
+    const { prisma, access } = build([Permission.InviteManage]);
+    (prisma.inviteCode.findFirst as jest.Mock).mockResolvedValue({
+      id: 'c1',
+      workspaceId: 'w1',
+      role: 'MANAGER',
+    });
+    (access.assertCanGrantRole as jest.Mock).mockRejectedValue(new Error('rank'));
+    // The row has to be READABLE first; that is a separate question from
+    // whether its role may be offered again.
+    Object.assign(access, {
+      accessibleWorkspaceIds: jest.fn().mockResolvedValue(['w1']),
+      can: jest.fn().mockResolvedValue(true),
+      grantableRoles: jest.fn().mockResolvedValue(['MANAGER']),
+    });
+    const svc = new InviteCodesService(prisma, access);
+    await expect(svc.patch(user, 'c1', { maxUses: 50 })).rejects.toThrow('rank');
+    expect(access.assertCanGrantRole).toHaveBeenCalledWith(user, 'w1', 'MANAGER');
   });
 });
 
+/** For the cases that are not about the event a new request emits. */
+const noEvents = { emit: jest.fn() } as unknown as EventEmitter2;
+
 /**
- * Builder for the self-service request collections (and the invitation reads):
- * `user` is NOT a member of w1 unless `isMember` says so. `holdsManage` is the
- * collection's own read/override permission — `invite:manage` for the
- * invitations, `join:manage` for the request queues.
+ * Builder for the join-request collection (and the invite-code reads): `user`
+ * is NOT a member of w1 unless `isMember` says so. `holdsManage` is the
+ * collection's own read/override permission — `invite:manage` for the codes,
+ * `join:manage` for the request queue.
  */
 function buildRequests(
   opts: {
@@ -138,6 +213,8 @@ function buildRequests(
     holdsManage?: boolean;
     workspaceExists?: boolean;
     row?: { id: string; workspaceId: string; userId: string };
+    /** The caller's request as it stands before this call; null = none yet. */
+    standing?: { status: string } | null;
   } = {},
 ) {
   const stamps = { createdAt: new Date(0), updatedAt: new Date(0) };
@@ -153,14 +230,15 @@ function buildRequests(
   const findFirst = jest
     .fn()
     .mockResolvedValue(opts.row ?? { id: 'j1', workspaceId: 'w1', userId: 'u1' });
-  const model = { upsert, update, delete: remove, findMany, count, findFirst };
+  const findUnique = jest.fn().mockResolvedValue(opts.standing ?? null);
+  const model = { upsert, update, delete: remove, findMany, count, findFirst, findUnique };
   const prisma = {
     workspace: {
-      findUnique: jest.fn().mockResolvedValue(opts.workspaceExists === false ? null : { id: 'w1' }),
+      findUnique: jest
+        .fn()
+        .mockResolvedValue(opts.workspaceExists === false ? null : { id: 'w1', name: 'Acme' }),
     },
     joinRequest: model,
-    pendingWorkspaceAccess: model,
-    emailInvitation: model,
     inviteCode: model,
   } as unknown as PrismaService;
   const access = {
@@ -168,24 +246,63 @@ function buildRequests(
     accessibleWorkspaceIds: jest.fn().mockResolvedValue(['w1']),
     activeMembership: jest.fn().mockResolvedValue(opts.isMember ? { id: 'm1' } : null),
     assertValidRole: jest.fn().mockResolvedValue(undefined),
+    grantableRoles: jest.fn().mockResolvedValue(['MEMBER']),
     assertPermission: jest.fn().mockRejectedValue(new ForbiddenException(DENY_MESSAGE)),
     isPlatformAdmin: jest.fn().mockReturnValue(false),
     can: jest.fn().mockResolvedValue(opts.holdsManage ?? false),
   } as unknown as WorkspaceAccessService;
-  return { prisma, access, upsert, remove, findMany, findFirst, update };
+  const emit = jest.fn();
+  const events = { emit } as unknown as EventEmitter2;
+  return { prisma, access, events, emit, upsert, remove, findMany, findFirst, update };
 }
 
-describe('Join requests / pending access — the author is not a member', () => {
+describe('Join requests — the managers are told', () => {
+  const asker = { id: 'u1', name: 'Asha Rao', email: 'asha@x.com' } as User;
+
+  it('announces a new request to the workspace', async () => {
+    const { prisma, access, events, emit } = buildRequests();
+    await new JoinRequestsService(prisma, access, events).create(asker, { workspaceId: 'w1' });
+    expect(emit).toHaveBeenCalledWith(
+      'workspace.join_request.created',
+      expect.objectContaining({
+        workspaceId: 'w1',
+        payload: expect.objectContaining({
+          workspaceId: 'w1',
+          userId: 'u1',
+          requesterName: 'Asha Rao',
+          workspaceName: 'Acme',
+        }),
+      }),
+    );
+  });
+
+  it('and a request re-opened after being declined', async () => {
+    const { prisma, access, events, emit } = buildRequests({ standing: { status: 'REJECTED' } });
+    await new JoinRequestsService(prisma, access, events).create(asker, { workspaceId: 'w1' });
+    expect(emit).toHaveBeenCalledTimes(1);
+  });
+
+  it('but not an edit to one that is already waiting', async () => {
+    const { prisma, access, events, emit } = buildRequests({ standing: { status: 'PENDING' } });
+    await new JoinRequestsService(prisma, access, events).create(asker, {
+      workspaceId: 'w1',
+      message: 'second thoughts',
+    });
+    expect(emit).not.toHaveBeenCalled();
+  });
+});
+
+describe('Join requests — the author is not a member', () => {
   it('refuses a request for a workspace that does not exist', async () => {
-    const { prisma, access, upsert } = buildRequests({ workspaceExists: false });
-    const svc = new JoinRequestsService(prisma, access);
+    const { prisma, access, events, upsert } = buildRequests({ workspaceExists: false });
+    const svc = new JoinRequestsService(prisma, access, events);
     await expect(svc.create(user, { workspaceId: 'nope' })).rejects.toThrow('Workspace not found.');
     expect(upsert).not.toHaveBeenCalled();
   });
 
   it('refuses a request from someone who is already a member', async () => {
     const { prisma, access, upsert } = buildRequests({ isMember: true });
-    const svc = new JoinRequestsService(prisma, access);
+    const svc = new JoinRequestsService(prisma, access, noEvents);
     await expect(svc.create(user, { workspaceId: 'w1' })).rejects.toThrow(
       'You are already a member of this workspace.',
     );
@@ -194,7 +311,7 @@ describe('Join requests / pending access — the author is not a member', () => 
 
   it('upserts so a re-application after a rejection reopens the same row', async () => {
     const { prisma, access, upsert } = buildRequests();
-    const svc = new JoinRequestsService(prisma, access);
+    const svc = new JoinRequestsService(prisma, access, noEvents);
     await svc.create(user, { workspaceId: 'w1', message: 'please' });
     expect(upsert).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -206,7 +323,7 @@ describe('Join requests / pending access — the author is not a member', () => 
 
   it('lets the author see their own request even outside their workspaces', async () => {
     const { prisma, access, findMany } = buildRequests();
-    const svc = new JoinRequestsService(prisma, access);
+    const svc = new JoinRequestsService(prisma, access, noEvents);
     await svc.list(user, {});
     // No join:manage anywhere, so the workspace half collapses to an empty id
     // list: a plain member cannot enumerate who has asked to join, but the
@@ -218,7 +335,7 @@ describe('Join requests / pending access — the author is not a member', () => 
 
   it('shows the whole queue to a member holding join:manage', async () => {
     const { prisma, access, findMany } = buildRequests({ holdsManage: true });
-    const svc = new PendingAccessService(prisma, access);
+    const svc = new JoinRequestsService(prisma, access, noEvents);
     await svc.list(user, {});
     expect(findMany.mock.calls[0][0].where.AND[0]).toEqual({
       OR: [{ workspaceId: { in: ['w1'] } }, { userId: 'u1' }],
@@ -227,7 +344,7 @@ describe('Join requests / pending access — the author is not a member', () => 
 
   it('lets the author cancel their own request without join:manage', async () => {
     const { prisma, access, remove } = buildRequests();
-    const svc = new JoinRequestsService(prisma, access);
+    const svc = new JoinRequestsService(prisma, access, noEvents);
     await expect(svc.remove(user, 'j1')).resolves.toBeUndefined();
     expect(access.assertPermission).not.toHaveBeenCalled();
     expect(remove).toHaveBeenCalledWith({ where: { id: 'j1' } });
@@ -237,14 +354,14 @@ describe('Join requests / pending access — the author is not a member', () => 
     const { prisma, access, remove } = buildRequests({
       row: { id: 'j1', workspaceId: 'w1', userId: 'someone-else' },
     });
-    const svc = new JoinRequestsService(prisma, access);
+    const svc = new JoinRequestsService(prisma, access, noEvents);
     await expect(svc.remove(user, 'j1')).rejects.toThrow(DENY_MESSAGE);
     expect(remove).not.toHaveBeenCalled();
   });
 
   it('rejects a status the approval workflow cannot act on', async () => {
     const { prisma, access } = buildRequests();
-    const svc = new JoinRequestsService(prisma, access);
+    const svc = new JoinRequestsService(prisma, access, noEvents);
     await expect(svc.patch(user, 'j1', { status: 'MAYBE' })).rejects.toThrow(
       'Unknown join request status "MAYBE".',
     );
@@ -255,24 +372,11 @@ describe('Join requests / pending access — the author is not a member', () => 
     // access — and JoinRequestApprovalService.approve then refused it forever
     // ("Join request already handled"). Approval goes through that service.
     const { prisma, access, update } = buildRequests();
-    const svc = new JoinRequestsService(prisma, access);
+    const svc = new JoinRequestsService(prisma, access, noEvents);
     await expect(svc.patch(user, 'j1', { status: 'APPROVED' })).rejects.toThrow(
       'Unknown join request status "APPROVED".',
     );
     expect(update).not.toHaveBeenCalled();
-  });
-
-  it('validates the requested role on pending access and upserts on (workspace,user)', async () => {
-    const { prisma, access, upsert } = buildRequests();
-    const svc = new PendingAccessService(prisma, access);
-    await svc.create(user, { workspaceId: 'w1', requestedRole: 'TESTER' });
-    expect(access.assertValidRole).toHaveBeenCalledWith('w1', 'TESTER');
-    expect(upsert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { workspaceId_userId: { workspaceId: 'w1', userId: 'u1' } },
-        update: { requestedRole: 'TESTER' },
-      }),
-    );
   });
 });
 
@@ -297,16 +401,20 @@ describe('WorkspaceRolesService.patch — renames are grants too', () => {
     const carry = {
       workspaceMember: jest.fn().mockResolvedValue({ count: membersOnOldName }),
       inviteCode: jest.fn().mockResolvedValue({ count: 0 }),
-      emailInvitation: jest.fn().mockResolvedValue({ count: 0 }),
-      pendingWorkspaceAccess: jest.fn().mockResolvedValue({ count: 0 }),
     };
+    // The holders, as re-read under the new name once the rename has landed.
+    const moved = Array.from({ length: membersOnOldName }, (_, i) => ({ id: `m-${i}`, workspaceId: 'w1' }));
+    const announceWrite = jest.fn();
     const prisma = {
       workspaceRole: { update, findFirst: jest.fn().mockResolvedValue(existing) },
-      workspaceMember: { count: jest.fn().mockResolvedValue(membersOnOldName), updateMany: carry.workspaceMember },
+      workspaceMember: {
+        count: jest.fn().mockResolvedValue(membersOnOldName),
+        updateMany: carry.workspaceMember,
+        findMany: jest.fn().mockResolvedValue(moved),
+      },
       inviteCode: { updateMany: carry.inviteCode },
-      emailInvitation: { updateMany: carry.emailInvitation },
-      pendingWorkspaceAccess: { updateMany: carry.pendingWorkspaceAccess },
       $transaction: jest.fn((ops: Promise<unknown>[]) => Promise.all(ops)),
+      announceWrite,
     } as unknown as PrismaService;
     const access = {
       scopeWhere: jest.fn().mockResolvedValue({}),
@@ -314,7 +422,7 @@ describe('WorkspaceRolesService.patch — renames are grants too', () => {
       isPlatformAdmin: jest.fn().mockReturnValue(false),
       permissions: jest.fn().mockResolvedValue(new Set(held)),
     } as unknown as WorkspaceAccessService;
-    return { svc: new WorkspaceRolesService(prisma, access), update, carry, access };
+    return { svc: new WorkspaceRolesService(prisma, access), update, carry, access, announceWrite };
   }
 
   const owner = {
@@ -335,25 +443,33 @@ describe('WorkspaceRolesService.patch — renames are grants too', () => {
   });
 
   // Replaces the old "refuse while the name is in use" rule. Refusing only ever
-  // looked at MEMBERSHIPS, so an invite code / e-mail invitation /
-  // pending-access row naming the role sailed through and was left pointing at a
-  // name that no longer resolved — `assertValidRole` then 400s the acceptance
-  // with `Unknown role "Auditor"` and the invite is permanently unusable.
-  // Carrying every naming row is not a privilege change: each one still points
-  // at the same WorkspaceRole with the same permissions.
-  it('carries members AND invite/e-mail/pending rows onto the new name, in one transaction', async () => {
+  // looked at MEMBERSHIPS, so an invite code naming the role sailed through and
+  // was left pointing at a name that no longer resolved — `assertValidRole`
+  // then 400s the redemption with `Unknown role "Auditor"` and the code is
+  // permanently unusable. Carrying every naming row is not a privilege change:
+  // each one still points at the same WorkspaceRole with the same permissions.
+  it('carries members AND invite codes onto the new name, in one transaction', async () => {
     const inUse = { id: 'r-1', workspaceId: 'w1', name: 'Auditor', permissions: leadPermissions };
-    const { svc, update, carry } = buildRoles(leadPermissions, inUse, 3);
+    const { svc, update, carry, announceWrite } = buildRoles(leadPermissions, inUse, 3);
     await expect(svc.patch(user, 'r-1', { name: 'Reviewer' })).resolves.toBeDefined();
+    // One frame per moved membership: updateMany is invisible to the write hook,
+    // and the holders' screens resolve their permissions by the role's name.
+    expect(announceWrite).toHaveBeenCalledTimes(3);
+    expect(announceWrite).toHaveBeenCalledWith('WorkspaceMember', 'update', expect.objectContaining({ id: 'm-0' }));
     expect(update).toHaveBeenCalledWith({ where: { id: 'r-1' }, data: { name: 'Reviewer' } });
     const scope = { workspaceId: 'w1', role: 'Auditor' };
     expect(carry.workspaceMember).toHaveBeenCalledWith({ where: scope, data: { role: 'Reviewer' } });
     expect(carry.inviteCode).toHaveBeenCalledWith({ where: scope, data: { role: 'Reviewer' } });
-    expect(carry.emailInvitation).toHaveBeenCalledWith({ where: scope, data: { role: 'Reviewer' } });
-    expect(carry.pendingWorkspaceAccess).toHaveBeenCalledWith({
-      where: { workspaceId: 'w1', requestedRole: 'Auditor' },
-      data: { requestedRole: 'Reviewer' },
-    });
+  });
+
+  // The permission list being SAVED was checked; the one being replaced was
+  // not, so `role:manage` could empty a role that outranks its holder.
+  it('refuses to cut down a role that carries more than the caller holds', async () => {
+    const { svc, update } = buildRoles(leadPermissions, owner);
+    await expect(svc.patch(user, 'r-owner', { permissions: [] })).rejects.toThrow(
+      'You cannot grant permissions you do not hold: workspace:delete.',
+    );
+    expect(update).not.toHaveBeenCalled();
   });
 
   it('allows an unused rename within the caller’s own permissions', async () => {
@@ -396,5 +512,184 @@ describe('WorkspaceRolesService.patch — renames are grants too', () => {
     (access.assertPermission as jest.Mock).mockRejectedValue(new Error('DENY'));
     await expect(svc.patch(user, 'r-owner', { name: 'Lead' })).rejects.toThrow('DENY');
     expect(access.assertPermission).toHaveBeenCalledWith(user, 'w1', Permission.RoleManage);
+  });
+});
+
+/**
+ * The second half of the owner takeover: once the owner sat on a custom role,
+ * cutting that role down on this screen demoted them without touching their
+ * membership — and a role edit could leave the workspace with nobody active
+ * able to administer it, which no membership guard ever saw.
+ */
+describe('WorkspaceRolesService.patch — power taken from a role is taken from its holders', () => {
+  const ALL = Object.values(Permission) as string[];
+  const boss = { id: 'r-boss', workspaceId: 'w1', name: 'Boss', permissions: ALL };
+
+  function buildCut(opts: {
+    platformAdmin?: boolean;
+    /** Whether the workspace owner's membership is on the role being edited. */
+    ownerHolds?: boolean;
+    /** The other ACTIVE members' roles, besides the owner on Boss. */
+    others?: string[];
+  }) {
+    const update = jest.fn().mockImplementation(({ data }) => ({
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+      ...boss,
+      ...data,
+    }));
+    const prisma = {
+      workspaceRole: { update, findFirst: jest.fn().mockResolvedValue(boss) },
+      workspace: { findUnique: jest.fn().mockResolvedValue({ ownerId: 'owner' }) },
+      workspaceMember: {
+        findFirst: jest.fn().mockResolvedValue(opts.ownerHolds ? { id: 'm-owner' } : null),
+      },
+    } as unknown as PrismaService;
+    const members = [
+      { id: 'm-owner', role: opts.ownerHolds ? 'Boss' : 'MANAGER' },
+      ...(opts.others ?? []).map((role, i) => ({ id: `m-${i}`, role })),
+    ];
+    const access = {
+      scopeWhere: jest.fn().mockResolvedValue({}),
+      assertPermission: jest.fn().mockResolvedValue(undefined),
+      isPlatformAdmin: jest.fn().mockReturnValue(opts.platformAdmin ?? false),
+      // A MANAGER holds everything, so no escalation rule stands in the way.
+      permissions: jest.fn().mockResolvedValue(new Set(['*'])),
+      capabilitiesOrphanedBy: jest.fn(async (_ws: string, change: AdministrationChange) =>
+        capabilitiesOrphaned({ members, definitions: new Map([['Boss', ALL]]) }, change),
+      ),
+    } as unknown as WorkspaceAccessService;
+    return { svc: new WorkspaceRolesService(prisma, access), update, access };
+  }
+
+  const baseline = [Permission.WorkspaceRead, Permission.MemberRead];
+
+  it('refuses a manager who is not the owner cutting down the role the owner holds', async () => {
+    const { svc, update } = buildCut({ ownerHolds: true, others: ['MANAGER'] });
+    await expect(svc.patch(user, 'r-boss', { permissions: baseline })).rejects.toThrow(
+      'The workspace owner holds the "Boss" role, so only they or a platform administrator can take permissions away from it.',
+    );
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('lets the owner trim a role they hold, while somebody else still administers', async () => {
+    const owner = { id: 'owner' } as User;
+    const { svc, update } = buildCut({ ownerHolds: true, others: ['MANAGER'] });
+    await expect(
+      svc.patch(owner, 'r-boss', { permissions: ALL.filter((p) => p !== Permission.IntegrationWrite) }),
+    ).resolves.toBeDefined();
+    expect(update).toHaveBeenCalled();
+  });
+
+  it('lets a platform administrator repair it', async () => {
+    const { svc, update } = buildCut({ ownerHolds: true, platformAdmin: true });
+    await expect(svc.patch(user, 'r-boss', { permissions: baseline })).resolves.toBeDefined();
+    expect(update).toHaveBeenCalled();
+  });
+
+  it('never refuses ADDING to the owner’s role', async () => {
+    const { svc, update } = buildCut({ ownerHolds: true });
+    await expect(svc.patch(user, 'r-boss', { permissions: ALL })).resolves.toBeDefined();
+    expect(update).toHaveBeenCalled();
+  });
+
+  it('refuses an edit that leaves nobody active able to administer the workspace', async () => {
+    // Not the owner rule this time (the owner is not on Boss): Boss is the only
+    // role anybody active holds that can administer, so cutting it orphans the
+    // workspace.
+    const { svc, update, access } = buildCut({ others: ['Boss'] });
+    (access.capabilitiesOrphanedBy as jest.Mock).mockImplementation(
+      async (_ws: string, change: AdministrationChange) =>
+        capabilitiesOrphaned(
+          {
+            members: [
+              { id: 'm-owner', role: 'MEMBER' },
+              { id: 'm-0', role: 'Boss' },
+            ],
+            definitions: new Map([['Boss', ALL]]),
+          },
+          change,
+        ),
+    );
+    await expect(svc.patch(user, 'r-boss', { permissions: baseline })).rejects.toThrow(
+      'That would leave nobody active in this workspace who can change members’ roles and access, or delete the workspace.',
+    );
+    expect(access.capabilitiesOrphanedBy).toHaveBeenCalledWith('w1', {
+      roleName: 'Boss',
+      permissions: baseline,
+    });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('allows the same cut while another role still administers', async () => {
+    const { svc, update } = buildCut({ others: ['Boss'] });
+    // The owner's MANAGER role still holds both capabilities.
+    await expect(svc.patch(user, 'r-boss', { permissions: baseline })).resolves.toBeDefined();
+    expect(update).toHaveBeenCalled();
+  });
+});
+
+/**
+ * A switched-off member asking back in was shown as a stranger, with the role
+ * picker on the read-only Member — so approving demoted them without a word.
+ */
+describe('Join requests — a former member is shown as one', () => {
+  function buildQueue(membership: { role: string; status: string } | null) {
+    const row = {
+      id: 'j1',
+      workspaceId: 'w1',
+      userId: 'u9',
+      message: '',
+      status: 'PENDING',
+      handledById: null,
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    };
+    const memberships = jest
+      .fn()
+      .mockResolvedValue(membership ? [{ workspaceId: 'w1', userId: 'u9', ...membership }] : []);
+    const prisma = {
+      joinRequest: {
+        findMany: jest.fn().mockResolvedValue([row]),
+        count: jest.fn().mockResolvedValue(1),
+      },
+      user: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ id: 'u9', name: 'Nia', email: 'nia@x.com', avatar: '' }]),
+      },
+      workspaceMember: { findMany: memberships },
+    } as unknown as PrismaService;
+    const access = {
+      scopeWhere: jest.fn().mockResolvedValue({ workspaceId: { in: ['w1'] } }),
+      accessibleWorkspaceIds: jest.fn().mockResolvedValue(['w1']),
+      isPlatformAdmin: jest.fn().mockReturnValue(false),
+      can: jest.fn().mockResolvedValue(true),
+    } as unknown as WorkspaceAccessService;
+    return { svc: new JoinRequestsService(prisma, access, noEvents), memberships };
+  }
+
+  it('carries the role a switched-off member held', async () => {
+    const { svc } = buildQueue({ role: 'MANAGER', status: 'INACTIVE' });
+    const page = await svc.list(user, { workspaceId: 'w1' });
+    expect(page.items[0]).toMatchObject({ previousRole: 'MANAGER', alreadyMember: false });
+  });
+
+  it('still reports an ACTIVE member as already in, with no previous role', async () => {
+    const { svc } = buildQueue({ role: 'TESTER', status: 'ACTIVE' });
+    const page = await svc.list(user, { workspaceId: 'w1' });
+    expect(page.items[0]).toMatchObject({ previousRole: null, alreadyMember: true });
+  });
+
+  it('treats an invitation never accepted as no membership at all', async () => {
+    const { svc } = buildQueue({ role: 'TESTER', status: 'INVITED' });
+    const page = await svc.list(user, { workspaceId: 'w1' });
+    expect(page.items[0]).toMatchObject({ previousRole: null, alreadyMember: false });
+  });
+
+  it('and a stranger as a stranger', async () => {
+    const { svc } = buildQueue(null);
+    const page = await svc.list(user, { workspaceId: 'w1' });
+    expect(page.items[0]).toMatchObject({ previousRole: null, alreadyMember: false });
   });
 });

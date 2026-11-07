@@ -5,7 +5,8 @@ import type { PaginatedResponse } from '@strata/shared';
 import { WorkspaceEvents } from '@strata/shared';
 import { PrismaService } from '@strata/prisma';
 import type { Prisma, User, WorkspaceMember } from '@prisma/client';
-import { Permission, ROLE_PERMISSIONS, type PermissionKey } from '../authz/permissions';
+import { ADMIN_CAPABILITIES } from '../authz/administration';
+import { Permission, type PermissionKey } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import type { CreateMemberDto, UpdateMemberDto } from './dto';
 import { closePendingJoinRequests } from './join-request-sync';
@@ -13,21 +14,6 @@ import { memberResponse } from './mappers';
 
 /** The only membership states the app renders and authorizes against. */
 const MEMBER_STATUSES = new Set(['ACTIVE', 'INACTIVE', 'INVITED']);
-
-/**
- * The capabilities a workspace must never lose its last holder of.
- *
- * `member:update` alone was not enough: MANAGER → ASSISTANT_MANAGER keeps it
- * (ASSISTANT_MANAGER is `ALL` minus `workspace:delete`), so a role change that
- * strips the workspace of every actor able to delete it read as "no capacity
- * lost" and skipped both the owner guard and the last-admin count. Tracking
- * `workspace:delete` separately makes the demotion of the last MANAGER — and of
- * the owner — visible as the privilege loss it is.
- */
-const ADMIN_CAPABILITIES: readonly PermissionKey[] = [
-  Permission.MemberUpdate,
-  Permission.WorkspaceDelete,
-];
 
 const SPEC: ListQuerySpec = {
   filterable: {
@@ -40,7 +26,7 @@ const SPEC: ListQuerySpec = {
   defaultOrderBy: { createdAt: 'desc' },
 };
 
-type MemberUser = Pick<User, 'email' | 'name' | 'phone' | 'avatar'>;
+type MemberUser = Pick<User, 'email' | 'name' | 'phone' | 'avatar' | 'hasTempPassword'>;
 
 @Injectable()
 export class WorkspaceMembersService {
@@ -53,7 +39,14 @@ export class WorkspaceMembersService {
   private async usersFor(members: WorkspaceMember[]): Promise<Map<string, MemberUser>> {
     const rows = await this.prisma.user.findMany({
       where: { id: { in: members.map((m) => m.userId) } },
-      select: { id: true, email: true, name: true, phone: true, avatar: true },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        phone: true,
+        avatar: true,
+        hasTempPassword: true,
+      },
     });
     return new Map(rows.map((r) => [r.id, r]));
   }
@@ -77,8 +70,17 @@ export class WorkspaceMembersService {
       this.prisma.workspaceMember.count({ where }),
     ]);
     const users = await this.usersFor(items);
+    // "Has not signed in yet" is shown to whoever can do something about it —
+    // re-issue the temporary password — and to nobody else: for everyone else
+    // it is only a list of accounts still on a password that was sent by mail.
+    const mayAct = new Map<string, boolean>();
+    for (const workspaceId of new Set(items.map((m) => m.workspaceId))) {
+      mayAct.set(workspaceId, await this.access.can(user, workspaceId, Permission.MemberUpdate));
+    }
     return paginate(
-      items.map((m) => memberResponse(m, users.get(m.userId) ?? null)),
+      items.map((m) =>
+        memberResponse(m, users.get(m.userId) ?? null, mayAct.get(m.workspaceId) === true),
+      ),
       total,
       parsed.page,
       parsed.pageSize,
@@ -162,31 +164,39 @@ export class WorkspaceMembersService {
     verb: 'removed' | 'demoted',
   ): Promise<void> {
     if (this.access.isPlatformAdmin(user)) return;
-    const workspace = await this.prisma.workspace.findUnique({
-      where: { id: existing.workspaceId },
-      select: { ownerId: true },
-    });
-    if (workspace && existing.userId === workspace.ownerId) {
+    if (await this.isOwnersMembership(existing)) {
       throw new ForbiddenException(`The workspace owner cannot be ${verb}.`);
     }
   }
 
-  /** Every role name that exists in this workspace — the built-in map plus the
-   *  workspace's own custom roles. Needed because the last-admin question is
-   *  about CAPABILITY: counting `role: 'MANAGER'` literals gave a workspace
-   *  administered entirely through a custom role no protection at all. */
-  private async rolesHolding(workspaceId: string, permission: PermissionKey): Promise<string[]> {
-    const custom = await this.prisma.workspaceRole.findMany({
-      where: { workspaceId },
-      select: { name: true },
+  /**
+   * The owner's role is nobody else's to move — in ANY direction.
+   *
+   * `assertNotOwner` only fires on a change that costs privilege, and a sideways
+   * move costs none on paper: a manager who was not the owner minted "Boss"
+   * holding everything, moved the owner onto it (nothing lost, so no guard),
+   * then cut Boss down to the read-only floor through the roles screen. The
+   * owner was left powerless and the manager in charge. Moving the owner to a
+   * custom role is what made the second step possible, so the move itself is
+   * reserved, like every other change to the owner's membership, for a
+   * platform administrator. The owner cannot do it either: nobody edits their
+   * own role (`assertNotSelfEdit`) — they hand the workspace over first.
+   */
+  private async assertOwnerRoleUntouched(user: User, existing: WorkspaceMember): Promise<void> {
+    if (this.access.isPlatformAdmin(user)) return;
+    if (await this.isOwnersMembership(existing)) {
+      throw new ForbiddenException(
+        'The workspace owner’s role can only be changed by a platform administrator.',
+      );
+    }
+  }
+
+  private async isOwnersMembership(m: WorkspaceMember): Promise<boolean> {
+    const workspace = await this.prisma.workspace.findUnique({
+      where: { id: m.workspaceId },
+      select: { ownerId: true },
     });
-    const names = [
-      ...new Set([...Object.keys(ROLE_PERMISSIONS), ...custom.map((r) => r.name)]),
-    ];
-    const sets = await Promise.all(
-      names.map((name) => this.access.permissionsOfRole(workspaceId, name)),
-    );
-    return names.filter((_, i) => sets[i].has('*') || sets[i].has(permission));
+    return workspace !== null && workspace.ownerId === m.userId;
   }
 
   /** Which of ADMIN_CAPABILITIES a role name resolves to in this workspace. */
@@ -196,39 +206,41 @@ export class WorkspaceMembersService {
   }
 
   /**
-   * A workspace must never be left without a holder of a capability this change
-   * takes away. Shared by `update` (privilege-reducing role change /
-   * deactivation) and `remove`, which produce the same orphaned-workspace
-   * outcome — access is decided by `status: 'ACTIVE'` and `role`, so demoting or
+   * A workspace must never be left without an ACTIVE holder of a capability it
+   * has now. Shared by `update` (privilege-reducing role change / deactivation),
+   * `remove` and `leave`, which produce the same orphaned-workspace outcome —
+   * access is decided by `status: 'ACTIVE'` and `role`, so demoting or
    * deactivating the last administrator is a removal by another name.
+   *
+   * The question is asked of the workspace as the write will leave it
+   * (`capabilitiesOrphanedBy`), the same one a role-definition edit asks, and by
+   * CAPABILITY: counting `role: 'MANAGER'` literals gave a workspace
+   * administered entirely through a custom role no protection at all.
    */
   private async assertRetainsCapabilities(
     user: User,
     existing: WorkspaceMember,
-    lost: PermissionKey[],
+    /** The role the membership will hold; null when it stops counting. */
+    nextRole: string | null,
     verb: 'removed' | 'demoted',
+    /** What to say instead, when the change is the member's own doing. */
+    message?: string,
   ): Promise<void> {
     if (this.access.isPlatformAdmin(user)) return;
-    for (const permission of lost) {
-      const roles = await this.rolesHolding(existing.workspaceId, permission);
-      const others = await this.prisma.workspaceMember.count({
-        where: {
-          workspaceId: existing.workspaceId,
-          role: { in: roles },
-          status: 'ACTIVE',
-          id: { not: existing.id },
-        },
-      });
-      if (others === 0) {
-        throw new ForbiddenException(`The last manager of a workspace cannot be ${verb}.`);
-      }
+    const orphaned = await this.access.capabilitiesOrphanedBy(existing.workspaceId, {
+      membershipId: existing.id,
+      role: nextRole,
+    });
+    if (orphaned.length) {
+      throw new ForbiddenException(message ?? `The last manager of a workspace cannot be ${verb}.`);
     }
   }
 
   /** The administrative capabilities a membership change costs the workspace.
    *  Empty for a promotion or a sideways move, which is why those must not trip
    *  the orphan guards — firing them on every `dto.role !== existing.role` made
-   *  a workspace whose owner is not a MANAGER impossible to repair. */
+   *  a workspace whose owner is not a MANAGER impossible to repair. (A change to
+   *  the OWNER's role is refused on its own terms: assertOwnerRoleUntouched.) */
   private async capabilitiesLost(
     existing: WorkspaceMember,
     nextRole: string | undefined,
@@ -247,6 +259,7 @@ export class WorkspaceMembersService {
   async create(user: User, dto: CreateMemberDto) {
     await this.access.assertPermission(user, dto.workspaceId, Permission.MemberInvite);
     if (dto.role !== undefined) await this.access.assertValidRole(dto.workspaceId, dto.role);
+    await this.access.assertCanGrantRole(user, dto.workspaceId, dto.role ?? 'MEMBER');
     if (dto.status !== undefined) this.assertValidStatus(dto.status);
     const status = dto.status ?? 'ACTIVE';
     const created = this.prisma.workspaceMember.create({
@@ -277,6 +290,7 @@ export class WorkspaceMembersService {
       userId: m.userId,
       role: m.role,
       via: 'direct',
+      actorId: user.id,
     });
     return this.withUser(m);
   }
@@ -290,8 +304,17 @@ export class WorkspaceMembersService {
     // A role change, or any move off ACTIVE, can orphan the workspace exactly
     // as a removal does — so it runs the same owner/self/last-manager guards.
     const changesRole = dto.role !== undefined && dto.role !== existing.role;
-    const deactivates =
-      dto.status !== undefined && dto.status !== existing.status && dto.status !== 'ACTIVE';
+    const changesStatus = dto.status !== undefined && dto.status !== existing.status;
+    const deactivates = changesStatus && dto.status !== 'ACTIVE';
+    // Rank, in both directions: the member being changed must not outrank the
+    // caller (a reactivation hands their role back, so it counts), and the role
+    // being handed over must not either.
+    if (changesRole || changesStatus) {
+      await this.access.assertNotOutranked(user, existing.workspaceId, existing.role);
+    }
+    if (changesRole) {
+      await this.access.assertCanGrantRole(user, existing.workspaceId, dto.role as string);
+    }
     if (changesRole || deactivates) {
       // Always: an edit of one's own membership, up or down.
       this.assertNotSelfEdit(user, existing, 'demoted');
@@ -302,13 +325,26 @@ export class WorkspaceMembersService {
       const lost = await this.capabilitiesLost(existing, dto.role, deactivates);
       if (lost.length || deactivates) {
         await this.assertNotOwner(user, existing, 'demoted');
-        await this.assertRetainsCapabilities(user, existing, lost, 'demoted');
+        await this.assertRetainsCapabilities(
+          user,
+          existing,
+          deactivates ? null : (dto.role ?? existing.role),
+          'demoted',
+        );
       }
+      // A sideways move or a promotion costs nothing above — but on the owner
+      // it is still somebody else deciding the owner's role.
+      if (changesRole) await this.assertOwnerRoleUntouched(user, existing);
     }
     const data: Prisma.WorkspaceMemberUpdateInput = {};
     if (dto.role !== undefined) data.role = dto.role;
     if (dto.status !== undefined) data.status = dto.status;
     const updated = await this.prisma.workspaceMember.update({ where: { id }, data });
+    // Switched off: a timer they had running here can no longer be stopped —
+    // stopping files the time in this workspace, which now refuses them — and
+    // a person holds one timer at a time, so it blocked their timers in every
+    // other workspace too.
+    if (deactivates) await this.dropTimerIn(updated.workspaceId, updated.userId);
     // Reactivation is a grant of access like any other: an INACTIVE member is
     // not an `activeMembership`, so they CAN raise a join request, and turning
     // them back on has to settle it.
@@ -320,36 +356,240 @@ export class WorkspaceMembersService {
         user.id,
       );
     }
+    if (changesStatus) {
+      // The person is told — see WorkNotificationSubscriber. Losing access used
+      // to be something they found out by trying to open the workspace.
+      this.emit(WorkspaceEvents.MemberStatusChanged, updated.workspaceId, {
+        workspaceId: updated.workspaceId,
+        userId: updated.userId,
+        status: updated.status,
+        previousStatus: existing.status,
+        actorId: user.id,
+      });
+    }
     if (dto.role !== undefined && dto.role !== existing.role) {
       this.emit(WorkspaceEvents.MemberRoleChanged, updated.workspaceId, {
         workspaceId: updated.workspaceId,
         userId: updated.userId,
         role: updated.role,
         previousRole: existing.role,
+        actorId: user.id,
       });
     }
     return this.withUser(updated);
+  }
+
+  /**
+   * What a member leaves behind if removed, for the dialog that asks first:
+   * open tasks still assigned to them, leave waiting on a decision, hours
+   * waiting on approval. "This action cannot be undone" was all it said.
+   */
+  async footprint(
+    user: User,
+    id: string,
+  ): Promise<{ openTasks: number; pendingLeave: number; pendingTime: number }> {
+    const existing = await this.findScoped(user, id);
+    await this.access.assertPermission(user, existing.workspaceId, Permission.MemberRemove);
+    const [openTasks, pendingLeave, pendingTime] = await Promise.all([
+      this.openTasksOf(existing.workspaceId, existing.userId).then((tasks) => tasks.length),
+      this.prisma.leaveRequest.count({
+        where: { workspaceId: existing.workspaceId, userId: existing.userId, status: 'PENDING' },
+      }),
+      this.prisma.timeEntry.count({
+        where: { workspaceId: existing.workspaceId, userId: existing.userId, status: 'PENDING' },
+      }),
+    ]);
+    return { openTasks, pendingLeave, pendingTime };
+  }
+
+  /** Unfinished tasks in a workspace that name this person among their assignees. */
+  private async openTasksOf(workspaceId: string, userId: string) {
+    const tasks = await this.prisma.task.findMany({
+      where: {
+        workspaceId,
+        status: { not: 'DONE' },
+        assigneeIds: { array_contains: [userId] },
+      },
+      select: { id: true, assigneeIds: true, assigneeNames: true },
+    });
+    return tasks;
+  }
+
+  /**
+   * Drop the person's running timer if it is running for THIS workspace.
+   *
+   * A timer is filed into the workspace it was started for, and filing asks for
+   * `hr:write` there — which somebody removed or switched off no longer has. So
+   * the timer could never be stopped, and since a person holds one timer at a
+   * time, they could not start one in any other workspace either. The time on it
+   * is not filed: it would land in front of approvers of a workspace the person
+   * is no longer part of. A timer for another workspace is theirs to keep.
+   *
+   * Conditional on the row still being there — the person may stop it in the
+   * same moment — and announced, because `deleteMany` is invisible to the write
+   * hook and their own open timer would otherwise keep ticking on screen.
+   */
+  private async dropTimerIn(workspaceId: string, userId: string): Promise<void> {
+    const timer = await this.prisma.activeTimer.findUnique({ where: { userId } });
+    if (!timer || timer.workspaceId !== workspaceId) return;
+    const { count } = await this.prisma.activeTimer.deleteMany({
+      where: { id: timer.id, workspaceId },
+    });
+    if (count > 0) this.prisma.announceWrite?.('ActiveTimer', 'delete', timer);
+  }
+
+  /** One person taken off an assignee list, and off its index-aligned names. */
+  private static withoutAssignee(
+    row: { assigneeIds: unknown; assigneeNames: unknown },
+    userId: string,
+  ): { assigneeIds: string[]; assigneeNames: string[] } {
+    const ids = (value: unknown): string[] =>
+      Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
+    const names = ids(row.assigneeNames);
+    const before = ids(row.assigneeIds);
+    // Names line up with ids where both were written together; when they do
+    // not, fall back to dropping none rather than the wrong one.
+    return {
+      assigneeIds: before.filter((assignee) => assignee !== userId),
+      assigneeNames:
+        names.length === before.length ? names.filter((_, i) => before[i] !== userId) : names,
+    };
+  }
+
+  /**
+   * After a removal: their requests for leave are withdrawn — nobody is going
+   * to take that leave, and approving it charged a balance in a workspace they
+   * have left (the card read "Unknown User") — and they come off the tasks
+   * and requirements still open, which otherwise named somebody no picker
+   * lists. Hours already logged stay in the approval queue: they were worked.
+   */
+  private async tidyAfterRemoval(workspaceId: string, userId: string): Promise<void> {
+    await this.dropTimerIn(workspaceId, userId);
+    const pending = await this.prisma.leaveRequest.findMany({
+      where: { workspaceId, userId, status: 'PENDING' },
+      select: { id: true },
+    });
+    if (pending.length) {
+      await this.prisma.leaveRequest.updateMany({
+        where: { id: { in: pending.map((r) => r.id) }, status: 'PENDING' },
+        data: { status: 'CANCELLED' },
+      });
+      for (const row of await this.prisma.leaveRequest.findMany({
+        where: { id: { in: pending.map((r) => r.id) } },
+      })) {
+        this.prisma.announceWrite?.('LeaveRequest', 'update', row);
+      }
+    }
+    for (const task of await this.openTasksOf(workspaceId, userId)) {
+      // `update`, not `updateMany`: one write per task, each seen by the write
+      // hook, so open boards redraw.
+      await this.prisma.task.update({
+        where: { id: task.id },
+        data: {
+          ...WorkspaceMembersService.withoutAssignee(task, userId),
+          version: { increment: 1 },
+        },
+      });
+    }
+    // Requirements carry their own assignee list. Left alone, a requirement
+    // went on naming somebody the workspace no longer has — in its card, its
+    // filters and its notices. A DEPLOYED one is signed off and keeps its
+    // record of who delivered it, as a DONE task does.
+    const requirements = await this.prisma.functionalRequirement.findMany({
+      where: {
+        workspaceId,
+        status: { not: 'DEPLOYED' },
+        assigneeIds: { array_contains: [userId] },
+      },
+      select: { id: true, assigneeIds: true, assigneeNames: true },
+    });
+    for (const fr of requirements) {
+      await this.prisma.functionalRequirement.update({
+        where: { id: fr.id },
+        data: {
+          ...WorkspaceMembersService.withoutAssignee(fr, userId),
+          version: { increment: 1 },
+        },
+      });
+    }
   }
 
   async remove(user: User, id: string): Promise<void> {
     const existing = await this.findScoped(user, id);
     await this.access.assertPermission(user, existing.workspaceId, Permission.MemberRemove);
     this.assertNotSelfEdit(user, existing, 'removed');
+    await this.access.assertNotOutranked(user, existing.workspaceId, existing.role);
     // Removal is an identity question for the owner and a capability question
     // for everyone else, so both guards run unconditionally here.
     await this.assertNotOwner(user, existing, 'removed');
-    await this.assertRetainsCapabilities(
-      user,
-      existing,
-      [...(await this.capabilitiesOf(existing.workspaceId, existing.role))],
-      'removed',
-    );
+    await this.assertRetainsCapabilities(user, existing, null, 'removed');
     await this.prisma.workspaceMember.delete({ where: { id } });
+    await this.tidyAfterRemoval(existing.workspaceId, existing.userId);
     this.emit(WorkspaceEvents.MemberRemoved, existing.workspaceId, {
       workspaceId: existing.workspaceId,
       userId: existing.userId,
       role: existing.role,
       via: 'direct',
+      actorId: user.id,
+    });
+  }
+
+  /**
+   * Leave a workspace: the caller ends their OWN membership.
+   *
+   * There was no way to. `remove` takes `member:remove` and refuses the caller's
+   * own row, both rightly — it is how somebody ELSE is taken out — so a person
+   * added to a workspace by mistake, or finished with a project, stayed on its
+   * roster and in its notifications until a manager happened to remove them.
+   *
+   * Two memberships cannot be walked away from. The owner's, because the
+   * workspace is theirs: it is deleted, not left. And the last one that can
+   * administer it, for the reason `remove` refuses the same thing — the
+   * workspace would be left with nobody able to manage it.
+   */
+  async leave(user: User, workspaceId: string): Promise<void> {
+    const existing = await this.prisma.workspaceMember.findFirst({
+      where: { workspaceId, userId: user.id },
+    });
+    if (!existing) throw new NotFoundException('Not found.');
+    const workspace = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { ownerId: true },
+    });
+    // By identity, and with no platform-admin exemption: that exemption exists
+    // so an admin can REPAIR an owner's membership, not so the owner can vanish.
+    if (workspace?.ownerId === user.id) {
+      throw new ForbiddenException(
+        'You own this workspace, so you cannot leave it. Delete it if it is no longer needed.',
+      );
+    }
+    // Only a membership in good standing can be walked away from. A manager
+    // who switched somebody's access off made a decision, and leaving deleted
+    // the row that recorded it: the same person could then redeem an invite
+    // code and be ACTIVE again a moment later.
+    if (existing.status !== 'ACTIVE') {
+      throw new ForbiddenException(
+        'Your access to this workspace is switched off. One of its managers has to remove you or switch it back on.',
+      );
+    }
+    await this.assertRetainsCapabilities(
+      user,
+      existing,
+      null,
+      'removed',
+      'You are the last manager of this workspace. Make somebody else a manager before you leave.',
+    );
+    await this.prisma.workspaceMember.delete({ where: { id: existing.id } });
+    // As a removal does: leave still waiting on an approver is withdrawn, and the
+    // open tasks they held go back to the pool — or the boards went on naming
+    // somebody who was no longer there.
+    await this.tidyAfterRemoval(workspaceId, user.id);
+    this.emit(WorkspaceEvents.MemberRemoved, workspaceId, {
+      workspaceId,
+      userId: user.id,
+      role: existing.role,
+      via: 'left',
+      actorId: user.id,
     });
   }
 

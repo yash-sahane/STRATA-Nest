@@ -39,9 +39,8 @@ export async function collectDelete(
  * a sprint that no longer exists, or attached to a deleted requirement) until
  * something unrelated makes it refetch.
  *
- * Used for `tasks` only — that is the collection the frontend actually
- * subscribes to (hooks/use-realtime.ts); there is no functional_requirements or
- * epics channel for the other detaches to feed.
+ * Used for every detach the screens show: tasks, functional requirements and
+ * epics all have pages that subscribe to them (hooks/use-realtime.ts).
  */
 export async function collectUpdate(
   tx: TxLike,

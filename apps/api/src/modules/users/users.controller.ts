@@ -3,7 +3,7 @@ import { ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import type { User } from '@prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { InviteUserDto, UpdateUserDto } from './dto';
+import { InviteUserDto, ReissueTempPasswordDto, UpdateUserDto } from './dto';
 import { UsersService } from './users.service';
 
 @ApiTags('users')
@@ -37,6 +37,16 @@ export class UsersController {
   @Get(':id')
   retrieve(@CurrentUser() caller: User, @Param('id') id: string) {
     return this.users.retrieve(caller, id);
+  }
+
+  /** A new temporary password for somebody who cannot sign in — see the service. */
+  @Post(':id/temp-password')
+  reissueTempPassword(
+    @CurrentUser() caller: User,
+    @Param('id') id: string,
+    @Body() dto: ReissueTempPasswordDto,
+  ) {
+    return this.users.reissueTempPassword(caller, id, dto.workspaceId);
   }
 
   @Patch(':id')

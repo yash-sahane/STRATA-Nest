@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Put, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import type { User } from '@prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -23,6 +23,12 @@ export class WorkspaceMembersController {
     return this.members.create(user, dto);
   }
 
+  /** What removing this member would leave behind — asked before a removal. */
+  @Get(':id/footprint')
+  footprint(@CurrentUser() user: User, @Param('id') id: string) {
+    return this.members.footprint(user, id);
+  }
+
   @Get(':id')
   retrieve(@CurrentUser() user: User, @Param('id') id: string) {
     return this.members.retrieve(user, id);
@@ -30,11 +36,6 @@ export class WorkspaceMembersController {
 
   @Patch(':id')
   update(@CurrentUser() user: User, @Param('id') id: string, @Body() dto: UpdateMemberDto) {
-    return this.members.update(user, id, dto);
-  }
-
-  @Put(':id')
-  replace(@CurrentUser() user: User, @Param('id') id: string, @Body() dto: UpdateMemberDto) {
     return this.members.update(user, id, dto);
   }
 

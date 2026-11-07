@@ -92,11 +92,15 @@ export abstract class ScopedCrudService<TRow extends { workspaceId?: string }, T
   protected get updatePermission(): PermissionKey {
     return this.writePermission;
   }
+  /** Permission for `createIn`, where filing a row is a lesser act than deleting one. */
+  protected get createPermission(): PermissionKey {
+    return this.writePermission;
+  }
   protected readonly scopeField: string = 'workspaceId';
   /**
    * Column holding the id of the user a row belongs to, for collections whose
-   * rows are personal (leave requests, attendance, time entries, notifications,
-   * saved searches). When set, `update`/`remove` additionally require that the
+   * rows are personal (leave requests, attendance, time entries, notifications).
+   * When set, `update`/`remove` additionally require that the
    * caller owns the row — the workspace-level write permission alone is NOT
    * enough, because every member holds it for their own records. A non-owner
    * needs `ownerOverridePermission` (the manager permission for that domain).
@@ -127,7 +131,7 @@ export abstract class ScopedCrudService<TRow extends { workspaceId?: string }, T
    * designed for (action / entityType / entityId / changes).
    *
    * Deliberately NOT set on: activityLog (it would audit its own writes),
-   * savedSearch and notification (personal or system-generated noise), and
+   * notification (personal or system-generated noise), and
    * attendance / timeEntry (high-volume personal records whose meaningful
    * transitions — approve, reject — are already audited as domain events).
    */
@@ -305,7 +309,17 @@ export abstract class ScopedCrudService<TRow extends { workspaceId?: string }, T
         where: { id, version: (current as unknown as { version: number }).version },
         data: withBump,
       });
-      if (count === 1) return (await this.delegate.findFirst({ where: { id } })) as TRow;
+      if (count === 1) {
+        const saved = (await this.delegate.findFirst({ where: { id } })) as TRow;
+        // `updateMany` is invisible to the realtime write hook — see
+        // PrismaService.announceWrite. Model names are the delegate's, capitalised.
+        this.prisma.announceWrite?.(
+          this.model.charAt(0).toUpperCase() + this.model.slice(1),
+          'update',
+          saved,
+        );
+        return saved;
+      }
       current = (await this.delegate.findFirst({ where: { id } })) as TRow | null;
     }
     throw new ConflictException({
@@ -339,7 +353,7 @@ export abstract class ScopedCrudService<TRow extends { workspaceId?: string }, T
     workspaceId: string,
     data: Record<string, unknown>,
   ): Promise<TResponse> {
-    await this.access.assertPermission(user, workspaceId, this.writePermission);
+    await this.access.assertPermission(user, workspaceId, this.createPermission);
     const row = (await this.delegate.create({ data: { id: generateId(), ...data } })) as TRow;
     const created = row as Record<string, unknown>;
     await this.recordAudit(user, workspaceId, 'created', String(created.id ?? ''), created);

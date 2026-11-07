@@ -11,11 +11,8 @@ import { assertDeletable } from './assert-deletable';
 /** Project-owned children, child-first (all keyed by projectId; comments by taskId). */
 const PROJECT_CHILDREN: Array<{ model: string; collection: string }> = [
   { model: 'task', collection: 'tasks' },
-  { model: 'retrospective', collection: 'retrospectives' },
   { model: 'sprint', collection: 'sprints' },
   { model: 'epic', collection: 'epics' },
-  { model: 'kanbanColumn', collection: 'kanban_columns' },
-  { model: 'label', collection: 'labels' },
   { model: 'functionalRequirement', collection: 'functional_requirements' },
   { model: 'clientRequirement', collection: 'client_requirements' },
   { model: 'gitCommit', collection: 'git_commits' },
@@ -49,7 +46,12 @@ export class ProjectDeletionService {
     await assertDeletable(this.access, user, project.workspaceId, Permission.ProjectDelete);
     const workspaceId = project.workspaceId;
 
-    const fileRows = await this.prisma.uploadedFile.findMany({ where: { projectId }, select: { id: true, filePath: true } });
+    // Scoped by workspace as well: a file is this project's only if it is also in
+    // this project's workspace.
+    const fileRows = await this.prisma.uploadedFile.findMany({
+      where: { projectId, workspaceId },
+      select: { id: true, filePath: true },
+    });
     const integrations = await this.gatherIntegrations(projectId);
     const deleted: DeletedEntity[] = [];
 
@@ -63,7 +65,7 @@ export class ProjectDeletionService {
         for (const { model, collection } of PROJECT_CHILDREN) {
           await collectDelete(tx, model, collection, { projectId }, deleted, workspaceId);
         }
-        await collectDelete(tx, 'uploadedFile', 'files', { projectId }, deleted, workspaceId);
+        await collectDelete(tx, 'uploadedFile', 'files', { projectId, workspaceId }, deleted, workspaceId);
         // deleteMany (not delete): avoid a duplicate write-hook frame; emit once explicitly.
         await tx.project.deleteMany({ where: { id: projectId } });
         deleted.push({ collection: 'projects', id: projectId, workspaceId });

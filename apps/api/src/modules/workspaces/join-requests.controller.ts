@@ -1,9 +1,9 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Put, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import type { User } from '@prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JoinRequestsService } from './collections.services';
-import { CreateJoinRequestDto, UpdateJoinRequestDto } from './dto';
+import { ApproveJoinRequestDto, CreateJoinRequestDto, UpdateJoinRequestDto } from './dto';
 import { JoinRequestApprovalService } from './workflows.services';
 
 type Q = Record<string, string | string[] | undefined>;
@@ -28,8 +28,8 @@ export class JoinRequestsController {
 
   /** Approve → creates membership + marks request, transactionally. */
   @Post(':id/approve')
-  approve(@CurrentUser() u: User, @Param('id') id: string) {
-    return this.approvals.approve(u, id);
+  approve(@CurrentUser() u: User, @Param('id') id: string, @Body() d: ApproveJoinRequestDto) {
+    return this.approvals.approve(u, id, d?.role);
   }
 
   /** Reject → marks request rejected. */
@@ -45,11 +45,6 @@ export class JoinRequestsController {
 
   @Patch(':id')
   patch(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateJoinRequestDto) {
-    return this.svc.patch(u, id, d);
-  }
-
-  @Put(':id')
-  put(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateJoinRequestDto) {
     return this.svc.patch(u, id, d);
   }
 

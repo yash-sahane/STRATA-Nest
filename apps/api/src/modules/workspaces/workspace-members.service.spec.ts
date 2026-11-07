@@ -1,7 +1,8 @@
 import type { EventEmitter2 } from '@nestjs/event-emitter';
 import type { PrismaService } from '@strata/prisma';
 import type { User, WorkspaceMember } from '@prisma/client';
-import { permissionsForRole } from '../authz/permissions';
+import { capabilitiesOrphaned, type AdministrationChange } from '../authz/administration';
+import { Permission, permissionsForRole } from '../authz/permissions';
 import type { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { WorkspaceMembersService } from './workspace-members.service';
 
@@ -22,27 +23,60 @@ function member(over: Partial<WorkspaceMember> = {}): WorkspaceMember {
   } as WorkspaceMember;
 }
 
+/**
+ * The workspace's other ACTIVE memberships, as the shared invariant reads them:
+ * `otherManagers` MANAGERs unless `others` names their roles. The member being
+ * changed counts too, while their own membership is ACTIVE.
+ */
+function invariantFor(opts: {
+  existing: { id: string; role: string; status: string };
+  otherManagers?: number;
+  others?: string[];
+  customRoles?: Record<string, string[]>;
+}) {
+  const others =
+    opts.others ?? Array.from({ length: opts.otherManagers ?? 1 }, () => 'MANAGER');
+  const members = [
+    ...(opts.existing.status === 'ACTIVE' ? [{ id: opts.existing.id, role: opts.existing.role }] : []),
+    ...others.map((role, i) => ({ id: `m-other-${i}`, role })),
+  ];
+  const definitions = new Map(Object.entries(opts.customRoles ?? {}));
+  // The real invariant over that state: what WorkspaceAccessService loads it from
+  // is covered in workspace-access.service.spec.ts.
+  return jest
+    .fn()
+    .mockImplementation(async (_ws: string, change: AdministrationChange) =>
+      capabilitiesOrphaned({ members, definitions }, change),
+    );
+}
+
 function build(opts: {
   existing: WorkspaceMember;
   ownerId?: string;
-  /** Other ACTIVE members whose role still holds the capability being counted. */
+  /** Other ACTIVE members, all MANAGERs. */
   otherManagers?: number;
+  /** Other ACTIVE members by role, when they are not all MANAGERs. */
+  others?: string[];
   platformAdmin?: boolean;
   /** Custom WorkspaceRole rows of this workspace: name -> permission strings. */
   customRoles?: Record<string, string[]>;
+  /** The rank rule refuses: the caller's role holds less than the one involved. */
+  outranked?: boolean;
+  /** The member's running timer — one per person, recorded with its workspace. */
+  timer?: { id: string; workspaceId: string } | null;
 }) {
   const update = jest.fn().mockImplementation(({ data }) => ({ ...opts.existing, ...data }));
   const remove = jest.fn().mockResolvedValue(undefined);
   const customRoles = opts.customRoles ?? {};
-  const count = jest.fn().mockResolvedValue(opts.otherManagers ?? 1);
   // Adding or re-activating a membership settles any request that person had
   // raised to join, in the same commit where the write is transactional.
   const closeRequests = jest.fn().mockResolvedValue({ count: 1 });
   const create = jest.fn().mockReturnValue(member({ id: 'm-new', userId: 'u9' }));
+  const timerDelete = jest.fn().mockResolvedValue({ count: 1 });
+  const announceWrite = jest.fn();
   const prisma = {
     workspaceMember: {
       findFirst: jest.fn().mockResolvedValue(opts.existing),
-      count,
       create,
       update,
       delete: remove,
@@ -57,11 +91,34 @@ function build(opts: {
     },
     workspace: { findUnique: jest.fn().mockResolvedValue({ ownerId: opts.ownerId ?? 'owner' }) },
     user: { findMany: jest.fn().mockResolvedValue([]) },
+    // What a removal tidies: none, unless a case says otherwise.
+    leaveRequest: {
+      findMany: jest.fn().mockResolvedValue([]),
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
+    task: { findMany: jest.fn().mockResolvedValue([]), update: jest.fn() },
+    functionalRequirement: { findMany: jest.fn().mockResolvedValue([]), update: jest.fn() },
+    activeTimer: {
+      findUnique: jest
+        .fn()
+        .mockResolvedValue(opts.timer ? { ...opts.timer, userId: opts.existing.userId } : null),
+      deleteMany: timerDelete,
+    },
+    announceWrite,
   } as unknown as PrismaService;
+  const capabilitiesOrphanedBy = invariantFor({ ...opts, customRoles });
   const access = {
     scopeWhere: jest.fn().mockResolvedValue({}),
     assertPermission: jest.fn().mockResolvedValue(undefined),
     assertValidRole: jest.fn().mockResolvedValue(undefined),
+    // The rule itself is covered against the real service in
+    // workspace-access.service.spec.ts; here it only has to be CONSULTED.
+    assertCanGrantRole: jest.fn().mockImplementation(() =>
+      opts.outranked ? Promise.reject(new Error('rank')) : Promise.resolve(),
+    ),
+    assertNotOutranked: jest.fn().mockImplementation(() =>
+      opts.outranked ? Promise.reject(new Error('rank')) : Promise.resolve(),
+    ),
     isPlatformAdmin: jest.fn().mockReturnValue(opts.platformAdmin ?? false),
     // Built-in roles resolve without touching the DB, so the real map is the
     // honest stand-in here; custom roles resolve from their stored JSON exactly
@@ -71,16 +128,20 @@ function build(opts: {
       .mockImplementation(async (_ws: string, role: string) =>
         permissionsForRole(role, customRoles[role]),
       ),
+    capabilitiesOrphanedBy,
   } as unknown as WorkspaceAccessService;
   const events = { emit: jest.fn() } as unknown as EventEmitter2;
   return {
     svc: new WorkspaceMembersService(prisma, access, events),
+    prisma,
     update,
     remove,
     access,
-    count,
+    capabilitiesOrphanedBy,
     create,
     closeRequests,
+    timerDelete,
+    announceWrite,
   };
 }
 
@@ -99,6 +160,42 @@ describe('WorkspaceMembersService.create — a direct add answers the request to
     const { svc, closeRequests } = build({ existing: member() });
     await svc.create(caller, { workspaceId: 'w1', userId: 'u9', status: 'INVITED' });
     expect(closeRequests).not.toHaveBeenCalled();
+  });
+});
+
+describe('WorkspaceMembersService — rank', () => {
+  it('asks whether the caller may grant the role before adding a member at it', async () => {
+    const { svc, access, create } = build({ existing: member(), outranked: true });
+    await expect(
+      svc.create(caller, { workspaceId: 'w1', userId: 'u9', role: 'MANAGER' }),
+    ).rejects.toThrow('rank');
+    expect(access.assertCanGrantRole).toHaveBeenCalledWith(caller, 'w1', 'MANAGER');
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('checks both the role handed over and the member it is taken from on a role change', async () => {
+    const { svc, access } = build({ existing: member({ role: 'TESTER' }) });
+    await svc.update(caller, 'm1', { role: 'MANAGER' });
+    expect(access.assertNotOutranked).toHaveBeenCalledWith(caller, 'w1', 'TESTER');
+    expect(access.assertCanGrantRole).toHaveBeenCalledWith(caller, 'w1', 'MANAGER');
+  });
+
+  it('refuses a promotion the caller is outranked by, without writing', async () => {
+    const { svc, update } = build({ existing: member(), outranked: true });
+    await expect(svc.update(caller, 'm1', { role: 'MANAGER' })).rejects.toThrow('rank');
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('treats a reactivation as handing the role back', async () => {
+    const { svc, access } = build({ existing: member({ role: 'MANAGER', status: 'INACTIVE' }) });
+    await svc.update(caller, 'm1', { status: 'ACTIVE' });
+    expect(access.assertNotOutranked).toHaveBeenCalledWith(caller, 'w1', 'MANAGER');
+  });
+
+  it('refuses to remove a member who outranks the caller', async () => {
+    const { svc, remove } = build({ existing: member({ role: 'MANAGER' }), outranked: true });
+    await expect(svc.remove(caller, 'm1')).rejects.toThrow('rank');
+    expect(remove).not.toHaveBeenCalled();
   });
 });
 
@@ -186,17 +283,56 @@ describe('WorkspaceMembersService.update — orphaned-workspace guards', () => {
     expect(access.assertValidRole).toHaveBeenCalledWith('w1', 'MANAGER');
   });
 
-  it('PROMOTES the owner instead of refusing: the orphan guards are for privilege LOSS', async () => {
+  it('lets a platform admin PROMOTE the owner: the orphan guards are for privilege LOSS', async () => {
     // The workspace's own owner sits on a non-manager role (a legacy label the
     // normalize migration mapped to MEMBER), so the workspace has no manager at
-    // all. Repairing it must not be read as "demoting the owner".
+    // all. Repairing it must not be read as "demoting the owner" — and nothing
+    // the workspace never had can be "lost" by it.
     const { svc, update } = build({
       existing: member({ userId: 'owner', role: 'MEMBER' }),
       ownerId: 'owner',
       otherManagers: 0,
+      platformAdmin: true,
     });
     await expect(svc.update(caller, 'm1', { role: 'MANAGER' })).resolves.toBeDefined();
     expect(update).toHaveBeenCalledWith({ where: { id: 'm1' }, data: { role: 'MANAGER' } });
+  });
+
+  // The two-step takeover: a manager who is not the owner mints "Boss" with
+  // everything, moves the owner onto it (nothing lost, so no guard fired), then
+  // cuts Boss down on the roles screen. The move itself is now refused.
+  it('refuses a SIDEWAYS move of the owner onto a custom role by anybody but a platform admin', async () => {
+    const all = Object.values(Permission) as string[];
+    const { svc, update } = build({
+      existing: member({ userId: 'owner', role: 'MANAGER' }),
+      ownerId: 'owner',
+      customRoles: { Boss: all },
+    });
+    await expect(svc.update(caller, 'm1', { role: 'Boss' })).rejects.toThrow(
+      'The workspace owner’s role can only be changed by a platform administrator.',
+    );
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a promotion of the owner by anybody but a platform admin', async () => {
+    const { svc, update } = build({
+      existing: member({ userId: 'owner', role: 'ASSISTANT_MANAGER' }),
+      ownerId: 'owner',
+    });
+    await expect(svc.update(caller, 'm1', { role: 'MANAGER' })).rejects.toThrow(
+      'The workspace owner’s role can only be changed by a platform administrator.',
+    );
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('still lets a manager move anybody else sideways', async () => {
+    const all = Object.values(Permission) as string[];
+    const { svc, update } = build({
+      existing: member({ role: 'MANAGER' }),
+      customRoles: { Boss: all },
+    });
+    await expect(svc.update(caller, 'm1', { role: 'Boss' })).resolves.toBeDefined();
+    expect(update).toHaveBeenCalledWith({ where: { id: 'm1' }, data: { role: 'Boss' } });
   });
 
   it('lets a platform admin repair a workspace whose last manager is the owner', async () => {
@@ -256,18 +392,26 @@ describe('WorkspaceMembersService.update — orphaned-workspace guards', () => {
   });
 
   it('counts capability holders by role, not by the literal name MANAGER', async () => {
-    // Demoting the last MANAGER is fine when a custom role in the workspace
-    // still resolves to the same capabilities.
-    const { svc, update, count } = build({
+    // Demoting the last MANAGER is fine when somebody on a custom role still
+    // resolves to the same capabilities…
+    const steward = build({
       existing: member({ role: 'MANAGER' }),
       customRoles: { Steward: ['member:update', 'workspace:delete'] },
-      otherManagers: 1,
+      others: ['Steward'],
     });
-    await expect(svc.update(caller, 'm1', { role: 'MEMBER' })).resolves.toBeDefined();
-    expect(update).toHaveBeenCalled();
-    // The `in` set is capability-derived and includes the custom role.
-    const where = count.mock.calls[0][0].where as { role: { in: string[] } };
-    expect(where.role.in).toEqual(expect.arrayContaining(['MANAGER', 'Steward']));
+    await expect(steward.svc.update(caller, 'm1', { role: 'MEMBER' })).resolves.toBeDefined();
+    expect(steward.update).toHaveBeenCalled();
+    // …and asked of the membership as the write will leave it.
+    expect(steward.capabilitiesOrphanedBy).toHaveBeenCalledWith('w1', {
+      membershipId: 'm1',
+      role: 'MEMBER',
+    });
+
+    // …and refused when the only other member's role merely has a grand name.
+    const tester = build({ existing: member({ role: 'MANAGER' }), others: ['TESTER'] });
+    await expect(tester.svc.update(caller, 'm1', { role: 'MEMBER' })).rejects.toThrow(
+      'The last manager of a workspace cannot be demoted.',
+    );
   });
 
   it('still refuses a SELF-promotion, which the privilege-loss test alone would miss', async () => {
@@ -342,5 +486,238 @@ describe('WorkspaceMembersService.remove — unchanged invariants', () => {
     const { svc, remove } = build({ existing: member() });
     await expect(svc.remove(caller, 'm1')).resolves.toBeUndefined();
     expect(remove).toHaveBeenCalledWith({ where: { id: 'm1' } });
+  });
+
+  // An INACTIVE manager authorizes nothing, so taking them off the roster
+  // cannot orphan anything — even where no other manager is active.
+  it('does not count a switched-off manager as the last one', async () => {
+    const { svc, remove } = build({
+      existing: member({ role: 'MANAGER', status: 'INACTIVE' }),
+      otherManagers: 0,
+    });
+    await expect(svc.remove(caller, 'm1')).resolves.toBeUndefined();
+    expect(remove).toHaveBeenCalled();
+  });
+});
+
+/**
+ * A timer is filed into the workspace it was started for, which asks for
+ * hr:write there. Somebody removed or switched off could never stop it again,
+ * and holding one timer at a time, could not start one anywhere else either.
+ */
+describe('WorkspaceMembersService — a membership that ends takes its running timer with it', () => {
+  it('drops the timer on removal when it runs for this workspace, and says so', async () => {
+    const { svc, timerDelete, announceWrite } = build({
+      existing: member(),
+      timer: { id: 't1', workspaceId: 'w1' },
+    });
+    await svc.remove(caller, 'm1');
+    expect(timerDelete).toHaveBeenCalledWith({ where: { id: 't1', workspaceId: 'w1' } });
+    // deleteMany is invisible to the write hook: their own screen has to hear it.
+    expect(announceWrite).toHaveBeenCalledWith(
+      'ActiveTimer',
+      'delete',
+      expect.objectContaining({ id: 't1' }),
+    );
+  });
+
+  it('drops it when their access is switched off', async () => {
+    const { svc, timerDelete } = build({
+      existing: member(),
+      timer: { id: 't1', workspaceId: 'w1' },
+    });
+    await svc.update(caller, 'm1', { status: 'INACTIVE' });
+    expect(timerDelete).toHaveBeenCalledWith({ where: { id: 't1', workspaceId: 'w1' } });
+  });
+
+  it('leaves a timer running for ANOTHER workspace alone', async () => {
+    const { svc, timerDelete } = build({
+      existing: member(),
+      timer: { id: 't1', workspaceId: 'w2' },
+    });
+    await svc.remove(caller, 'm1');
+    await svc.update(caller, 'm1', { status: 'INACTIVE' });
+    expect(timerDelete).not.toHaveBeenCalled();
+  });
+
+  it('touches no timer on a change that keeps them in', async () => {
+    const { svc, timerDelete } = build({
+      existing: member({ role: 'MANAGER' }),
+      timer: { id: 't1', workspaceId: 'w1' },
+    });
+    await svc.update(caller, 'm1', { role: 'TESTER' });
+    expect(timerDelete).not.toHaveBeenCalled();
+  });
+});
+
+describe('WorkspaceMembersService.remove — they come off open requirements too', () => {
+  it('drops them from an open requirement’s assignees and its names, in step', async () => {
+    const { svc, prisma } = build({ existing: member({ userId: 'u2' }) });
+    const db = prisma as unknown as {
+      functionalRequirement: { findMany: jest.Mock; update: jest.Mock };
+    };
+    db.functionalRequirement.findMany.mockResolvedValue([
+      { id: 'fr1', assigneeIds: ['u3', 'u2'], assigneeNames: ['Three', 'Two'] },
+    ]);
+    await svc.remove(caller, 'm1');
+    // Signed-off (DEPLOYED) requirements keep the record of who delivered them.
+    expect(db.functionalRequirement.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          workspaceId: 'w1',
+          status: { not: 'DEPLOYED' },
+          assigneeIds: { array_contains: ['u2'] },
+        },
+      }),
+    );
+    expect(db.functionalRequirement.update).toHaveBeenCalledWith({
+      where: { id: 'fr1' },
+      data: { assigneeIds: ['u3'], assigneeNames: ['Three'], version: { increment: 1 } },
+    });
+  });
+
+  it('keeps the names when they do not line up with the ids, rather than drop the wrong one', async () => {
+    const { svc, prisma } = build({ existing: member({ userId: 'u2' }) });
+    const db = prisma as unknown as {
+      functionalRequirement: { findMany: jest.Mock; update: jest.Mock };
+    };
+    db.functionalRequirement.findMany.mockResolvedValue([
+      { id: 'fr1', assigneeIds: ['u3', 'u2'], assigneeNames: ['Three'] },
+    ]);
+    await svc.remove(caller, 'm1');
+    expect(db.functionalRequirement.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ assigneeIds: ['u3'], assigneeNames: ['Three'] }),
+      }),
+    );
+  });
+});
+
+describe('WorkspaceMembersService.leave — a member ends their own membership', () => {
+  const me = { id: 'u-me' } as User;
+
+  function buildLeave(opts: {
+    membership?: Record<string, unknown> | null;
+    ownerId?: string;
+    otherAdmins?: number;
+    platformAdmin?: boolean;
+  }) {
+    const membership =
+      opts.membership === null
+        ? null
+        : { id: 'm-me', workspaceId: 'w1', userId: 'u-me', role: 'MEMBER', status: 'ACTIVE', ...opts.membership };
+    const remove = jest.fn().mockResolvedValue({});
+    const prisma = {
+      workspaceMember: {
+        findFirst: jest.fn().mockResolvedValue(membership),
+        delete: remove,
+      },
+      workspace: { findUnique: jest.fn().mockResolvedValue({ ownerId: opts.ownerId ?? 'u-owner' }) },
+      workspaceRole: { findMany: jest.fn().mockResolvedValue([]) },
+      // Leaving tidies as a removal does: none to tidy unless a case says so.
+      leaveRequest: {
+        findMany: jest.fn().mockResolvedValue([]),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      task: { findMany: jest.fn().mockResolvedValue([]), update: jest.fn() },
+      functionalRequirement: { findMany: jest.fn().mockResolvedValue([]), update: jest.fn() },
+      activeTimer: { findUnique: jest.fn().mockResolvedValue(null), deleteMany: jest.fn() },
+    } as unknown as PrismaService;
+    const access = {
+      isPlatformAdmin: jest.fn().mockReturnValue(opts.platformAdmin ?? false),
+      // The built-in matrix, as the real service resolves it.
+      permissionsOfRole: jest.fn().mockImplementation(async (_ws: string, role: string) =>
+        permissionsForRole(role),
+      ),
+      capabilitiesOrphanedBy: membership
+        ? invariantFor({
+            existing: membership as { id: string; role: string; status: string },
+            otherManagers: opts.otherAdmins ?? 0,
+          })
+        : jest.fn(),
+      assertPermission: jest.fn().mockRejectedValue(new Error('must not be asked')),
+    } as unknown as WorkspaceAccessService;
+    const emit = jest.fn();
+    const svc = new WorkspaceMembersService(prisma, access, { emit } as unknown as EventEmitter2);
+    return { svc, remove, emit, access, prisma };
+  }
+
+  // As a removal does: the boards stop naming somebody who has gone, and an
+  // approver is not left deciding leave for a person who is no longer here.
+  it('withdraws their pending leave and takes them off open tasks', async () => {
+    const { svc, prisma } = buildLeave({});
+    const db = prisma as unknown as {
+      leaveRequest: { findMany: jest.Mock; updateMany: jest.Mock };
+      task: { findMany: jest.Mock; update: jest.Mock };
+    };
+    db.leaveRequest.findMany.mockResolvedValueOnce([{ id: 'lr1' }]).mockResolvedValue([]);
+    db.task.findMany.mockResolvedValue([
+      { id: 't1', assigneeIds: ['u-me', 'u-2'], assigneeNames: ['Me', 'Two'] },
+    ]);
+    await svc.leave(me, 'w1');
+    expect(db.leaveRequest.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['lr1'] }, status: 'PENDING' },
+      data: { status: 'CANCELLED' },
+    });
+    expect(db.task.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 't1' },
+        data: expect.objectContaining({ assigneeIds: ['u-2'], assigneeNames: ['Two'] }),
+      }),
+    );
+  });
+
+  it('lets an ordinary member leave, with no permission asked for', async () => {
+    const { svc, remove, emit, access } = buildLeave({});
+    await svc.leave(me, 'w1');
+    expect(remove).toHaveBeenCalledWith({ where: { id: 'm-me' } });
+    expect(access.assertPermission).not.toHaveBeenCalled();
+    expect(emit).toHaveBeenCalledWith(
+      'workspace.member.removed',
+      expect.objectContaining({
+        payload: expect.objectContaining({ userId: 'u-me', via: 'left' }),
+      }),
+    );
+  });
+
+  it('answers 404 to somebody who is not a member', async () => {
+    const { svc, remove } = buildLeave({ membership: null });
+    await expect(svc.leave(me, 'w1')).rejects.toThrow('Not found.');
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('refuses the owner, platform admin or not', async () => {
+    for (const platformAdmin of [false, true]) {
+      const { svc, remove } = buildLeave({
+        ownerId: 'u-me',
+        membership: { role: 'MANAGER' },
+        otherAdmins: 3,
+        platformAdmin,
+      });
+      await expect(svc.leave(me, 'w1')).rejects.toThrow('You own this workspace');
+      expect(remove).not.toHaveBeenCalled();
+    }
+  });
+
+  it('refuses the last manager, and says what to do about it', async () => {
+    const { svc, remove } = buildLeave({ membership: { role: 'MANAGER' }, otherAdmins: 0 });
+    await expect(svc.leave(me, 'w1')).rejects.toThrow(
+      'You are the last manager of this workspace. Make somebody else a manager before you leave.',
+    );
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  // A switched-off membership is a manager's decision on record. Deleting it
+  // by "leaving" let the same person redeem an invite code and be active again.
+  it('refuses a member whose access has been switched off', async () => {
+    const { svc, remove } = buildLeave({ membership: { status: 'INACTIVE' } });
+    await expect(svc.leave(me, 'w1')).rejects.toThrow('Your access to this workspace is switched off.');
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('lets a manager leave when another one remains', async () => {
+    const { svc, remove } = buildLeave({ membership: { role: 'MANAGER' }, otherAdmins: 1 });
+    await svc.leave(me, 'w1');
+    expect(remove).toHaveBeenCalled();
   });
 });

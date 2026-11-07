@@ -1,8 +1,17 @@
 import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '@strata/prisma';
-import type { User, WorkspaceMember } from '@prisma/client';
-import { Permission, isBuiltInRole, permissionsForRole, type PermissionKey } from './permissions';
+import type { Prisma, User, WorkspaceMember } from '@prisma/client';
+import { capabilitiesOrphaned, type AdministrationChange } from './administration';
+import {
+  BASELINE_PERMISSIONS,
+  PERMISSION_KEYS,
+  Permission,
+  ROLE_PERMISSIONS,
+  isBuiltInRole,
+  permissionsForRole,
+  type PermissionKey,
+} from './permissions';
 
 export const DENY_MESSAGE = 'You do not have permission to perform this action.'; // frozen error string — clients match on this exact text
 
@@ -75,13 +84,47 @@ export class WorkspaceAccessService {
     if (this.isPlatformAdmin(user)) return new Set(['*']);
     const membership = await this.activeMembership(user.id, workspaceId);
     if (!membership) return new Set();
-    let custom: string[] | undefined;
-    const role = await this.prisma.workspaceRole.findFirst({
-      where: { workspaceId, name: membership.role },
-      select: { permissions: true },
+    // A built-in role is the static map: no custom-role read on every check.
+    return this.permissionsOfRole(workspaceId, membership.role);
+  }
+
+  /**
+   * Every ACTIVE membership the caller holds, with its role and the permission
+   * keys it carries — implied keys included, as every check here resolves them.
+   * One membership read and at most one custom-role read, whatever the number
+   * of workspaces: the browser asks this once and answers every "may I?" from it.
+   */
+  async myAccess(user: User): Promise<{
+    platformAdmin: boolean;
+    workspaces: Array<{ workspaceId: string; role: string; permissions: string[] }>;
+  }> {
+    const memberships = await this.prisma.workspaceMember.findMany({
+      where: { userId: user.id, status: 'ACTIVE' },
+      select: { workspaceId: true, role: true },
     });
-    if (role && Array.isArray(role.permissions)) custom = role.permissions as string[];
-    return permissionsForRole(membership.role, custom);
+    const custom = memberships.filter((m) => !isBuiltInRole(m.role));
+    const definitions = custom.length
+      ? await this.prisma.workspaceRole.findMany({
+          where: { OR: custom.map((m) => ({ workspaceId: m.workspaceId, name: m.role })) },
+          select: { workspaceId: true, name: true, permissions: true },
+        })
+      : [];
+    const keysOf = new Map(
+      definitions.map((d) => [
+        `${d.workspaceId}\u0000${d.name}`,
+        Array.isArray(d.permissions) ? (d.permissions as string[]) : undefined,
+      ]),
+    );
+    return {
+      platformAdmin: this.isPlatformAdmin(user),
+      workspaces: memberships.map((m) => ({
+        workspaceId: m.workspaceId,
+        role: m.role,
+        permissions: [
+          ...permissionsForRole(m.role, keysOf.get(`${m.workspaceId}\u0000${m.role}`)),
+        ],
+      })),
+    };
   }
 
   /** Reject role names that are neither built-in nor a custom WorkspaceRole of
@@ -113,6 +156,137 @@ export class WorkspaceAccessService {
     const perms =
       custom && Array.isArray(custom.permissions) ? (custom.permissions as string[]) : undefined;
     return permissionsForRole(role, perms);
+  }
+
+  /**
+   * The permissions `role` carries that the caller does not hold themselves.
+   *
+   * The baseline is left out: every membership has it, so handing it over
+   * raises nobody. Unrecognised keys in a stored custom role are ignored for the
+   * same reason `assertNoEscalation` ignores them — they name no capability.
+   */
+  private async permissionsBeyondOwn(
+    user: User,
+    workspaceId: string,
+    role: string,
+    // The caller's own set, when it has already been read for several roles.
+    own?: Set<string>,
+  ): Promise<string[]> {
+    if (this.isPlatformAdmin(user)) return [];
+    const held = own ?? (await this.permissions(user, workspaceId));
+    if (held.has('*')) return [];
+    const carried = await this.permissionsOfRole(workspaceId, role);
+    return [...carried].filter(
+      (p) => PERMISSION_KEYS.has(p) && !BASELINE_PERMISSIONS.has(p) && !held.has(p),
+    );
+  }
+
+  /**
+   * Nobody hands out a role that can do more than they can.
+   *
+   * `member:invite`, `member:update` and `invite:manage` each decide what role
+   * somebody ELSE holds, and every one of them accepted any role the workspace
+   * defines. An ASSISTANT_MANAGER — everything but `workspace:delete` — could
+   * promote a colleague to MANAGER, or invite a second address of their own as
+   * one, and so reach the single permission the role exists to withhold. A
+   * custom role holding nothing but `member:invite` could mint a MANAGER the
+   * same way. Same rule the role DEFINITIONS already follow (`assertNoEscalation`
+   * in WorkspaceRolesService), applied where a role is assigned.
+   */
+  async assertCanGrantRole(user: User, workspaceId: string, role: string): Promise<void> {
+    if ((await this.permissionsBeyondOwn(user, workspaceId, role)).length) {
+      throw new ForbiddenException(
+        `You cannot give someone the "${role}" role: it can do more than your own.`,
+      );
+    }
+  }
+
+  /**
+   * The role names in a workspace that the caller could hand to somebody —
+   * every built-in and custom role that passes `assertCanGrantRole`. `null`
+   * means "all of them" (a platform admin).
+   */
+  async grantableRoles(user: User, workspaceId: string): Promise<string[] | null> {
+    if (this.isPlatformAdmin(user)) return null;
+    const custom = await this.prisma.workspaceRole.findMany({
+      where: { workspaceId },
+      select: { name: true },
+    });
+    const names = [...new Set([...Object.keys(ROLE_PERMISSIONS), ...custom.map((r) => r.name)])];
+    const own = await this.permissions(user, workspaceId);
+    const beyond = await Promise.all(
+      names.map((name) => this.permissionsBeyondOwn(user, workspaceId, name, own)),
+    );
+    return names.filter((_, i) => beyond[i].length === 0);
+  }
+
+  /**
+   * The same rule read the other way: a member whose role can do more than the
+   * caller's is not the caller's to demote, deactivate, reactivate or remove.
+   */
+  async assertNotOutranked(user: User, workspaceId: string, role: string): Promise<void> {
+    if (await this.outranked(user, workspaceId, role)) {
+      throw new ForbiddenException(
+        'You cannot change or remove a member whose role can do more than your own.',
+      );
+    }
+  }
+
+  /** Whether `role` can do something in this workspace that the caller cannot. */
+  async outranked(user: User, workspaceId: string, role: string): Promise<boolean> {
+    return (await this.permissionsBeyondOwn(user, workspaceId, role)).length > 0;
+  }
+
+  /**
+   * The ACTIVE members of a workspace whose role carries `permission` — the
+   * people a "this needs a decision" notification is for. Resolved the way every
+   * check resolves it, so a custom role counts and a role name does not.
+   * Platform admins are not listed: they hold no membership to be found by.
+   */
+  async membersHolding(workspaceId: string, permission: PermissionKey): Promise<string[]> {
+    const members = await this.prisma.workspaceMember.findMany({
+      where: { workspaceId, status: 'ACTIVE' },
+      select: { userId: true, role: true },
+    });
+    const holds = new Map<string, boolean>();
+    for (const role of new Set(members.map((m) => m.role))) {
+      holds.set(role, (await this.permissionsOfRole(workspaceId, role)).has(permission));
+    }
+    return members.filter((m) => holds.get(m.role)).map((m) => m.userId);
+  }
+
+  /**
+   * The administrative capabilities `change` would leave this workspace with no
+   * ACTIVE holder of — empty when it is safe.
+   *
+   * The one invariant every write that takes power away runs: a membership's
+   * role change, switch-off, removal or leaving, a custom role's new permission
+   * list, and an account being deactivated. It is evaluated against the state
+   * the write WILL leave, from the same rows the write is about to change.
+   * `db` lets a caller ask inside its own transaction.
+   */
+  async capabilitiesOrphanedBy(
+    workspaceId: string,
+    change: AdministrationChange,
+    db: Pick<Prisma.TransactionClient, 'workspaceMember' | 'workspaceRole'> = this.prisma,
+  ): Promise<PermissionKey[]> {
+    const [members, custom] = await Promise.all([
+      db.workspaceMember.findMany({
+        where: { workspaceId, status: 'ACTIVE' },
+        select: { id: true, role: true },
+      }),
+      db.workspaceRole.findMany({
+        where: { workspaceId },
+        select: { name: true, permissions: true },
+      }),
+    ]);
+    const definitions = new Map(
+      custom.map((r) => [
+        r.name,
+        Array.isArray(r.permissions) ? (r.permissions as string[]) : undefined,
+      ]),
+    );
+    return capabilitiesOrphaned({ members, definitions }, change);
   }
 
   async can(user: User, workspaceId: string, permission: PermissionKey): Promise<boolean> {

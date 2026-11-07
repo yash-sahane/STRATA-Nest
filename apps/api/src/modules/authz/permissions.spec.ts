@@ -28,7 +28,6 @@ describe('permissionsForRole', () => {
         Permission.NotificationRead,
         Permission.NotificationWrite,
         Permission.ActivityRead,
-        Permission.ActivityWrite,
         Permission.FileRead,
         Permission.IntegrationRead,
       ].sort(),
@@ -49,6 +48,22 @@ describe('permissionsForRole', () => {
       expect(permissionsForRole(role).has(Permission.FileWrite)).toBe(true);
     }
     expect(permissionsForRole('MANAGER').has(Permission.FileWrite)).toBe(true);
+  });
+
+  // A tester who found a defect had no way to file it.
+  it('the delivery roles file tasks, and do not delete them or sign them off', () => {
+    for (const role of ['SOFTWARE_DEVELOPER', 'TESTER', 'DEVELOPER_INTERN', 'CONTENT_ENGINEER']) {
+      const set = permissionsForRole(role);
+      expect(set.has(Permission.TaskCreate)).toBe(true);
+      expect(set.has(Permission.TaskWrite)).toBe(false);
+    }
+    expect(permissionsForRole('MEMBER').has(Permission.TaskCreate)).toBe(false);
+  });
+
+  it('a custom role holding task:write is given what it implies', () => {
+    const set = permissionsForRole('CUSTOM', ['task:write']);
+    expect(set.has(Permission.TaskUpdate)).toBe(true);
+    expect(set.has(Permission.TaskCreate)).toBe(true);
   });
 
   it('MANAGER can approve leave and time; ASSISTANT_MANAGER too', () => {

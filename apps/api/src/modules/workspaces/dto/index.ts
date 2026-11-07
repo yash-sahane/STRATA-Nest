@@ -1,8 +1,9 @@
+import { Type } from 'class-transformer';
 import {
   IsArray,
+  IsEmail,
   IsNotEmpty,
   IsDateString,
-  IsEmail,
   IsIn,
   IsInt,
   IsObject,
@@ -10,6 +11,7 @@ import {
   IsString,
   MaxLength,
   Min,
+  ValidateNested,
 } from 'class-validator';
 import { TrimmedText } from '@strata/common';
 
@@ -18,18 +20,24 @@ import { TrimmedText } from '@strata/common';
 const MEMBER_STATUSES = ['ACTIVE', 'INACTIVE', 'INVITED'] as const;
 
 // --- Workspace ---
+/** The person a workspace is created FOR: its owner and first manager. */
+export class WorkspaceManagerDto {
+  @TrimmedText() @IsString() @IsNotEmpty() @MaxLength(255) name!: string;
+  @IsEmail() email!: string;
+}
 export class CreateWorkspaceDto {
   @TrimmedText() @IsString() @IsNotEmpty() @MaxLength(255) name!: string;
   @IsOptional() @IsString() description?: string;
-  @IsOptional() @IsString() logo?: string;
-  @IsOptional() @IsString() color?: string;
   @IsOptional() @IsObject() settings?: Record<string, unknown>;
+  /** Somebody else runs it: they own it and manage it; the creator stays out. */
+  @IsOptional() @ValidateNested() @Type(() => WorkspaceManagerDto) manager?: WorkspaceManagerDto;
+}
+export class TransferOwnershipDto {
+  @IsString() @IsNotEmpty() userId!: string;
 }
 export class UpdateWorkspaceDto {
   @TrimmedText() @IsOptional() @IsString() @IsNotEmpty() @MaxLength(255) name?: string;
   @IsOptional() @IsString() description?: string;
-  @IsOptional() @IsString() logo?: string;
-  @IsOptional() @IsString() color?: string;
   @IsOptional() @IsObject() settings?: Record<string, unknown>;
 }
 
@@ -46,14 +54,17 @@ export class UpdateMemberDto {
 }
 
 // --- Role ---
+// The name is what a membership stores and what every picker prints, so it is
+// trimmed and may not be blank: ' Lead' and 'Lead' were two different roles, and
+// '' was a role nobody could select.
 export class CreateRoleDto {
   @IsString() workspaceId!: string;
-  @IsString() @MaxLength(64) name!: string;
-  @IsOptional() @IsArray() permissions?: string[];
+  @TrimmedText() @IsString() @IsNotEmpty() @MaxLength(64) name!: string;
+  @IsOptional() @IsArray() @IsString({ each: true }) permissions?: string[];
 }
 export class UpdateRoleDto {
-  @IsOptional() @IsString() @MaxLength(64) name?: string;
-  @IsOptional() @IsArray() permissions?: string[];
+  @TrimmedText() @IsOptional() @IsString() @IsNotEmpty() @MaxLength(64) name?: string;
+  @IsOptional() @IsArray() @IsString({ each: true }) permissions?: string[];
 }
 
 // --- Invite code ---
@@ -71,42 +82,24 @@ export class UpdateInviteCodeDto {
   @IsOptional() @IsDateString() expiresAt?: string;
 }
 
-// --- Email invitation ---
-/** No `token`/`status`: the service mints the token and forces PENDING, and
- *  status transitions belong to patch() and the accept workflow. */
-export class CreateEmailInvitationDto {
-  @IsString() workspaceId!: string;
-  @IsEmail() email!: string;
-  @IsOptional() @IsString() role?: string;
-  @IsDateString() expiresAt!: string;
-}
-export class UpdateEmailInvitationDto {
-  @IsOptional() @IsString() role?: string;
-  @IsOptional() @IsString() status?: string;
-  @IsOptional() @IsDateString() expiresAt?: string;
-}
-
 // --- Join request ---
 export class CreateJoinRequestDto {
   @IsString() workspaceId!: string;
-  @IsOptional() @IsString() message?: string;
+  // The request form stops at 500; the API did not, so anything talking to it
+  // directly could park a message of any size in every manager's queue.
+  @IsOptional() @IsString() @MaxLength(500) message?: string;
 }
 export class UpdateJoinRequestDto {
   @IsOptional() @IsString() status?: string;
   @IsOptional() @IsString() handledBy?: string;
 }
-
-// --- Pending access ---
-export class CreatePendingAccessDto {
-  @IsString() workspaceId!: string;
-  @IsOptional() @IsString() requestedRole?: string;
-}
-export class UpdatePendingAccessDto {
-  @IsOptional() @IsString() requestedRole?: string;
+/** POST join_requests/:id/approve — the role the requester joins at. */
+export class ApproveJoinRequestDto {
+  @IsOptional() @IsString() role?: string;
 }
 
 // --- Workflows (application services) ---
+/** POST workspaces/accept-invitation — redeem an invite code. */
 export class AcceptInvitationDto {
-  @IsOptional() @IsString() token?: string; // email invitation
-  @IsOptional() @IsString() code?: string; // invite code
+  @IsString() @IsNotEmpty() code!: string;
 }

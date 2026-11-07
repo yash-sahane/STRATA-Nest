@@ -35,11 +35,12 @@ export class EpicDeletionService {
 
     await this.prisma.$transaction(async (txc) => {
       const tx = txc as unknown as TxLike;
-      // collectUpdate for the tasks so open boards learn the epic link went
-      // away; the FR detach stays a plain updateMany — no client subscribes to
-      // functional_requirements.
+      // collectUpdate, so open boards and requirement pages learn the epic
+      // link went away.
       await collectUpdate(tx, 'task', 'tasks', { epicId }, { epicId: '' }, detached, workspaceId);
-      await txc.functionalRequirement.updateMany({ where: { epicId }, data: { epicId: '' } });
+      await collectUpdate(
+        tx, 'functionalRequirement', 'functional_requirements', { epicId }, { epicId: '' }, detached, workspaceId,
+      );
       await tx.epic.deleteMany({ where: { id: epicId } }); // deleteMany → single explicit frame
       deleted.push({ collection: 'epics', id: epicId, workspaceId });
     });

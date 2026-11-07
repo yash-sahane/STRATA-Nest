@@ -22,9 +22,15 @@ function emit(events: EventEmitter2, name: string, workspaceId: string, payload:
 }
 
 /**
- * Application service: accepting an email invitation or invite code
- * is a cross-aggregate workflow (invitation + membership) — one transaction, one
- * post-commit event, handled entirely server-side.
+ * Application service: redeeming an invite code is a cross-aggregate workflow
+ * (the code's seat count + the membership) — one transaction, one post-commit
+ * event, handled entirely server-side.
+ *
+ * There used to be a second kind of invitation here, addressed to one e-mail
+ * and redeemed by token. Nothing in the product ever issued one — no screen
+ * created them and nothing mailed the token — so the path existed only for a
+ * secret an admin would have had to read out of the API by hand. People are
+ * brought in by being added directly, by a code, or by asking to join.
  */
 @Injectable()
 export class InvitationAcceptanceService {
@@ -35,70 +41,12 @@ export class InvitationAcceptanceService {
   ) {}
 
   async accept(user: User, dto: AcceptInvitationDto): Promise<JoinResult> {
-    if (dto.token) return this.acceptEmail(user, dto.token);
     if (dto.code) return this.acceptCode(user, dto.code);
-    throw new BadRequestException('Provide an invitation token or an invite code');
+    throw new BadRequestException('Provide an invite code');
   }
 
   private async ensureNotMember(workspaceId: string, userId: string) {
     return this.prisma.workspaceMember.findFirst({ where: { workspaceId, userId } });
-  }
-
-  private async acceptEmail(user: User, token: string): Promise<JoinResult> {
-    const inv = await this.prisma.emailInvitation.findUnique({ where: { token } });
-    if (!inv || inv.status !== 'PENDING') throw new BadRequestException('Invalid or used invitation');
-    if (inv.expiresAt < new Date()) throw new BadRequestException('Invitation expired');
-    // The invitation is bound to the address it was issued for: a forwarded or
-    // scraped token must not let a different account join at the invited role.
-    if (inv.email.toLowerCase() !== user.email.toLowerCase()) {
-      throw new ForbiddenException('This invitation was issued for a different e-mail address');
-    }
-
-    const existing = await this.ensureNotMember(inv.workspaceId, user.id);
-    // Already a member: nothing to grant, and consuming the invitation would
-    // only burn it (the real invitee could never use it afterwards). A request
-    // to join can still be sitting in the queue, though, so settle it here too:
-    // this is the state the reconciliation exists for, reached by an earlier
-    // route.
-    if (existing) {
-      await closePendingJoinRequests(this.prisma, inv.workspaceId, user.id);
-      return {
-        success: true,
-        workspaceId: inv.workspaceId,
-        role: existing.role,
-        membershipId: existing.id,
-      };
-    }
-
-    // The invitation row is the only source of the role that gets written into
-    // the membership, and rows predating creation-time validation (or a role
-    // deleted since) would land a membership nobody can authorize — it silently
-    // falls to the read-only floor. Re-check at the moment of the grant.
-    await this.access.assertValidRole(inv.workspaceId, inv.role);
-
-    const membershipId = generateId();
-    await this.prisma.$transaction([
-      this.prisma.emailInvitation.update({ where: { id: inv.id }, data: { status: 'ACCEPTED' } }),
-      this.prisma.workspaceMember.create({
-        data: { id: membershipId, workspaceId: inv.workspaceId, userId: user.id, role: inv.role, status: 'ACTIVE' },
-      }),
-      // Same commit as the membership: the queue must never show a pending
-      // request for somebody this transaction has just let in.
-      closePendingJoinRequests(this.prisma, inv.workspaceId, user.id),
-    ]);
-
-    emit(this.events, WorkspaceEvents.InvitationAccepted, inv.workspaceId, {
-      workspaceId: inv.workspaceId,
-      userId: user.id,
-      invitationId: inv.id,
-    });
-    emit(this.events, WorkspaceEvents.MemberAdded, inv.workspaceId, {
-      workspaceId: inv.workspaceId,
-      userId: user.id,
-      role: inv.role,
-      via: 'invite',
-    });
-    return { success: true, workspaceId: inv.workspaceId, role: inv.role, membershipId };
   }
 
   private async acceptCode(user: User, code: string): Promise<JoinResult> {
@@ -126,10 +74,17 @@ export class InvitationAcceptanceService {
     // Already a member: the code grants nothing, so incrementing `usedCount`
     // only burns capacity the real invitees need — one member re-submitting a
     // code they already redeemed could exhaust `maxUses` for everyone else.
-    // Same reasoning as the e-mail path above, which leaves its invitation
-    // PENDING. The role reported back is the membership's actual role, not the
-    // code's, which may differ.
+    // The role reported back is the membership's actual role, not the code's,
+    // which may differ.
     if (existing) {
+      // Switched off is not "already in". This answered `success: true` for an
+      // INACTIVE or INVITED row as well, so the screen said "You now have
+      // access" to somebody who had none and left them guessing why.
+      if (existing.status !== 'ACTIVE') {
+        throw new ForbiddenException(
+          'Your access to this workspace is switched off. Ask one of its managers to switch it back on.',
+        );
+      }
       await closePendingJoinRequests(this.prisma, invite.workspaceId, user.id);
       return {
         success: true,
@@ -139,8 +94,10 @@ export class InvitationAcceptanceService {
       };
     }
 
-    // Same defence as the e-mail path: never write a role the workspace
-    // cannot resolve into a permission set.
+    // The code row is the only source of the role that gets written into the
+    // membership, and a role deleted or renamed since would land a membership
+    // nobody can authorize — it silently falls to the read-only floor. Re-check
+    // at the moment of the grant.
     await this.access.assertValidRole(invite.workspaceId, invite.role);
 
     const membershipId = generateId();
@@ -179,10 +136,14 @@ export class InvitationAcceptanceService {
       userId: user.id,
       role: invite.role,
       via: 'invite',
+      actorId: user.id,
     });
     return { success: true, workspaceId: invite.workspaceId, role: invite.role, membershipId };
   }
 }
+
+/** What the second of two people deciding one request is told. */
+const ALREADY_DECIDED = 'This join request has already been decided.';
 
 /**
  * Application service: approving/rejecting a join request spans the
@@ -200,57 +161,140 @@ export class JoinRequestApprovalService {
     const req = await this.prisma.joinRequest.findUnique({ where: { id: requestId } });
     if (!req) throw new NotFoundException('Not found.');
     await this.access.assertPermission(user, req.workspaceId, Permission.JoinManage);
-    if (req.status !== 'PENDING') throw new BadRequestException('Join request already handled');
+    if (req.status !== 'PENDING') throw new BadRequestException(ALREADY_DECIDED);
     return req;
   }
 
-  async approve(user: User, requestId: string): Promise<JoinResult> {
+  /**
+   * Record the decision — but only on a request that is STILL pending.
+   *
+   * `load()` read the status on an earlier statement, so two managers clicking
+   * at once both saw PENDING and both wrote: one approved and one declined left
+   * a REJECTED request beside an ACTIVE member, with both notices sent, and two
+   * approvals made the second fail on the membership's unique key with "A record
+   * with these values already exists". The conditional write is the gate (as in
+   * TimeApprovalService): the second statement waits on the row lock, re-reads a
+   * decided row, matches nothing, and its caller is told it was already decided.
+   */
+  private async claim(
+    db: Pick<Prisma.TransactionClient, 'joinRequest'>,
+    requestId: string,
+    status: 'APPROVED' | 'REJECTED',
+    user: User,
+  ): Promise<void> {
+    const claimed = await db.joinRequest.updateMany({
+      where: { id: requestId, status: 'PENDING' },
+      data: { status, handledById: user.id },
+    });
+    if (claimed.count === 0) throw new BadRequestException(ALREADY_DECIDED);
+  }
+
+  /** `updateMany` is invisible to the write hook — see PrismaService.announceWrite. */
+  private async announceDecided(requestId: string): Promise<void> {
+    const decided = await this.prisma.joinRequest.findUnique({ where: { id: requestId } });
+    if (decided) this.prisma.announceWrite?.('JoinRequest', 'update', decided);
+  }
+
+  /**
+   * Approve, at a role the approver chooses.
+   *
+   * Every approval used to land the requester as MEMBER — the read-only role —
+   * so letting a developer in took two steps on two screens, and until the
+   * second one they could open the workspace and change nothing. The role is the
+   * approver's call here, under the same rank rule as any other grant.
+   *
+   * A requester who already holds a membership that is NOT active (deactivated
+   * earlier) is switched back on: approving used to mark the request APPROVED
+   * and leave them locked out, which is the one thing "approved" must never
+   * mean. With no role named they come back as what they WERE — defaulting them
+   * to MEMBER quietly demoted a returning manager to read-only. An ACTIVE member
+   * is left exactly as they are — the request has simply been overtaken, and
+   * this clears it.
+   */
+  async approve(user: User, requestId: string, chosenRole?: string): Promise<JoinResult> {
     const req = await this.load(user, requestId);
     const existing = await this.prisma.workspaceMember.findFirst({
       where: { workspaceId: req.workspaceId, userId: req.userId },
     });
-    const membershipId = existing?.id ?? generateId();
-    const ops: Prisma.PrismaPromise<unknown>[] = [
-      this.prisma.joinRequest.update({
-        where: { id: requestId },
-        data: { status: 'APPROVED', handledById: user.id },
-      }),
-    ];
-    if (!existing) {
-      ops.push(
-        this.prisma.workspaceMember.create({
-          data: { id: membershipId, workspaceId: req.workspaceId, userId: req.userId, role: 'MEMBER', status: 'ACTIVE' },
-        }),
-      );
+    const role =
+      chosenRole ?? (existing && existing.status !== 'ACTIVE' ? existing.role : 'MEMBER');
+    await this.access.assertValidRole(req.workspaceId, role);
+    await this.access.assertCanGrantRole(user, req.workspaceId, role);
+    const grants = !existing || existing.status !== 'ACTIVE';
+    // Somebody whose access was switched off is not a stranger asking in: a
+    // manager made that decision, and undoing it is the decision the member
+    // screen guards — member:update, and not over somebody who outranks you.
+    // Without this an assistant manager could bring back a manager the owner
+    // had switched off, simply by approving the request that manager filed.
+    if (existing && existing.status !== 'ACTIVE') {
+      await this.access.assertPermission(user, req.workspaceId, Permission.MemberUpdate);
+      await this.access.assertNotOutranked(user, req.workspaceId, existing.role);
+      // Nor is this a way round the rule that the owner's role is a platform
+      // administrator's to change: bringing the owner back at another role is
+      // that change.
+      if (role !== existing.role && !this.access.isPlatformAdmin(user)) {
+        const workspace = await this.prisma.workspace.findUnique({
+          where: { id: req.workspaceId },
+          select: { ownerId: true },
+        });
+        if (workspace?.ownerId === req.userId) {
+          throw new ForbiddenException(
+            'The workspace owner’s role can only be changed by a platform administrator.',
+          );
+        }
+      }
     }
-    await this.prisma.$transaction(ops);
+    const membershipId = existing?.id ?? generateId();
+    // The claim comes FIRST in the transaction: a request somebody else has
+    // just decided rolls back before any membership is written.
+    await this.prisma.$transaction(async (tx) => {
+      await this.claim(tx, requestId, 'APPROVED', user);
+      if (!existing) {
+        await tx.workspaceMember.create({
+          data: { id: membershipId, workspaceId: req.workspaceId, userId: req.userId, role, status: 'ACTIVE' },
+        });
+      } else if (grants) {
+        await tx.workspaceMember.update({
+          where: { id: existing.id },
+          data: { role, status: 'ACTIVE' },
+        });
+      }
+    });
+    await this.announceDecided(requestId);
 
     emit(this.events, WorkspaceEvents.JoinRequestApproved, req.workspaceId, {
       workspaceId: req.workspaceId,
       userId: req.userId,
       requestId,
+      actorId: user.id,
     });
-    if (!existing) {
+    if (grants) {
       emit(this.events, WorkspaceEvents.MemberAdded, req.workspaceId, {
         workspaceId: req.workspaceId,
         userId: req.userId,
-        role: 'MEMBER',
+        role,
         via: 'join',
+        actorId: user.id,
       });
     }
-    return { success: true, workspaceId: req.workspaceId, userId: req.userId, membershipId };
+    return {
+      success: true,
+      workspaceId: req.workspaceId,
+      userId: req.userId,
+      role: existing && !grants ? existing.role : role,
+      membershipId,
+    };
   }
 
   async reject(user: User, requestId: string): Promise<{ success: true }> {
     const req = await this.load(user, requestId);
-    await this.prisma.joinRequest.update({
-      where: { id: requestId },
-      data: { status: 'REJECTED', handledById: user.id },
-    });
+    await this.claim(this.prisma, requestId, 'REJECTED', user);
+    await this.announceDecided(requestId);
     emit(this.events, WorkspaceEvents.JoinRequestRejected, req.workspaceId, {
       workspaceId: req.workspaceId,
       userId: req.userId,
       requestId,
+      actorId: user.id,
     });
     return { success: true };
   }

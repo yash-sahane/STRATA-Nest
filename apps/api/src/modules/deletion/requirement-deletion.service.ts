@@ -1,5 +1,5 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { PrismaService } from '@strata/prisma';
+import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { PrismaService, refreshDeliveryRollups } from '@strata/prisma';
 import { writeAuditRow } from '../activity/audit-writer';
 import type { Prisma, User } from '@prisma/client';
 import { Permission } from '../authz/permissions';
@@ -8,12 +8,28 @@ import { DeletionSideEffectsService, type DeletedEntity } from './deletion-side-
 import { collectDelete, collectUpdate, type TxLike } from './deletion.util';
 import { assertDeletable } from './assert-deletable';
 
+/** The roll-up after a delete is bookkeeping: a failure is logged, never the delete's. */
+const rollupLog = new Logger('RequirementRollups');
+
 interface FrNode {
   id: string;
   workspaceId: string;
   projectId: string;
   hierarchyId: string;
+  /** Carried through the walk so every parent the cascade changes is refreshed. */
+  epicId: string;
+  clientRequirementId: string;
 }
+
+/** What the walk reads for each requirement it finds. */
+const NODE_SELECT = {
+  id: true,
+  workspaceId: true,
+  projectId: true,
+  hierarchyId: true,
+  epicId: true,
+  clientRequirementId: true,
+} as const;
 
 /** Budget for the descendant walk: a delete must never turn into an unbounded
  *  traversal held open across a request. Both surface as a 409, so the caller
@@ -63,7 +79,7 @@ export class RequirementDeletionService {
     // against — a stray cross-workspace link must never widen the blast radius.
     const roots = await this.prisma.functionalRequirement.findMany({
       where: { clientRequirementId: id, workspaceId },
-      select: { id: true, workspaceId: true, projectId: true, hierarchyId: true },
+      select: NODE_SELECT,
       take: MAX_DESCENDANTS + 1, // bounded like the descendant walk below
     });
     if (roots.length > MAX_DESCENDANTS) {
@@ -76,7 +92,8 @@ export class RequirementDeletionService {
         `Cannot delete this client requirement: ${roots.length} linked functional requirement(s) exist (${blockerList(roots)}). Delete them first or retry with cascade=true.`,
       );
     }
-    const frIds = [...roots, ...(await this.collectDescendants(roots))].map((n) => n.id);
+    const removing = [...roots, ...(await this.collectDescendants(roots))];
+    const frIds = removing.map((n) => n.id);
     const deleted: DeletedEntity[] = [];
     const detached: DeletedEntity[] = [];
 
@@ -96,13 +113,22 @@ export class RequirementDeletionService {
           tx, 'functionalRequirement', 'functional_requirements', { id: { in: frIds } }, deleted, workspaceId,
         );
       }
-      await txc.epic.updateMany({ where: { requirementId: id, workspaceId }, data: { requirementId: '' } });
+      await collectUpdate(
+        tx, 'epic', 'epics', { requirementId: id, workspaceId }, { requirementId: '' }, detached, workspaceId,
+      );
+      // The client's documents stay with the project.
+      await collectUpdate(
+        tx, 'uploadedFile', 'files', { clientRequirementId: id, workspaceId }, { clientRequirementId: '' },
+        detached, workspaceId,
+      );
       await tx.clientRequirement.deleteMany({ where: { id } }); // deleteMany → single explicit frame
       deleted.push({ collection: 'client_requirements', id, workspaceId });
     });
 
     this.sideEffects.emitUpdates(detached);
     this.sideEffects.emitDeletes(deleted);
+    // The client requirement itself is gone; what it held still counted elsewhere.
+    await this.refreshParentsOf(removing, id);
     // See EpicDeletionService: aggregate deletes bypass the CRUD base, and only
     // the root is recorded so a cascade cannot bury it.
     await writeAuditRow(this.prisma, {
@@ -150,6 +176,7 @@ export class RequirementDeletionService {
 
     this.sideEffects.emitUpdates(detached);
     this.sideEffects.emitDeletes(deleted);
+    await this.refreshParentsOf([fr, ...descendants]);
     // See EpicDeletionService: aggregate deletes bypass the CRUD base, and only
     // the root is recorded so a cascade cannot bury it.
     await writeAuditRow(this.prisma, {
@@ -161,6 +188,35 @@ export class RequirementDeletionService {
       row: fr as unknown as Record<string, unknown>,
       extraMetadata: { cascadeRows: deleted.length },
     });
+  }
+
+  /**
+   * Every parent the deleted requirements leave behind: each one's epic loses
+   * the work it counted for it, and each one's client requirement one of the
+   * requirements it was waiting on. Each requirement's, not only the root's: a
+   * descendant can sit under another epic or client requirement than the one
+   * it hangs from, and a client requirement's cascade used to refresh nothing,
+   * leaving its epics counting work that no longer existed.
+   *
+   * `gone` is a client requirement deleted in the same cascade — nothing to
+   * refresh there. Bookkeeping after the commit: a failure is logged, never the
+   * delete's.
+   */
+  private async refreshParentsOf(
+    removed: ReadonlyArray<Pick<FrNode, 'epicId' | 'clientRequirementId'>>,
+    gone?: string,
+  ): Promise<void> {
+    const epicIds = removed.map((node) => node.epicId).filter(Boolean);
+    const clientRequirementIds = removed
+      .map((node) => node.clientRequirementId)
+      .filter((clientId) => clientId && clientId !== gone);
+    if (epicIds.length === 0 && clientRequirementIds.length === 0) return;
+    await refreshDeliveryRollups(
+      this.prisma,
+      { epicIds, clientRequirementIds },
+      (error, kind, id) =>
+        rollupLog.warn(`roll-up of ${kind} ${id} failed: ${(error as Error).message}`),
+    );
   }
 
   /**
@@ -205,7 +261,7 @@ export class RequirementDeletionService {
         ];
         const children = await this.prisma.functionalRequirement.findMany({
           where: { workspaceId: bucket[0].workspaceId, projectId: bucket[0].projectId, OR: or },
-          select: { id: true, workspaceId: true, projectId: true, hierarchyId: true },
+          select: NODE_SELECT,
           take: MAX_DESCENDANTS + 1,
         });
         for (const child of children) {

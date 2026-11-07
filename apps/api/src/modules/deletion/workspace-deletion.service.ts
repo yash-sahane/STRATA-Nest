@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '@strata/prisma';
 import type { User } from '@prisma/client';
 import { Permission } from '../authz/permissions';
@@ -9,26 +9,23 @@ import { assertDeletable } from './assert-deletable';
 
 /** Workspace-scoped children deleted child-first (respecting NO ACTION FKs), with realtime slugs. */
 const WS_SCOPED: Array<{ model: string; collection: string }> = [
+  // A timer running on one of its tasks: the task is going.
+  { model: 'activeTimer', collection: 'active_timers' },
   { model: 'task', collection: 'tasks' },
-  { model: 'retrospective', collection: 'retrospectives' },
   { model: 'sprint', collection: 'sprints' },
   { model: 'epic', collection: 'epics' },
-  { model: 'label', collection: 'labels' },
   { model: 'functionalRequirement', collection: 'functional_requirements' },
   { model: 'clientRequirement', collection: 'client_requirements' },
   { model: 'notification', collection: 'notifications' },
-  { model: 'savedSearch', collection: 'saved_searches' },
+  { model: 'notificationPreference', collection: 'notification_preferences' },
   { model: 'holiday', collection: 'holidays' },
   { model: 'workspaceMember', collection: 'workspace_members' },
   { model: 'workspaceRole', collection: 'workspace_roles' },
   { model: 'inviteCode', collection: 'invite_codes' },
-  { model: 'emailInvitation', collection: 'email_invitations' },
   { model: 'joinRequest', collection: 'join_requests' },
-  { model: 'pendingWorkspaceAccess', collection: 'pending_workspace_access' },
 ];
 /** Project-only children (no workspace_id column) — deleted by projectId. */
 const PROJECT_SCOPED: Array<{ model: string; collection: string }> = [
-  { model: 'kanbanColumn', collection: 'kanban_columns' },
   { model: 'gitCommit', collection: 'git_commits' },
   { model: 'gitHubIntegration', collection: 'github_integrations' },
   { model: 'gitLabIntegration', collection: 'gitlab_integrations' },
@@ -70,6 +67,13 @@ export class WorkspaceDeletionService {
     // not) answered "does this id exist?" for somebody with no membership at
     // all. A stranger now gets 404; a member without the right still gets 403.
     await assertDeletable(this.access, user, workspaceId, Permission.WorkspaceDelete);
+    // The owner cannot be demoted, removed or made to leave by anybody but a
+    // platform administrator — yet any manager could delete the owner's whole
+    // workspace, everybody's work in it included. The bigger act takes the
+    // same say as the smaller ones.
+    if (ws.ownerId !== user.id && !this.access.isPlatformAdmin(user)) {
+      throw new ForbiddenException('Only the owner of this workspace can delete it.');
+    }
 
     // --- Zone 0: gather context needed by Zone 2 (before rows are gone) ---
     const projects = await this.prisma.project.findMany({ where: { workspaceId }, select: { id: true } });
@@ -118,7 +122,13 @@ export class WorkspaceDeletionService {
         await this.collectDelete(T, 'uploadedFile', 'files', { workspaceId }, deleted, workspaceId);
         // 6. Projects
         await this.collectDelete(T, 'project', 'projects', { workspaceId }, deleted, workspaceId);
-        // 7. The workspace itself. deleteMany (not delete) so the write-hook does
+        // 7. Nobody's default workspace is one that no longer exists: they
+        //    land on another of theirs, or on the start screen.
+        await tx.user.updateMany({
+          where: { workspaceId },
+          data: { workspaceId: '' },
+        });
+        // 8. The workspace itself. deleteMany (not delete) so the write-hook does
         //    NOT also fire — exactly one frame is emitted explicitly instead.
         await T.workspace.deleteMany({ where: { id: workspaceId } });
         deleted.push({ collection: 'workspaces', id: workspaceId, workspaceId });

@@ -10,13 +10,12 @@ import type { User } from '@prisma/client';
 export interface UserResponse {
   id: string;
   email: string;
-  userEmail: string;
   name: string;
   phone: string;
   avatar: string;
   role: string;
+  /** The workspace the user lands in. */
   workspaceId: string;
-  defaultWorkspaceId: string;
   workspaceIds: string[];
   status: string;
   hasTempPassword: boolean;
@@ -47,6 +46,32 @@ export class UserMapper {
     return users.map((u) => this.build(u, byUser.get(u.id) ?? []));
   }
 
+  /**
+   * A colleague, as somebody who shares a workspace with them may see them.
+   *
+   * The directory handed every member the full account record of everybody
+   * they shared one workspace with: every OTHER workspace that person belongs
+   * to, which one they open by default, whether they are a platform
+   * administrator, and whether they have yet to replace a temporary password.
+   * None of it is the reader's business, and the last two tell an attacker
+   * which accounts are worth the effort and which can still be walked into
+   * with a password that was sent by mail.
+   *
+   * What a colleague is to a colleague is a name, a way to reach them, and the
+   * workspaces the two of them are both in.
+   */
+  asSeenBy(viewerWorkspaceIds: ReadonlySet<string>, response: UserResponse): UserResponse {
+    const shared = response.workspaceIds.filter((id) => viewerWorkspaceIds.has(id));
+    const home = viewerWorkspaceIds.has(response.workspaceId) ? response.workspaceId : '';
+    return {
+      ...response,
+      workspaceId: home,
+      workspaceIds: shared,
+      hasTempPassword: false,
+      isAdmin: false,
+    };
+  }
+
   /** workspaceIds for the User serializer — filters status=ACTIVE. */
   async activeWorkspaceIds(userId: string): Promise<string[]> {
     const rows = await this.prisma.workspaceMember.findMany({
@@ -60,13 +85,11 @@ export class UserMapper {
     return {
       id: String(user.id),
       email: user.email,
-      userEmail: user.email,
       name: user.name,
       phone: user.phone,
       avatar: user.avatar,
       role: user.role,
       workspaceId: user.workspaceId,
-      defaultWorkspaceId: user.workspaceId,
       workspaceIds,
       status: user.status,
       hasTempPassword: user.hasTempPassword,

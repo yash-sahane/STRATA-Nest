@@ -88,6 +88,30 @@ describe('TaskDeletionService', () => {
       { collection: 'tasks', id: 'sub1', workspaceId: 'w1' },
     ]);
   });
+
+  it("hands the task's attachments back to the project instead of deleting them", async () => {
+    const fileUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const fileDeleteMany = jest.fn();
+    const tx = txMock({
+      uploadedFile: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'f1' }]),
+        updateMany: fileUpdateMany,
+        deleteMany: fileDeleteMany,
+      },
+    });
+    const prisma = {
+      task: { findUnique: jest.fn().mockResolvedValue({ id: 't1', workspaceId: 'w1' }) },
+      $transaction: (cb: (t: unknown) => unknown) => cb(tx),
+    } as unknown as PrismaService;
+    const se = sideEffects();
+    await new TaskDeletionService(prisma, access(), se).delete(user, 't1');
+
+    expect(fileUpdateMany).toHaveBeenCalledWith({ where: { taskId: 't1', workspaceId: 'w1' }, data: { taskId: '' } });
+    expect(fileDeleteMany).not.toHaveBeenCalled();
+    expect((se as unknown as { emitUpdates: jest.Mock }).emitUpdates).toHaveBeenCalledWith([
+      { collection: 'files', id: 'f1', workspaceId: 'w1' },
+    ]);
+  });
 });
 
 describe('SprintDeletionService', () => {
@@ -97,7 +121,10 @@ describe('SprintDeletionService', () => {
     const sprintDeleteMany = jest.fn().mockResolvedValue({ count: 1 });
     const tx = txMock({
       task: { findMany: jest.fn().mockResolvedValue([{ id: 't1' }, { id: 't2' }]), updateMany: taskUpdateMany },
-      functionalRequirement: { updateMany: frUpdateMany },
+      functionalRequirement: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'f1' }]),
+        updateMany: frUpdateMany,
+      },
       sprint: { deleteMany: sprintDeleteMany },
     });
     const prisma = {
@@ -114,11 +141,38 @@ describe('SprintDeletionService', () => {
     expect(frUpdateMany).toHaveBeenCalledWith({ where: { sprintId: 's1' }, data: { sprintId: '' } });
     expect(sprintDeleteMany).toHaveBeenCalledWith({ where: { id: 's1' } });
     // Tasks moved back to the backlog need a realtime frame each — a bare
-    // updateMany bypasses the write hook, so other boards stayed stale.
+    // updateMany bypasses the write hook, so other boards stayed stale — and so
+    // do the requirements: the planning and requirement pages show their sprint.
     expect((se as unknown as { emitUpdates: jest.Mock }).emitUpdates).toHaveBeenCalledWith([
       { collection: 'tasks', id: 't1', workspaceId: 'w1' },
       { collection: 'tasks', id: 't2', workspaceId: 'w1' },
+      { collection: 'functional_requirements', id: 'f1', workspaceId: 'w1' },
     ]);
+  });
+});
+
+describe('SprintDeletionService — a completed sprint is history', () => {
+  function completed(finished: number) {
+    const sprintDeleteMany = jest.fn().mockResolvedValue({ count: 1 });
+    const tx = txMock({ sprint: { deleteMany: sprintDeleteMany } });
+    const prisma = {
+      sprint: { findUnique: jest.fn().mockResolvedValue({ id: 's1', workspaceId: 'w1', status: 'COMPLETED' }) },
+      task: { count: jest.fn().mockResolvedValue(finished) },
+      $transaction: (cb: (t: unknown) => unknown) => cb(tx),
+    } as unknown as PrismaService;
+    return { svc: new SprintDeletionService(prisma, access(), sideEffects()), sprintDeleteMany };
+  }
+
+  it('keeps one that holds the work it finished', async () => {
+    const { svc, sprintDeleteMany } = completed(3);
+    await expect(svc.delete(user, 's1')).rejects.toThrow(/part of the project's history/);
+    expect(sprintDeleteMany).not.toHaveBeenCalled();
+  });
+
+  it('lets an empty one go', async () => {
+    const { svc, sprintDeleteMany } = completed(0);
+    await svc.delete(user, 's1');
+    expect(sprintDeleteMany).toHaveBeenCalledWith({ where: { id: 's1' } });
   });
 });
 
@@ -145,6 +199,26 @@ describe('RequirementDeletionService', () => {
     await expect(svc.deleteFunctionalRequirement(user, 'fr1', false)).rejects.toThrow(
       /1 child requirement\(s\) depend on it \(P-A-B-C-01\.01\)/,
     );
+  });
+
+  it("hands a client requirement's documents back to the project", async () => {
+    const fileUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const tx = txMock({
+      uploadedFile: { findMany: jest.fn().mockResolvedValue([{ id: 'f1' }]), updateMany: fileUpdateMany },
+    });
+    const prisma = {
+      clientRequirement: { findUnique: jest.fn().mockResolvedValue({ id: 'cr1', workspaceId: 'w1' }) },
+      functionalRequirement: { findMany: jest.fn().mockResolvedValue([]) },
+      $transaction: (cb: (t: unknown) => unknown) => cb(tx),
+    } as unknown as PrismaService;
+    const svc = new RequirementDeletionService(prisma, access(), sideEffects());
+
+    await svc.deleteClientRequirement(user, 'cr1', false);
+
+    expect(fileUpdateMany).toHaveBeenCalledWith({
+      where: { clientRequirementId: 'cr1', workspaceId: 'w1' },
+      data: { clientRequirementId: '' },
+    });
   });
 
   it('scopes the descendant walk to the workspace the permission was checked against', async () => {
