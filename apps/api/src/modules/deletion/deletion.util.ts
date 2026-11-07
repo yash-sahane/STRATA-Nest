@@ -57,3 +57,62 @@ export async function collectUpdate(
   for (const r of rows) touched.push({ collection, id: String(r.id), workspaceId });
   return rows.map((r) => String(r.id));
 }
+
+const idList = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
+
+/**
+ * Take tasks that are about to go off every link a SURVIVING task holds to
+ * them: its "blocked by" and "blocks" lists, and a sub-task's parent.
+ *
+ * Deleting one task does this (TaskDeletionService). Deleting a project took
+ * every task in it with a bare `deleteMany`, so a task in another project of
+ * the workspace that depended on one of them kept the id: a "blocked by" the
+ * task dialog could not show, that the card still counted, and that nobody
+ * could remove — taking an edge off looks the far end up first, and answered
+ * 404. `survivors` narrows the tasks to look at (those outside what is being
+ * deleted). One `updateMany` per task for the reason collectUpdate gives:
+ * nothing in a cascade may reach the realtime hook before the commit.
+ */
+export async function detachTaskLinks(
+  tx: TxLike,
+  workspaceId: string,
+  removedIds: readonly string[],
+  survivors: Record<string, unknown>,
+  touched: DeletedEntity[],
+): Promise<void> {
+  if (!removedIds.length) return;
+  const removed = new Set(removedIds);
+  const linked = (await tx.task.findMany({
+    where: {
+      workspaceId,
+      ...survivors,
+      OR: [{ NOT: { blockedBy: { equals: [] } } }, { NOT: { blocks: { equals: [] } } }],
+    },
+    select: { id: true, blockedBy: true, blocks: true },
+  })) as Array<{ id: string; blockedBy?: unknown; blocks?: unknown }>;
+  for (const row of linked) {
+    const blockedBy = idList(row.blockedBy);
+    const blocks = idList(row.blocks);
+    if (!blockedBy.some((id) => removed.has(id)) && !blocks.some((id) => removed.has(id))) continue;
+    await tx.task.updateMany({
+      where: { id: row.id },
+      data: {
+        blockedBy: blockedBy.filter((id) => !removed.has(id)),
+        blocks: blocks.filter((id) => !removed.has(id)),
+        version: { increment: 1 },
+      },
+    });
+    touched.push({ collection: 'tasks', id: row.id, workspaceId });
+  }
+  // A sub-task whose parent goes becomes a task of its own, as when one task is deleted.
+  await collectUpdate(
+    tx,
+    'task',
+    'tasks',
+    { workspaceId, ...survivors, parentTaskId: { in: [...removed] } },
+    { parentTaskId: '' },
+    touched,
+    workspaceId,
+  );
+}

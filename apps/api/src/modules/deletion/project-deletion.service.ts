@@ -5,7 +5,7 @@ import type { User } from '@prisma/client';
 import { Permission } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { DeletionSideEffectsService, type DeletedEntity, type FileRef } from './deletion-side-effects.service';
-import { collectDelete, type TxLike } from './deletion.util';
+import { collectDelete, detachTaskLinks, type TxLike } from './deletion.util';
 import { assertDeletable } from './assert-deletable';
 
 /** Project-owned children, child-first (all keyed by projectId; comments by taskId). */
@@ -54,12 +54,16 @@ export class ProjectDeletionService {
     });
     const integrations = await this.gatherIntegrations(projectId);
     const deleted: DeletedEntity[] = [];
+    const detached: DeletedEntity[] = [];
 
     await this.prisma.$transaction(
       async (txc) => {
         const tx = txc as unknown as TxLike;
         const taskIds = (await tx.task.findMany({ where: { projectId }, select: { id: true } })).map((t) => t.id);
         if (taskIds.length) {
+          // Tasks of OTHER projects that depended on these, or hung under one,
+          // let go of them before they go.
+          await detachTaskLinks(tx, workspaceId, taskIds, { projectId: { not: projectId } }, detached);
           await collectDelete(tx, 'taskComment', 'task_comments', { taskId: { in: taskIds } }, deleted, workspaceId);
         }
         for (const { model, collection } of PROJECT_CHILDREN) {
@@ -75,6 +79,7 @@ export class ProjectDeletionService {
 
     await this.sideEffects.deleteBlobs(fileRows as FileRef[]);
     this.sideEffects.revokeWebhooks(integrations);
+    this.sideEffects.emitUpdates(detached);
     this.sideEffects.emitDeletes(deleted);
     // Aggregate deletes never touch ScopedCrudService.remove, so the trail is
     // appended here. Only the ROOT is recorded — a cascade can remove hundreds of
