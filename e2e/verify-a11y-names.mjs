@@ -10,7 +10,7 @@
 // inputs, alt text on images, and unique ids (a duplicate id silently breaks the
 // label/control pairing).
 import { readFileSync } from 'node:fs';
-import { chromium, api, provision, addRole, signedInPage, visit, whoami } from './kit.mjs';
+import { createSprint, chromium, api, provision, addRole, signedInPage, visit, whoami } from './kit.mjs';
 import { createRequire } from 'node:module';
 
 const AXE = readFileSync(
@@ -32,7 +32,7 @@ const mgrId = await whoami(mgr);
 // Enough content that lists, cards and dialogs actually render something.
 const today = new Date().toISOString().slice(0, 10);
 const plus = (d) => { const x = new Date(); x.setUTCDate(x.getUTCDate() + d); return x.toISOString().slice(0, 10); };
-await api(mgr, 'POST', '/sprints', {
+await createSprint(mgr, {
   workspaceId: p.ws, projectId: p.project, name: 'A11y Sprint',
   goal: 'g', startDate: today, endDate: plus(10), status: 'ACTIVE',
 });

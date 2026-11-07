@@ -115,6 +115,24 @@ export async function provision(label) {
   };
 }
 
+/**
+ * Create a sprint — and start it, when the body asks for `status: 'ACTIVE'`.
+ *
+ * Since 2026-11-06 the API creates sprints in PLANNING only: one created straight
+ * into ACTIVE skipped everything starting a sprint does (its Backlog tasks moving
+ * to To Do, the one-running-sprint-per-project rule, the start notices). So an
+ * active sprint is created and then started, the way the app does it. Answers like
+ * api() — `{ s, j, t }` — reported as the create it stands in for: the create's
+ * status with the started sprint, or the start's own refusal.
+ */
+export async function createSprint(jar, body) {
+  const { status, ...fields } = body;
+  const created = await api(jar, 'POST', '/sprints', fields);
+  if (status !== 'ACTIVE' || created.s >= 400 || !created.j?.id) return created;
+  const started = await api(jar, 'PATCH', `/sprints/${created.j.id}`, { status: 'ACTIVE' });
+  return started.s >= 400 ? started : { ...started, s: created.s };
+}
+
 /** Add one of the seeded role accounts to a workspace at the given role. */
 export async function addRole(ws, role, email) {
   const admin = await adminJar();

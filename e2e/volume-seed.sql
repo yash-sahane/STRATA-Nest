@@ -14,9 +14,9 @@ INSERT INTO tasks_task (
   workspace_id, project_id, hierarchy_id,
   sprint_id, epic_id, functional_requirement_id, parent_task_id,
   title, description, status, priority, completed_at,
-  assignee_ids, assigned_by, assigned_by_name, assigned_to, assigned_to_names, watcher_ids,
+  assignee_ids, assignee_names, assigned_by, assigned_by_name,
   created_by_id, created_by_name, due_date,
-  estimated_hours, actual_hours, labels, attachments, custom_fields,
+  estimated_hours, labels,
   position, blocked_by, blocks
 )
 SELECT
@@ -37,12 +37,11 @@ SELECT
   -- A third to the manager, a third to the developer, a third unassigned, so the
   -- workload column has a real distribution to divide rather than one heap.
   CASE WHEN i % 3 = 0 THEN jsonb_build_array(:'user') ELSE '[]'::jsonb END,
+  CASE WHEN i % 3 = 0 THEN jsonb_build_array('Role MANAGER') ELSE '[]'::jsonb END,
   '', '',
-  CASE WHEN i % 3 = 0 THEN jsonb_build_array(:'user') ELSE '[]'::jsonb END,
-  '[]'::jsonb, '[]'::jsonb,
   :'user', 'Role MANAGER',
   now() + ((i % 60) || ' days')::interval,
-  NULL, NULL, '[]'::jsonb, '[]'::jsonb, '{}'::jsonb,
+  NULL, '[]'::jsonb,
   i, '[]'::jsonb, '[]'::jsonb
 FROM generate_series(0, :count - 1) AS i
 ON CONFLICT (id) DO NOTHING;

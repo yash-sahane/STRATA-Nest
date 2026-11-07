@@ -6,7 +6,7 @@
 //  The Team tab built both filter dropdowns from ROLE_CONFIG / STATUS_CONFIG while
 //  the table renders an unknown role through a fallback — so a member holding a
 //  custom workspace role appeared on the roster with no way to filter by their role.
-import { chromium, api, adminJar, provision, addRole, signedInPage, visit, whoami } from './kit.mjs';
+import { createSprint, chromium, api, adminJar, provision, addRole, signedInPage, visit, whoami } from './kit.mjs';
 
 const out = [];
 const rec = (ok, n, d = '') => { out.push([ok, n]); console.log(`${ok ? 'PASS' : 'FAIL'}  ${n}${ok ? '' : '\n        -> ' + String(d).slice(0, 350)}`); };
@@ -22,7 +22,7 @@ console.log('===== one task and one sprint due today');
 const today = new Date().toISOString().slice(0, 10);
 const plus = (d) => { const x = new Date(); x.setUTCDate(x.getUTCDate() + d); return x.toISOString().slice(0, 10); };
 
-await api(mgr, 'POST', '/sprints', {
+await createSprint(mgr, {
   workspaceId: p.ws, projectId: p.project, name: 'Single Sprint',
   goal: 'one of each', startDate: today, endDate: plus(1), status: 'ACTIVE',
 });

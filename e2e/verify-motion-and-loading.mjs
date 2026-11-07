@@ -37,6 +37,12 @@ const mk = async (title, hier) => {
 };
 const slowId = await mk('Slow to load requirement', 'MO-SLOW');
 const failId = await mk('Fails to load requirement', 'MO-FAIL');
+// A task, so the board has a card to lift: hover-lift is on what a click opens, and
+// a workspace with nothing in it has nothing that lifts.
+const card = await api(mgr, 'POST', '/tasks', {
+  workspaceId: p.ws, projectId: p.project, title: 'Motion card', status: 'TODO', priority: 'LOW',
+});
+if (card.s !== 201) rec(false, 'seeded a task card', `${card.s} ${card.t.slice(0, 200)}`);
 
 const { ctx, page } = await signedInPage(browser, 'role.manager@strata.local', p.ws);
 
@@ -277,9 +283,16 @@ console.log('\n===== the motion scale is live, not declared-and-ignored');
     }));
 
   // micro, via the hover-lift utility that replaced 15 copies of `duration-200`.
+  // It lifts only what a click opens — task, sprint and epic cards — so it is
+  // looked for there; the dashboard's stat cards are static and do not lift.
   const lift = page.locator('.hover-lift').first();
-  const haveLift = await until(async () => (await lift.count()) > 0, 12000);
-  rec(Boolean(haveLift), 'the hover-lift utility is in use on the dashboard',
+  let haveLift = false;
+  for (const route of [`/tasks?projectId=${p.project}&scope=all`, '/sprints', '/epics']) {
+    await visit(page, route, 5000);
+    haveLift = await until(async () => (await lift.count()) > 0, 8000);
+    if (haveLift) break;
+  }
+  rec(Boolean(haveLift), 'the hover-lift utility is in use on the cards that open something',
     `count=${await page.locator('.hover-lift').count()}`);
 
   if (haveLift) {

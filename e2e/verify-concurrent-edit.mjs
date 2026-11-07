@@ -185,6 +185,19 @@ console.log('\n===== part two: the SAME field. Both of us retitle it.');
       'and what to do about it',
       'no instruction shown alongside the refusal',
     );
+
+    // And there is a way through. The baseline used to stay the snapshot the
+    // dialog opened with, so every further Save was refused the same way, and
+    // the only way to keep what was typed was to retype it after a reload.
+    rec(/save again to replace theirs/i.test(text), 'including saving again, knowingly',
+      'the refusal offers no way to keep what was typed');
+    if (stillOpen > 0) {
+      await save.click();
+      await page.waitForTimeout(4000);
+      const retried = await readTask();
+      rec(retried?.title === TYPED, 'which then saves what A typed over the change A was told about',
+        `title is ${JSON.stringify(retried?.title)}`);
+    }
   }
 }
 

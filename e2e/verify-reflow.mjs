@@ -13,7 +13,7 @@
 //   2. is anything painted outside the viewport's right edge
 //   3. do any two interactive controls OVERLAP, which is how a cramped layout actually
 //      breaks — a button sitting on top of another is reachable by neither mouse nor eye
-import { chromium, api, provision, addRole, signedInPage, visit, whoami } from './kit.mjs';
+import { createSprint, chromium, api, provision, addRole, signedInPage, visit, whoami } from './kit.mjs';
 
 const out = [];
 const rec = (ok, n, d = '') => { out.push([ok, n]); console.log(`${ok ? 'PASS' : 'FAIL'}  ${n}${ok ? '' : '\n        -> ' + String(d).slice(0, 400)}`); };
@@ -25,7 +25,7 @@ const mgrId = await whoami(mgr);
 
 const today = new Date().toISOString().slice(0, 10);
 const plus = (d) => { const x = new Date(); x.setUTCDate(x.getUTCDate() + d); return x.toISOString().slice(0, 10); };
-await api(mgr, 'POST', '/sprints', {
+await createSprint(mgr, {
   workspaceId: p.ws, projectId: p.project, name: 'Reflow Sprint', goal: 'g',
   startDate: today, endDate: plus(10), status: 'ACTIVE',
 });
@@ -108,12 +108,26 @@ for (const vp of CASES) {
         })
         .map((el) => ({ el, b: el.getBoundingClientRect() }));
       const overlaps = [];
+      // A field's own adornment — a clear or shortcut button drawn INSIDE the padding
+      // the field keeps free for it — is not an overlap: no text can run under it. It
+      // has to lie wholly within the field, and wholly within that padding; anything
+      // else sitting on a field still counts.
+      const adornment = (field, other) => {
+        if (!/^(INPUT|TEXTAREA)$/.test(field.el.tagName)) return false;
+        const cs = getComputedStyle(field.el);
+        const contentLeft = field.b.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft);
+        const contentRight = field.b.right - parseFloat(cs.borderRightWidth) - parseFloat(cs.paddingRight);
+        const within = other.b.left >= field.b.left - 1 && other.b.right <= field.b.right + 1
+          && other.b.top >= field.b.top - 1 && other.b.bottom <= field.b.bottom + 1;
+        return within && (other.b.left >= contentRight - 1 || other.b.right <= contentLeft + 1);
+      };
       for (let i = 0; i < controls.length; i += 1) {
         for (let j = i + 1; j < controls.length; j += 1) {
           const a = controls[i];
           const c = controls[j];
           // Nesting is not overlap (a button inside a link).
           if (a.el.contains(c.el) || c.el.contains(a.el)) continue;
+          if (adornment(a, c) || adornment(c, a)) continue;
           const ox = Math.min(a.b.right, c.b.right) - Math.max(a.b.left, c.b.left);
           const oy = Math.min(a.b.bottom, c.b.bottom) - Math.max(a.b.top, c.b.top);
           // Require a real overlap, not a 1px rounding kiss.

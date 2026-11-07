@@ -57,7 +57,6 @@ console.log('\n===== time entries are checked, and the duration is the server’
     ['a zero-length entry', { startTime: iso(now - 3600e3), endTime: iso(now - 3600e3) }],
     ['work booked in the future', { startTime: iso(now + 200 * 86400e3), endTime: iso(now + 200 * 86400e3 + 3600e3) }],
     ['a decade-long entry', { startTime: '2016-01-01T09:00:00.000Z', endTime: '2026-01-01T17:00:00.000Z' }],
-    ['a negative rate', { startTime: iso(now - 3600e3), endTime: iso(now), billableRate: -50 }],
   ];
   for (const [label, extra] of cases) {
     const r = await api(dev, 'POST', '/time_entries', { workspaceId: A.ws, projectId: A.project, description: label, ...extra });

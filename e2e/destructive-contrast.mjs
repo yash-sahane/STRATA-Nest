@@ -23,7 +23,7 @@ for (const theme of ['dark', 'light']) {
   await page.waitForTimeout(2500);
 
   // open Create Project and submit empty to force the validation messages
-  await page.getByRole('button', { name: /create project/i }).first().click();
+  await page.getByRole('button', { name: /new project/i }).first().click();
   await page.waitForTimeout(1500);
   const dlg = page.locator('[role="dialog"]').first();
   await dlg.getByRole('button', { name: /create project/i }).last().click();

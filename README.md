@@ -55,6 +55,19 @@ Run one or the other, not both at once: they bind the same ports.
 | `admin@strata.local` | `ChangeMe123!` | superuser; override with `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` |
 | `role.<role>@strata.local` | `RolePass123!` | one per workspace role, used by `e2e/`. Never created when `NODE_ENV=production`; turn off elsewhere with `SEED_TEST_ACCOUNTS=false` |
 
+### Demo data
+```bash
+pnpm demo:data              # builds a "Demo Company" workspace; does nothing if it exists
+pnpm demo:data -- --reset   # deletes it and builds it again
+```
+Three projects, requirements, epics, sprints (one finished, one running, one planned), 25
+tasks across every status, comments, dependencies, attendance history, leave requests and
+time entries in every state — created through the API, so it obeys the same rules a user
+does. All seven `role.*` accounts are members with the role in their name, so signing in as
+any of them shows the same workspace from that role's point of view. Needs the stack
+running. `DEMO_WORKSPACE_NAME="QA Sandbox" pnpm demo:data` builds a second copy under
+another name, for tests that destroy things.
+
 ## Common commands
 ```bash
 pnpm build            # build every workspace package (dependency order)

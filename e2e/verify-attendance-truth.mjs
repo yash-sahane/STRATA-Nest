@@ -121,14 +121,16 @@ console.log('\n===== the calendar before the membership began, and the two tabs 
   if (await prev.count()) {
     await prev.click();
     await page.waitForTimeout(3000);
-    // Day cells only. The legend below the grid also renders "✗ Absent".
-    const absentCells = await page
-      .locator('div.min-h-\\[80px\\]')
-      .filter({ hasText: /Absent/ })
-      .count()
-      .catch(() => 0);
-    console.log(`   previous month: Absent day cells = ${absentCells}`);
-    rec(absentCells === 0, 'a month before joining shows no missed days', `${absentCells} cells`);
+    // Day cells only (each carries data-date). The legend below the grid also
+    // renders "✗ Absent". These were found by a sizing class once; it became
+    // responsive, NO cell matched, and "0 absent cells" passed without looking at
+    // a single day — so the month has to be on screen for the zero to count.
+    const dayCells = page.locator('[data-date]');
+    const cellCount = await dayCells.count().catch(() => 0);
+    const absentCells = await dayCells.filter({ hasText: /Absent/ }).count().catch(() => 0);
+    console.log(`   previous month: ${cellCount} day cells, ${absentCells} of them Absent`);
+    rec(cellCount >= 28 && absentCells === 0, 'a month before joining shows no missed days',
+      `${absentCells} absent of ${cellCount} day cells on screen`);
     // Back to this month for the cross-tab comparison.
     await page.getByRole('button', { name: /next month/i }).first().click();
     await page.waitForTimeout(2500);
@@ -233,7 +235,16 @@ if (!TODAY_IS_WORKING_DAY) {
 } else {
   const fresh = await addRole(p.ws, 'TESTER', 'role.tester@strata.local');
   const freshId = await whoami(fresh);
-  const todayStr = new Date().toISOString().slice(0, 10);
+  // The BUSINESS day, not the UTC date. From midnight to 05:30 in Kolkata the UTC
+  // date is still yesterday, so "today" was filed on the day before this member
+  // joined — and counted only because the app made the same UTC mistake about the
+  // day they joined. Both now use the day the workspace files attendance under.
+  const zone = (await api(admin, 'GET', '/auth/me')).j?.businessTimezone;
+  const todayStr = zone
+    ? new Intl.DateTimeFormat('en-CA', {
+      timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date())
+    : new Date().toISOString().slice(0, 10);
 
   // A full, credited day: in early, out after a normal shift.
   // Recorded with the ADMIN jar: writing an attendance row for another member is an

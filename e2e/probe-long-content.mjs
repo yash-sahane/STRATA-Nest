@@ -53,7 +53,6 @@ await mk('/sprints', {
   name: SENTENCE.slice(0, 150), goal: UNBROKEN,
   startDate: '2026-10-01', endDate: '2026-10-14',
 });
-await mk('/labels', { workspaceId: p.ws, projectId: p.project, name: UNBROKEN.slice(0, 100) });
 
 // The project and workspace names frame every page.
 await api(mgr, 'PATCH', `/projects/${p.project}`, { name: SENTENCE.slice(0, 250) });

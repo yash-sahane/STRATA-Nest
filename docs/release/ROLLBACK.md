@@ -6,8 +6,8 @@ Rollback is limited to redeploying a previous image or reverting a config/env fl
 ## Levels of rollback (fastest first)
 1. **Image rollback (minutes):** redeploy the previous api/worker image tag
  (immutable, git-sha tagged). Stateless — safe.
-2. **Config rollback:** revert an env flag (`RBAC_ENFORCED`, `AUTH_STRICT_REFRESH`,
- `EMAIL_TRANSPORT`) without redeploy where the platform allows.
+2. **Config rollback:** revert an env flag (`RBAC_ENFORCED`, `EMAIL_TRANSPORT`)
+ without redeploy where the platform allows.
 
 ## Data considerations
 - **Additive migrations** (`notifications_notificationdelivery`, `core_idempotencykey`)

@@ -37,53 +37,47 @@ const ICON_ONLY = new Set([
   'dark:text-orange-500',
 ]);
 
-const LIGHT_INK = [
-  // getHealthColor, after the fix: -700 in light
-  'text-red-700', 'text-yellow-700', 'text-green-700', 'text-emerald-700',
-  // yellow-600 / green-600 / orange-600 / emerald-600 are deliberately absent: they are no
-  // longer used anywhere (2.94:1, 3.22:1, 3.60:1 and 3.65:1 on the white card), so Tailwind
-  // compiles no rule for them and listing them here would trip the inert guard rather than
-  // measure anything. red-600 (4.77:1) and blue-600 (5.25:1) are still live and still pass.
-  'text-red-600',
-  // other numbers-on-a-card sites. `text-orange-600` is gone from this list for the same
-  // reason as the other three: no site uses it now, so there is no rule to measure.
-  'text-blue-600', 'text-blue-700', 'text-red-700',
-  'text-green-700', 'text-yellow-700', 'text-orange-700', 'text-gray-600',
-  // The mid shades that are still written BARE, so they apply in light theme too.
-  // orange/yellow/green/emerald-500 are no longer among them: measured at 2.89, 1.91,
-  // 2.22 and 2.47 against the light card, they were paired to `-700 dark:-500`, so the
-  // bare class compiles to nothing and listing it here would trip the inert guard
-  // rather than measure anything. red (3.81), blue (3.76) and purple (4.12) already
-  // cleared the floor and were deliberately left alone.
-  'text-red-500', 'text-purple-500', 'text-blue-500', 'text-sky-500',
-  'text-gray-500', 'text-violet-500',
-  // `text-sky-700` and `text-violet-700` were dropped from this list: neither appears in
-  // the source, so Tailwind compiles no rule for them and the probe's own guard correctly
-  // reported them as inert (they measured 19.80:1 by inheriting the plain foreground).
-  'text-purple-700',
-];
-// `dark:`-PREFIXED, because that is the class the source writes and therefore the only
-// one Tailwind compiled. Applying the bare `text-green-400` matched no rule at all, so
-// every one of these silently measured the inherited foreground instead.
-const DARK_INK = [
-  'dark:text-red-400', 'dark:text-yellow-400', 'dark:text-green-400',
-  'dark:text-emerald-400', 'dark:text-orange-400', 'dark:text-blue-400',
-  'dark:text-purple-400', 'dark:text-gray-400', 'dark:text-green-300',
-  'dark:text-blue-300',
-  // The mid shades still written bare apply on a dark card as-is...
-  'text-red-500', 'text-purple-500', 'text-blue-500', 'text-sky-500',
-  'text-gray-500', 'text-violet-500',
-  // ...and the four that were paired reach dark theme through the variant, which is
-  // the only form of them Tailwind compiled.
-  'dark:text-yellow-500', 'dark:text-green-500', 'dark:text-emerald-500',
-  'dark:text-orange-500',
-];
-
 const browser = await chromium.launch();
 const p = await provision('inkcard');
 await addRole(p.ws, 'MANAGER', 'role.manager@strata.local');
 const { ctx, page } = await signedInPage(browser, 'role.manager@strata.local', p.ws);
 await visit(page, '/dashboard', 7000);
+
+// The lists are READ FROM THE STYLESHEET the app ships, not kept by hand: every
+// `text-<hue>-<n>` rule Tailwind compiled is a class some screen uses. A hand-kept list
+// went stale each time a site stopped using a shade — no rule was compiled for it, the
+// inert guard below tripped, and the failure said nothing about contrast.
+const { bareInk, darkInk } = await page.evaluate(() => {
+  const bare = new Set();
+  const dark = new Set();
+  const visit = (rules) => {
+    for (const rule of rules) {
+      if (rule.cssRules) visit(rule.cssRules);
+      const selector = rule.selectorText;
+      if (!selector) continue;
+      for (const m of selector.matchAll(/\.(dark\\:)?text-([a-z]+)-([2-9]00)(?![\w-])/g)) {
+        if (['primary', 'secondary', 'muted', 'accent', 'destructive', 'foreground'].includes(m[2])) continue;
+        (m[1] ? dark : bare).add(`${m[1] ? 'dark:' : ''}text-${m[2]}-${m[3]}`);
+      }
+    }
+  };
+  for (const sheet of document.styleSheets) {
+    try {
+      visit(sheet.cssRules);
+    } catch {
+      /* a cross-origin sheet: not the app's */
+    }
+  }
+  return { bareInk: [...bare].sort(), darkInk: [...dark].sort() };
+});
+// The status inks the screens use instead of a palette pair (globals.css). They carry the
+// meaning of most coloured text now, so they are held to the same floor in both themes.
+const TOKEN_INK = ['text-success-text', 'text-warning-text', 'text-info-text', 'text-destructive-text'];
+// Bare light shades are written for the light card; in dark theme only the mid and deep
+// bare shades are measured, as before, beside the `dark:` ones.
+const LIGHT_INK = [...bareInk.filter((c) => !/-[2-4]00$/.test(c)), ...TOKEN_INK];
+const DARK_INK = [...darkInk, ...bareInk.filter((c) => /-500$/.test(c)), ...TOKEN_INK];
+console.log(`   compiled: ${bareInk.length} bare and ${darkInk.length} dark palette inks, plus ${TOKEN_INK.length} status tokens`);
 
 const measure = (theme, classes) => page.evaluate(({ th, cls }) => {
   document.documentElement.classList.toggle('dark', th === 'dark');

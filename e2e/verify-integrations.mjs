@@ -58,16 +58,12 @@ console.log('===== the API');
     projectId: p.project,
     webhookUrl: 'http://127.0.0.1:8000/api/v1/health',
   });
-  if (disc.s === 201) {
-    const dt = await api(mgr, 'POST', `/discord_integrations/${disc.j.id}/test`, {});
-    console.log(`   discord test: ${JSON.stringify(dt.j)}`);
-    rec(dt.j?.ok === false && /not Discord/i.test(dt.j?.detail ?? ''),
-      'a webhook URL that is not Discord is refused without calling it',
-      JSON.stringify(dt.j));
-  } else {
-    rec(false, 'the Discord integration could be created for the SSRF check',
-      `${disc.s} ${disc.t.slice(0, 200)}`);
-  }
+  // Refused at the door now, not at test time: the worker posts to a stored
+  // URL without ever running the test, so it must never be stored.
+  console.log(`   discord create: ${disc.s} ${disc.t.slice(0, 160)}`);
+  rec(disc.s === 400 && /not a Discord webhook URL/i.test(disc.t),
+    'a webhook URL that is not Discord is refused without being stored',
+    `${disc.s} ${disc.t.slice(0, 200)}`);
 
   // A member without integration:write must not be able to run the test.
   const asDev = await api(dev, 'POST', `/github_integrations/${id}/test`, {});

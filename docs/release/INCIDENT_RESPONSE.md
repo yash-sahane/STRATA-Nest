@@ -21,7 +21,7 @@
 
 ## Security incident specifics
 - **Token/secret leak:** rotate `INTEGRATION_TOKEN_ENC_KEY` (+ re-encrypt rows), JWT secrets (rotate refresh → sessions invalidated), AWS/Resend keys. Audit `activity_logs`.
-- **Auth bypass suspicion:** enable `AUTH_STRICT_REFRESH`, force logout (rotate refresh secret), review `PermissionsGuard`/scoping.
+- **Auth bypass suspicion:** force logout (rotate the refresh secret, or flush the `refresh:*` allowlist), review `PermissionsGuard`/scoping.
 - **Webhook abuse:** confirm signature verification; rotate `webhookSecret`; the endpoints are signature-authed + rate-limited.
 
 ## Data-integrity incidents

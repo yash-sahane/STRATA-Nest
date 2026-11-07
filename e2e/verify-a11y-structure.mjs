@@ -14,7 +14,7 @@
 // blind spot that hid the entire signed-out experience until the sweeps learned to read a
 // gradient's colour stops.
 import { readFileSync } from 'node:fs';
-import { chromium, api, provision, addRole, signedInPage, visit, whoami } from './kit.mjs';
+import { createSprint, chromium, api, provision, addRole, signedInPage, visit, whoami } from './kit.mjs';
 import { createRequire } from 'node:module';
 
 const AXE = readFileSync(
@@ -35,7 +35,7 @@ const mgrId = await whoami(mgr);
 // Enough content that lists, tables and cards actually render rows.
 const today = new Date().toISOString().slice(0, 10);
 const plus = (d) => { const x = new Date(); x.setUTCDate(x.getUTCDate() + d); return x.toISOString().slice(0, 10); };
-await api(mgr, 'POST', '/sprints', {
+await createSprint(mgr, {
   workspaceId: p.ws, projectId: p.project, name: 'Structure Sprint', goal: 'g',
   startDate: today, endDate: plus(10), status: 'ACTIVE',
 });

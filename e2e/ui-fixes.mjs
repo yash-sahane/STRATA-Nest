@@ -64,7 +64,7 @@ console.log('\n===== the command palette');
   await page.keyboard.type('epic', { delay: 40 });
   await page.waitForTimeout(2500);
   const actionText = await dialog.innerText();
-  rec(/Create New Epic/i.test(actionText), 'the action list still filters on the typed text', actionText.slice(0, 200));
+  rec(/New Epic/i.test(actionText), 'the action list still filters on the typed text', actionText.slice(0, 200));
 
   // a term that matches nothing must still say so
   for (let i = 0; i < 4; i += 1) await page.keyboard.press('Backspace');
@@ -171,10 +171,13 @@ console.log('\n===== 110 time entries all reach the timesheet');
     .nth(N - 1)
     .waitFor({ state: 'attached', timeout: 45000 })
     .catch(() => {});
-  const bodyText = await page.locator('body').innerText();
+  // The page's own content, not the whole body: the sidebar names the workspace
+  // "QA tt110", which satisfied /110/ by itself — the checks below once passed
+  // with 12 of the 110 entries saved.
+  const bodyText = await page.locator('#main-content').innerText();
   const rows = await page.locator('table tbody tr').count();
   console.log(`   rendered rows: ${rows}`);
-  rec(rows >= N || /110/.test(bodyText), `all ${N} entries render (or the count is shown)`, `rows=${rows}`);
+  rec(rows >= N || /\b110\b/.test(bodyText), `all ${N} entries render (or the count is shown)`, `rows=${rows}`);
   rec(/110h|110 h|\b110\b/.test(bodyText), 'the totals reflect 110 entries, not 100', bodyText.slice(0, 400).replace(/\n/g, ' | '));
   await ctx.close();
   await p.cleanup();

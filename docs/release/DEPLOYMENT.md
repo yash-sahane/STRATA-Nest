@@ -21,8 +21,8 @@ Images run **non-root** under `tini`. CI builds both (ci.yml `docker` job).
 - `INTEGRATION_TOKEN_ENC_KEY` (**≥32 chars**, from a secret store)
 - `JWT_COOKIE_SECURE=true`, `JWT_COOKIE_SAMESITE`, `CORS_ALLOWED_ORIGINS`, `FRONTEND_URL`
 - `EMAIL_TRANSPORT=queue`, `RESEND_API_KEY`, `EMAIL_FROM`
-- `STORAGE_DRIVER` (`s3` in prod) + AWS_* (or `local` + mounted volume)
-- Optional: `SWAGGER_ENABLED` (default off in prod), `METRICS_ENABLED`
+- `STORAGE_DRIVER=local` + `STORAGE_LOCAL_ROOT` on a mounted, backed-up volume (no S3 driver is built: `s3` is refused at start-up)
+- Optional: `SWAGGER_ENABLED` (default off in prod)
 
 ## Migrations (ordering matters)
 1. Apply **additive** tables/columns first (backward compatible): `notifications_notificationdelivery`, `core_idempotencykey`. Guarded + reversible.

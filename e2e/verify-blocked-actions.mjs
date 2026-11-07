@@ -5,7 +5,7 @@
 //  a PENDING leave request whose start date had passed could never be withdrawn,
 //    by anyone, and stayed approvable
 //  the Log Time task field said "(Optional)" and had no way back to "no task"
-import { chromium, api, provision, addRole, signedInPage, visit, whoami, watchToasts, toasts } from './kit.mjs';
+import { createSprint, chromium, api, provision, addRole, signedInPage, visit, whoami, watchToasts, toasts } from './kit.mjs';
 
 const out = [];
 const rec = (ok, n, d = '') => { out.push([ok, n]); console.log(`${ok ? 'PASS' : 'FAIL'}  ${n}${ok ? '' : '\n        -> ' + String(d).slice(0, 350)}`); };
@@ -25,15 +25,17 @@ const dayOffset = (n) => {
 // ---- a PENDING request with a start date in the past ------------------------
 console.log('===== withdrawing a pending request whose start has passed');
 {
-  // Submitted for days that have since gone by and never acted on.
+  // Submitted for days that have since gone by and never acted on. SICK: the
+  // kind of leave that may be recorded after it has begun — planned leave has
+  // to be asked for ahead (see verify-hr-rules.mjs).
   const past = dayOffset(-10);
   const pastEnd = dayOffset(-8);
   const req = await api(dev, 'POST', '/leave_requests', {
-    workspaceId: p.ws, type: 'CASUAL', startDate: past, endDate: pastEnd,
+    workspaceId: p.ws, type: 'SICK', startDate: past, endDate: pastEnd,
     reason: 'Submitted and then forgotten about',
   });
   console.log(`   create: ${req.s} status=${req.j?.status} start=${req.j?.startDate}`);
-  rec(req.s === 201, 'a leave request can be filed for past dates', `${req.s} ${req.t.slice(0, 200)}`);
+  rec(req.s === 201, 'sick leave can be filed for days already gone', `${req.s} ${req.t.slice(0, 200)}`);
   rec(req.j?.status === 'PENDING', 'and it is PENDING', String(req.j?.status));
 
   const cancelled = await api(dev, 'POST', `/leave_requests/${req.j?.id}/cancel`, {});
@@ -45,18 +47,26 @@ console.log('===== withdrawing a pending request whose start has passed');
 // ---- an APPROVED request that has begun is still protected ------------------
 console.log('\n===== but approved leave that has started is still protected');
 {
-  const past = dayOffset(-6);
+  // Three days, not two: any three in a row hold a working day. The two-day span
+  // (-6..-5) fell on a weekend every Friday — Sat 31 Oct + Sun 1 Nov — so the API
+  // rightly refused leave covering no working day, and the step below "approved"
+  // /leave_requests/undefined. -7..-5 begins after the first section's -10..-8
+  // ends, so the two requests never overlap.
+  const past = dayOffset(-7);
   const req = await api(dev, 'POST', '/leave_requests', {
-    workspaceId: p.ws, type: 'CASUAL', startDate: past, endDate: dayOffset(-5),
+    workspaceId: p.ws, type: 'SICK', startDate: past, endDate: dayOffset(-5),
     reason: 'Already taken',
   });
+  rec(req.s === 201, 'leave for days already taken can be filed', `${req.s} ${req.t.slice(0, 200)}`);
   const approved = await api(mgr, 'POST', `/leave_requests/${req.j?.id}/approve`, {});
   console.log(`   approve: ${approved.s} -> ${approved.j?.status}`);
   if (approved.j?.status === 'APPROVED') {
     const cancelled = await api(dev, 'POST', `/leave_requests/${req.j?.id}/cancel`, {});
     console.log(`   cancel an approved, started request: ${cancelled.s} ${cancelled.t.slice(0, 140)}`);
-    rec(cancelled.s === 400 && /already started/i.test(cancelled.t),
-      'approved leave that has already started cannot be un-taken',
+    // Leave that is over is a record of time taken; one still running can be
+    // ended early, by an approver (verify-follow-through.mjs).
+    rec(cancelled.s === 400 && /over/i.test(cancelled.t),
+      'approved leave that is over cannot be un-taken',
       `${cancelled.s} ${cancelled.t.slice(0, 200)}`);
   } else {
     rec(false, 'the request could be approved for this check',
@@ -78,9 +88,9 @@ console.log('\n===== recording a sprint that has already begun');
   // the page holds more than one dialog node and `.first()` picked a hidden one,
   // so a scoped lookup for the date button found nothing and then spent 30s
   // timing out as though the control were missing.
-  await page.getByText('Create New Sprint').first().waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
+  await page.getByText('Create Sprint').first().waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
   await page.waitForTimeout(1500);
-  rec(await page.getByText('Create New Sprint').first().isVisible().catch(() => false),
+  rec(await page.getByText('Create Sprint').first().isVisible().catch(() => false),
     'the Create Sprint dialog opened', 'heading not visible');
 
   // Open the start-date calendar and look at what is disabled.
@@ -134,7 +144,7 @@ console.log('\n===== recording a sprint that has already begun');
 // ---- the server accepts what the picker now offers --------------------------
 console.log('\n===== the server agrees');
 {
-  const r = await api(mgr, 'POST', '/sprints', {
+  const r = await createSprint(mgr, {
     workspaceId: p.ws, projectId: p.project, name: 'Already Running Sprint',
     goal: 'started last week', startDate: dayOffset(-7), endDate: dayOffset(7), status: 'ACTIVE',
   });

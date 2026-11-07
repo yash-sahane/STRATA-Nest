@@ -132,7 +132,17 @@ if (haveEdit) {
       'was a dialog that closed',
   );
 
-  const closed = (await page.locator('[role="dialog"]:visible').count()) === 0;
+  // The server commits before its answer reaches the browser, so the dialog closes a beat
+  // AFTER the write is visible above. Checked once, at once, this failed under full-suite
+  // load with the save landed and the dialog about to close — a race in the check, not
+  // the app. Wait for the close the way a person would, for a few seconds.
+  const closed = await (async () => {
+    for (let i = 0; i < 40; i += 1) {
+      if ((await page.locator('[role="dialog"]:visible').count()) === 0) return true;
+      await page.waitForTimeout(250);
+    }
+    return false;
+  })();
   rec(
     landed && closed,
     'and the dialog closes because it worked, not because it gave up',

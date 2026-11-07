@@ -1,6 +1,6 @@
 # ADR-0005 — Policy-based RBAC with normalized permissions
 
-- Status: Accepted
+- Status: Accepted, amended — the three layers are built; the normalized tables were dropped (see "As built")
 - Date: 2026-06-30
 - Deciders: Principal Architect, Security
 
@@ -15,6 +15,21 @@ Enforce **three composable, server-enforced layers**: authentication guard → w
 - (+) A central, testable policy registry instead of scattered `if` checks.
 - (−) New surface to seed and maintain (the permission tables and the default role map).
 - Follow-up: cover the intended bypasses (superuser/admin) with explicit tests before tightening rules.
+
+## As built (2026-10-18)
+The authentication, workspace-scope and permission layers are enforced as decided. The
+permissions resolve from the built-in role → permission map in code
+(`apps/api/src/modules/authz/permissions.ts`) plus each custom `WorkspaceRole`'s
+`permissions` list, validated against the known keys, with implied keys added
+(`task:write` grants `task:update` and `task:create`).
+
+Decided: the `Permission` / `RolePermission` / `UserPermission` tables are **dropped**
+(migration `20261018040000_one_assignee_list`). Nothing ever read them, and a second
+copy of the role map would have needed keeping in step with the first. The map in code
+is the one source; the browser does not keep a copy either — it asks
+`GET /auth/me/access` for every membership's role and effective keys and translates the
+keys into screen permissions. The roles screen's description of the built-in roles is
+pinned to the API's map by `authz/role-catalogue-parity.spec.ts`.
 
 ## Alternatives considered
 - **JSON permission lists:** rejected — hard to query, index, and validate.

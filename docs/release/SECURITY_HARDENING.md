@@ -39,8 +39,8 @@ A fully-hardened prod env boots cleanly (reaches DB connect).
 ### 2. Boolean env footgun fixed (correctness + security)
 `z.coerce.boolean()` maps the **string** `"false"` (and `"0"`, `"no"`) to **`true`**
 (`Boolean(str)` is truthy). This silently inverted safety flags — e.g.
-`RBAC_ENFORCED=false`, `JWT_COOKIE_SECURE=false`, `AUTH_STRICT_REFRESH=false`
-would all have been **true**. Replaced with an explicit `boolEnv` parser
+`RBAC_ENFORCED=false` and `JWT_COOKIE_SECURE=false` would both have been
+**true**. Replaced with an explicit `boolEnv` parser
 (`true/1/yes/on` → true; `false/0/no/off/""` → false). Unit-tested.
 
 ### 3. Token cipher fails closed (`token-cipher.ts`)

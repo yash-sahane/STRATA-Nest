@@ -41,8 +41,9 @@ console.log('\n===== the profile page\'s "Change Password" button');
 {
   const { ctx, page } = await signedInPage(browser, 'role.manager@strata.local', p.ws);
   await visit(page, '/profile', 5000);
-  const btn = page.getByRole('button', { name: /change password/i }).first();
-  rec(await btn.count() > 0, 'the button is on the profile page', String(await btn.count()));
+  // A link, as anything that goes to another page is.
+  const btn = page.getByRole('link', { name: /change password/i }).first();
+  rec(await btn.count() > 0, 'the link is on the profile page', String(await btn.count()));
   if (await btn.count()) {
     await btn.click();
     await page.waitForTimeout(4000);

@@ -5,7 +5,7 @@
 //
 //   node sweep-all.mjs            # everything
 //   node sweep-all.mjs /tasks     # one route
-import { chromium, api, adminJar, provision, signedInPage, visit, BASE } from './kit.mjs';
+import { createSprint, chromium, api, adminJar, provision, signedInPage, visit, BASE } from './kit.mjs';
 import { COLLECT_TEXT_NODES, judge } from './color-utils.mjs';
 
 const only = process.argv.slice(2);
@@ -88,7 +88,7 @@ const fr = (await api(admin, 'POST', '/functional_requirements', {
   workspaceId: p.ws, projectId: p.project, hierarchyId: 'SW-FR1', title: 'Card capture form',
   clientRequirementId: cr?.id, epicId: epic?.id, status: 'IMPLEMENTED', progress: 60, complexity: 'HIGH',
 })).j;
-const sprint = (await api(admin, 'POST', '/sprints', {
+const sprint = (await createSprint(admin, {
   workspaceId: p.ws, projectId: p.project, name: 'Sprint 14', goal: 'Ship card capture',
   startDate: '2026-09-07', endDate: '2026-09-21', status: 'ACTIVE',
 })).j;

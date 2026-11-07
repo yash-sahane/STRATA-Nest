@@ -14,7 +14,7 @@ Adopt **BullMQ** (Redis) with isolated queues (email, notification, reminder, de
 - (+) Removes blocking I/O from the request path; reliable retries/observability for email and integrations.
 - (+) No phantom side effects on rollback.
 - (−) New infra (worker, Bull Board, metrics) to operate — accepted; Redis is already present.
-- Follow-up: Redis partitioned by logical DB (DB0 cache, DB1 BullMQ, DB2 socket adapter).
+- Follow-up: Redis partitioned by logical DB — DB0 cache, sessions and realtime fan-out (pub/sub is not per-database), DB1 BullMQ. No socket database was needed.
 
 ## Alternatives considered
 - **In-process async (no worker):** rejected — couples heavy/retryable work to API uptime and latency.

@@ -48,11 +48,15 @@ const plus = (days) => {
 
 // ---- #31 a sprint that finished 2 of 5 ------------------------------------
 console.log('===== a sprint completed with work left over');
+// Created in PLANNING and then started, the way the app does it: the API no
+// longer creates a sprint straight into ACTIVE (see kit.mjs createSprint).
 const sprint = await mustCreate(mgr, '/sprints', {
   workspaceId: p.ws, projectId: p.project, name: 'Numbers Sprint',
-  goal: 'finish some of it', startDate: today, endDate: plus(14), status: 'ACTIVE',
+  goal: 'finish some of it', startDate: today, endDate: plus(14),
 }, 'the sprint');
 rec(Boolean(sprint?.id), 'the sprint was created', JSON.stringify(sprint).slice(0, 200));
+const started = await api(mgr, 'PATCH', `/sprints/${sprint?.id}`, { status: 'ACTIVE' });
+rec(started.s === 200, 'the sprint was started', `${started.s} ${started.t.slice(0, 200)}`);
 
 const taskIds = [];
 for (let i = 1; i <= 5; i += 1) {

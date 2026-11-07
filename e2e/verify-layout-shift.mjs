@@ -13,7 +13,7 @@
 // The threshold is Google's "good" bar of 0.1. The bar is deliberately not tightened to
 // whatever this happens to score today: a check that fails on any movement at all would be
 // re-tuned rather than believed the first time a legitimate change nudged it.
-import { chromium, api, provision, addRole, signedInPage, whoami, BASE } from './kit.mjs';
+import { createSprint, chromium, api, provision, addRole, signedInPage, whoami, BASE } from './kit.mjs';
 
 const GOOD_CLS = 0.1;
 
@@ -28,7 +28,7 @@ const mgrId = await whoami(mgr);
 // Real content, so the pages have something to lay out. An empty page cannot shift.
 const today = new Date().toISOString().slice(0, 10);
 const plus = (d) => { const x = new Date(); x.setUTCDate(x.getUTCDate() + d); return x.toISOString().slice(0, 10); };
-await api(mgr, 'POST', '/sprints', {
+await createSprint(mgr, {
   workspaceId: p.ws, projectId: p.project, name: 'CLS Sprint', goal: 'g',
   startDate: today, endDate: plus(10), status: 'ACTIVE',
 });

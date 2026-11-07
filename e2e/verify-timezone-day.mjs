@@ -90,21 +90,21 @@ for (const zone of ZONES) {
   });
   console.log(`   browser zone=${browserToday.zone} offset=${browserToday.offsetMinutes}min  today=${browserToday.date}`);
 
-  // The widget withholds Check In at the WEEKEND — correctly; the office is shut. Which
-  // weekend depends on the browser's own calendar, and these three zones straddle the
-  // date line, so one can be on Monday while another is still on Saturday. Asking the
-  // browser is therefore the only answer that matches what the widget decided.
+  // The widget withholds Check In at the WEEKEND — correctly; the office is shut. Whose
+  // weekend: the BUSINESS day's, which is the app's "today" whatever the browser's clock
+  // says (lib/utils/working-days.ts). This read the browser's calendar instead, so on a
+  // Sunday the +14 browser — already on Monday — expected a Check In the app rightly
+  // withheld.
   //
-  // Skipped loudly rather than asserted away: run on a Sunday, this script reported three
-  // failures against an app behaving exactly as designed. A check that cannot run today
-  // has to say so — one that quietly passes instead is worse than one that is red.
-  const browserDay = await page.evaluate(() => new Date().getDay());
-  if (browserDay === 0 || browserDay === 6) {
+  // Skipped loudly rather than asserted away: a check that cannot run today has to say
+  // so — one that quietly passes instead is worse than one that is red.
+  const businessDay = new Date(`${todayInBusinessZone()}T12:00:00Z`).getUTCDay();
+  if (businessDay === 0 || businessDay === 6) {
     skip(
-      `${zone.label}: a check-in files under the day the browser is on`,
-      `that browser's calendar reads ${browserDay === 0 ? 'Sunday' : 'Saturday'} ` +
-        `(${browserToday.date}), and no Check In is offered at the weekend — there is no ` +
-        'check-in to file, so nothing here can be measured today',
+      `${zone.label}: a check-in files under the business day`,
+      `the business day (${todayInBusinessZone()}, ${BUSINESS_TZ}) is a ` +
+        `${businessDay === 0 ? 'Sunday' : 'Saturday'}, and no Check In is offered at the weekend — ` +
+        'there is no check-in to file, so nothing here can be measured today',
     );
     await ctx.close();
     continue;
@@ -148,13 +148,10 @@ for (const zone of ZONES) {
     // Looked up by the BUSINESS day. Before the fix the calendar painted its "today"
     // from the browser's clock, so for a member outside the server's zone the attendance
     // landed on a cell they never looked at.
+    // By the cell's own date (data-date), not by a sizing class: the class became
+    // responsive (sm:min-h-[80px]) and this lookup found no cell at all.
     const todayCell = await page.evaluate((todayDate) => {
-      const day = Number(todayDate.slice(8, 10));
-      const cells = Array.from(document.querySelectorAll('div.min-h-\\[80px\\]'));
-      const cell = cells.find((c) => {
-        const n = c.querySelector('span.font-semibold');
-        return n && Number((n.textContent || '').trim()) === day;
-      });
+      const cell = document.querySelector(`[data-date="${todayDate}"]`);
       return cell ? (cell.innerText || '').replace(/\n/g, ' | ').slice(0, 90) : null;
     }, todayInBusinessZone());
     console.log(`   calendar cell for the business day: ${JSON.stringify(todayCell)}`);

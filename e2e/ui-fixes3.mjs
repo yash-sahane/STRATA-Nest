@@ -85,8 +85,9 @@ console.log('\n===== keyboard reach');
     await page.waitForTimeout(900);
   }
 
-  // task cards
-  await visit(page, '/tasks', 7000);
+  // task cards — all of them: the card is the admin's own filing, assigned to
+  // nobody, and "my tasks" is the ones assigned to me.
+  await visit(page, '/tasks?scope=all', 7000);
   const handle = page.getByRole('button', { name: /Open task: Zebracorn Board Card/i }).first();
   const handles = await handle.count();
   rec(handles > 0, 'a board card is reachable and named', String(handles));

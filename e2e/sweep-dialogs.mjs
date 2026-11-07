@@ -14,7 +14,7 @@
 // Coverage is REPORTED, not assumed: every dialog this cannot reach is named at the end,
 // so a low finding count cannot be mistaken for a clean bill of health.
 import { readFileSync } from 'node:fs';
-import { chromium, api, provision, addRole, signedInPage, visit, whoami, BASE } from './kit.mjs';
+import { createSprint, chromium, api, provision, addRole, signedInPage, visit, whoami, BASE } from './kit.mjs';
 import { COLLECT_TEXT_NODES, judge } from './color-utils.mjs';
 import { createRequire } from 'node:module';
 
@@ -41,7 +41,7 @@ const mgrId = await whoami(mgr);
 const today = new Date().toISOString().slice(0, 10);
 const plus = (d) => { const x = new Date(); x.setUTCDate(x.getUTCDate() + d); return x.toISOString().slice(0, 10); };
 
-await api(mgr, 'POST', '/sprints', {
+await createSprint(mgr, {
   workspaceId: p.ws, projectId: p.project, name: 'Dialog Sprint', goal: 'g',
   startDate: today, endDate: plus(10), status: 'ACTIVE',
 });

@@ -15,7 +15,7 @@
 // `[object Object]`. That is what a missing permission-gated field looks like when nobody
 // guarded the render, and a manager session can never produce it.
 import { readFileSync } from 'node:fs';
-import { chromium, api, provision, addRole, signedInPage, visit, whoami } from './kit.mjs';
+import { createSprint, chromium, api, provision, addRole, signedInPage, visit, whoami } from './kit.mjs';
 import { COLLECT_TEXT_NODES, judge } from './color-utils.mjs';
 import { createRequire } from 'node:module';
 
@@ -67,7 +67,7 @@ const mgrId = await whoami(mgr);
 // refused by.
 const today = new Date().toISOString().slice(0, 10);
 const plus = (d) => { const x = new Date(); x.setUTCDate(x.getUTCDate() + d); return x.toISOString().slice(0, 10); };
-await api(mgr, 'POST', '/sprints', {
+await createSprint(mgr, {
   workspaceId: p.ws, projectId: p.project, name: 'Roles Sprint', goal: 'g',
   startDate: today, endDate: plus(10), status: 'ACTIVE',
 });

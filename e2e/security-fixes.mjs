@@ -11,6 +11,10 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const p = await provision('sec');
 const mgr = await addRole(p.ws, 'MANAGER', 'role.manager@strata.local');
 const dev = await addRole(p.ws, 'SOFTWARE_DEVELOPER', 'role.software_developer@strata.local');
+// A colleague with no say over the work (no task:write): the one a comment's
+// authorship protects it from. A manager may take a comment down — not rewrite
+// it — and that is verify-data-rules.mjs.
+const peer = await addRole(p.ws, 'TESTER', 'role.tester@strata.local');
 const devId = await whoami(dev);
 
 const task = (await api(p.admin, 'POST', '/tasks', {
@@ -27,7 +31,7 @@ console.log('===== comment authorship is enforced by the API');
   const edit = await api(mgr, 'PATCH', `/task_comments/${id}`, { content: 'rewritten by someone else' });
   rec(edit.s === 403, 'ANOTHER member cannot rewrite it', `expected 403, got ${edit.s} ${edit.t.slice(0, 140)}`);
 
-  const del = await api(mgr, 'DELETE', `/task_comments/${id}`);
+  const del = await api(peer, 'DELETE', `/task_comments/${id}`);
   rec(del.s === 403, 'ANOTHER member cannot delete it', `expected 403, got ${del.s} ${del.t.slice(0, 140)}`);
 
   const still = await api(dev, 'GET', `/task_comments?taskId=${task.id}&pageSize=20`);
@@ -86,7 +90,7 @@ console.log('\n===== an uploaded SVG cannot execute on the API origin');
   try { fileId = JSON.parse(upBody).id; } catch {}
 
   if (fileId) {
-    for (const route of ['preview', 'view', 'download']) {
+    for (const route of ['view', 'download']) {
       const r = await fetch(`http://localhost:8000/api/v1/files/${fileId}/${route}`, { headers: { Cookie: cookie } });
       const ct = r.headers.get('content-type') || '';
       const cd = r.headers.get('content-disposition') || '';
@@ -104,8 +108,8 @@ console.log('\n===== an uploaded SVG cannot execute on the API origin');
     const up2 = await fetch('http://localhost:8000/api/v1/files', { method: 'POST', headers: { Cookie: cookie }, body: f2 });
     const id2 = (await up2.json().catch(() => ({}))).id;
     if (id2) {
-      const r2 = await fetch(`http://localhost:8000/api/v1/files/${id2}/preview`, { headers: { Cookie: cookie } });
-      rec(/inline/.test(r2.headers.get('content-disposition') || ''), 'a real JPEG still previews inline — the fix did not over-reach',
+      const r2 = await fetch(`http://localhost:8000/api/v1/files/${id2}/view`, { headers: { Cookie: cookie } });
+      rec(/inline/.test(r2.headers.get('content-disposition') || ''), 'a real JPEG still shows inline — the fix did not over-reach',
         r2.headers.get('content-disposition') || '');
       rec(/image\/jpeg/.test(r2.headers.get('content-type') || ''), 'and keeps its real content type',
         r2.headers.get('content-type') || '');

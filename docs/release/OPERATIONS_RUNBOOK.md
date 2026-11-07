@@ -25,8 +25,8 @@ Day-2 operations for the NestJS API + worker.
 - **Requeue failed jobs:** inspect BullMQ failed set (kept, `removeOnFail:false`); requeue after fixing root cause. **No DLQ yet** — triage manually.
 
 ## Config flags (operational levers)
-`RBAC_ENFORCED` (per-permission vs membership floor), `AUTH_STRICT_REFRESH`
-(reuse rejection), `EMAIL_TRANSPORT` (queue|inline fallback), `STORAGE_DRIVER`,
+`RBAC_ENFORCED` (per-permission vs membership floor),
+`EMAIL_TRANSPORT` (queue|inline fallback), `STORAGE_DRIVER`,
 `SWAGGER_ENABLED`, `METRICS_ENABLED`. All parsed strictly (`false` = false).
 
 ## Known operational gaps (track)

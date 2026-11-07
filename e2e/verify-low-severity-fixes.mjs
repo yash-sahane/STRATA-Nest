@@ -4,7 +4,7 @@
 // a nonexistent task, and a dangling requirementId were all already handled.
 //
 //  a repeated ?taskId=      404 "Not found." for a task the caller had named twice
-//  registration             stored a caller-supplied workspaceId as defaultWorkspaceId
+//  registration             a public endpoint with no screen in front of it — now removed
 //  epic DELETE              403 for a real id vs 404 for an invented one = id oracle
 //  epic progress            accepted 250 and drew a bar past its own track
 //  epic status              accepted any string and fell through every badge map
@@ -54,29 +54,19 @@ console.log('===== a repeated scope parameter');
   rec(missing.status === 400, 'omitting it is a 400, not "Not found."', String(missing.status));
 }
 
-// ---- registration does not accept a workspace -------------------------------
+// ---- there is no self-registration ----------------------------------------
 console.log('\n===== registration');
 {
-  const email = `lowfix.${String(process.pid).slice(-4)}${Math.floor(process.uptime() * 100) % 9973}@qa.local`;
+  // It used to store a caller-supplied workspaceId on the new account. The whole
+  // endpoint is gone now: onboarding is closed, accounts are created by a manager.
   const r = await fetch(`${API}/auth/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      email, password: 'GoodPass123!', name: 'Low Fix Probe', workspaceId: p.ws,
+      email: 'lowfix.probe@qa.local', password: 'GoodPass123!', name: 'Low Fix Probe', workspaceId: p.ws,
     }),
   });
-  const body = await r.json().catch(() => ({}));
-  if (r.status === 429) {
-    skip('registration does not store a caller-supplied workspaceId', 'registration limiter (3/hour)');
-  } else {
-    console.log(`   ${r.status} workspaceId=${JSON.stringify(body?.user?.workspaceId)} default=${JSON.stringify(body?.user?.defaultWorkspaceId)}`);
-    rec(r.status === 201, 'registration still works', `${r.status}`);
-    rec(!body?.user?.workspaceId, 'a caller-supplied workspaceId is NOT stored',
-      JSON.stringify(body?.user?.workspaceId));
-    rec(!body?.user?.defaultWorkspaceId,
-      'and it does not become the new account\'s default workspace',
-      JSON.stringify(body?.user?.defaultWorkspaceId));
-  }
+  rec(r.status === 404, 'there is no self-registration endpoint', `${r.status}`);
 }
 
 // ---- the delete existence oracle -------------------------------------------
@@ -104,29 +94,30 @@ console.log('\n===== DELETE does not reveal what exists');
   }
 }
 
-// ---- epic rollup columns are bounded ---------------------------------------
-console.log('\n===== epic rollup validation');
+// ---- an epic's roll-up is the server's -------------------------------------
+// It used to accept any progress and status a caller sent (250% drew a bar past
+// its own track). They are its roll-up now, which nobody sends: an epic with no
+// work under it is To Do at 0%, whatever the request said.
+console.log('\n===== epic roll-up is not an input');
 {
-  for (const [what, body, expectText] of [
-    ['progress 250', { progress: 250 }, /not be greater than 100/i],
-    ['progress -1', { progress: -1 }, /not be less than 0/i],
-    ['status NOT_A_STATUS', { status: 'NOT_A_STATUS' }, /one of the following values/i],
+  for (const [what, body] of [
+    ['progress 250', { progress: 250 }],
+    ['status DONE at 100%', { status: 'DONE', progress: 100 }],
   ]) {
     const r = await api(mgr, 'POST', '/epics', {
       workspaceId: p.ws, projectId: p.project,
       hierarchyId: `LF-${what.replace(/\W/g, '').slice(0, 6).toUpperCase()}`,
-      name: `Bounded ${what}`, ...body,
+      name: `Roll-up ${what}`, ...body,
     });
-    rec(r.s === 400 && expectText.test(r.t), `epic create refuses ${what}`, `${r.s} ${r.t.slice(0, 200)}`);
-    if (r.j?.id) await api(mgr, 'DELETE', `/epics/${r.j.id}`);
+    rec(r.s === 201 && r.j?.status === 'TODO' && r.j?.progress === 0,
+      `an epic created with ${what} is To Do at 0%`, `${r.s} status=${r.j?.status} progress=${r.j?.progress}`);
+    if (r.j?.id) {
+      const u = await api(mgr, 'PATCH', `/epics/${r.j.id}`, { status: 'DONE', progress: 100 });
+      rec(u.j?.status === 'TODO' && u.j?.progress === 0,
+        'and a PATCH of its roll-up changes nothing', `${u.s} status=${u.j?.status} progress=${u.j?.progress}`);
+      await api(mgr, 'DELETE', `/epics/${r.j.id}`);
+    }
   }
-  // The valid ends of the range still pass, so the cap is a bound and not a ban.
-  const ok = await api(mgr, 'POST', '/epics', {
-    workspaceId: p.ws, projectId: p.project, hierarchyId: 'LF-OK',
-    name: 'At the boundary', status: 'DONE', progress: 100,
-  });
-  rec(ok.s === 201, 'progress 100 with status DONE is still accepted', `${ok.s} ${ok.t.slice(0, 200)}`);
-  if (ok.j?.id) await api(mgr, 'DELETE', `/epics/${ok.j.id}`);
 }
 
 // ---- the file url resolves --------------------------------------------------

@@ -10,7 +10,7 @@ Next.js frontend ──HTTP/WS──▶ apps/api (NestJS)
  ▼
  PostgreSQL ◀── owned by packages/prisma migrations
  ▲
-apps/worker (BullMQ) ────────────┘ Redis (cache DB0 / queue DB1 / socket DB2)
+apps/worker (BullMQ) ────────────┘ Redis (DB0: cache, sessions, realtime fan-out / DB1: queues)
 ```
 
 - **apps/api** — HTTP controllers + a raw WebSocket gateway (not Socket.IO).
@@ -21,6 +21,9 @@ apps/worker (BullMQ) ────────────┘ Redis (cache DB0 / 
 - **packages/config** — one env schema, validated fail-fast at boot.
 - **packages/common** — http/date/id primitives + the global exception filter.
 - **packages/shared** — domain events, queue contracts, wire types.
+- **AI generation** — the model is called by the web app's server route
+ (`apps/frontend/src/app/api/ai-generate`), with keys held there; the API's
+ generation module persists what was accepted (`bulk-save`).
 - **packages/contract-tests** — regression suite that locks the frozen wire
  contract against a running API (skips when unreachable).
 
@@ -35,7 +38,8 @@ files · storage · integrations · generation · email · realtime · deletion.
 - **Frozen v1 REST/WS contract** — ADR-0003. Pagination `{items,total,page,pageSize}`;
  error `{error:{message,code,type}}`; cookie JWT `strata_access`/`strata_refresh`; WS frame
  `{event,payload,channels,timestamp}`; camelCase; ISO dates with 6-digit microseconds.
-- **Policy-based RBAC** with normalized permissions — ADR-0005.
+- **Policy-based RBAC** — ADR-0005: built-in role map in code plus custom roles'
+ permission lists (the normalized tables the ADR names are not used yet).
 - **Authorized realtime** via domain events (workspace-scoped rooms) — ADR-0006.
 - **BullMQ async, commit-then-emit** (no side effects inside the DB transaction) — ADR-0007.
 - **Cookie JWT** with server-tracked revocable refresh tokens — ADR-0009.

@@ -1,8 +1,7 @@
-// Proof for: mixed-case e-mail lockout, logout not ending the session, and the
-// webhookSecret leak. Registration is rate-limited to 3/hour, so this registers
-// exactly one account and reuses it.
+// Proof for: mixed-case e-mail lockout, logout not ending the session, the
+// webhookSecret leak, and that self-registration stays closed. Accounts are
+// created by a workspace manager, so the login checks use a seeded one.
 import { api, adminJar, getJar, provision } from './kit.mjs';
-import { readFile, rm, writeFile } from 'node:fs/promises';
 
 const API = 'http://localhost:8000/api/v1';
 const out = [];
@@ -51,80 +50,33 @@ function recLogin(res, name) {
   return res.status === 200;
 }
 
-// ---- 1. a capital letter in the e-mail must not lock the account out -------
-console.log('===== mixed-case e-mail');
+// ---- 0. onboarding is closed ------------------------------------------------
+console.log('===== self-registration is closed');
 {
-  // Registration is rate limited to 3/hour, so the mixed-case account is
-  // registered ONCE and reused on every later run. Without this the suite could
-  // only be run three times an hour, and every check below it failed with a 429
-  // that had nothing to do with the behaviour being tested.
-  const ACCOUNT_FILE = new URL('./.qa-mixedcase-account.json', import.meta.url);
-  let typed;
-  let registered = false;
-  try {
-    typed = JSON.parse(await readFile(ACCOUNT_FILE, 'utf8')).email;
-  } catch {
-    typed = null;
-  }
+  // This endpoint used to exist with no screen in front of it: anyone could mint
+  // an account, read every workspace's name and queue join requests.
+  const reg = await fetch(`${API}/auth/register`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'closed.probe@qa.local', password: 'GoodPass123!', name: 'Closed Probe' }),
+  });
+  rec(reg.status === 404, 'POST /auth/register does not exist', `got ${reg.status}`);
+}
 
-  // A remembered account is only as good as the database it was registered in. This
-  // used to take the file's word for it and print PASS for a registration that had not
-  // happened — and after a database reset the account is simply gone, so the three
-  // login checks below failed with a 400 that had nothing to do with letter case.
-  // So ask the API whether the account still exists before relying on it.
-  if (typed) {
-    const cached = typed;
-    const probe = await loginOrWait(
-      () =>
-        fetch(`${API}/auth/login`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: cached.toLowerCase(), password: 'GoodPass123!' }),
-        }),
-      'checking the remembered account',
-    );
-    if (probe.status !== 200 && probe.status !== 429) {
-      console.log(`   the remembered account "${cached}" is not in this database (login -> ${probe.status}); registering a new one`);
-      await rm(ACCOUNT_FILE, { force: true });
-      typed = null;
-    }
-  }
-
-  if (!typed) {
-    const suffix = String(process.pid).slice(-4) + Math.floor(process.uptime() * 1000) % 9973;
-    typed = `QA.Mixed.${suffix}@QA.Local`;
-    const reg = await fetch(`${API}/auth/register`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: typed, password: 'GoodPass123!', name: 'Mixed Case' }),
-    });
-    const regBody = await reg.json().catch(() => ({}));
-    if (reg.status === 201) {
-      registered = true;
-      await writeFile(ACCOUNT_FILE, JSON.stringify({ email: typed }));
-      rec(true, 'registration with a mixed-case address succeeds', '201');
-      console.log(`   typed "${typed}" -> stored "${regBody?.user?.email}"`);
-    } else if (reg.status === 429) {
-      // Recorded as a SKIP, not as a pass. Counting an unrun check as green is
-      // how a suite comes to report a clean total over behaviour nobody tested.
-      console.log(`   SKIP registration — rate limited (3/hour) and no cached account yet`);
-      skipped.push('registration with a mixed-case address succeeds');
-      typed = null;
-    } else {
-      rec(false, 'registration with a mixed-case address succeeds', `${reg.status} ${JSON.stringify(regBody).slice(0, 160)}`);
-      typed = null;
-    }
-  } else {
-    rec(true, 'the mixed-case account from an earlier run still exists (registration not repeated)', typed);
-  }
-
-  if (!typed) {
-    console.log('   no mixed-case account available — skipping the login/logout checks that need one');
-  } else {
+// ---- 1. a capital letter in the e-mail must not lock the account out -------
+console.log('\n===== mixed-case e-mail');
+{
+  // A seeded account, typed the way a person might type their own address.
+  // Addresses are stored lowercased, so this is the string that used to be
+  // answered with "invalid email or password".
+  const typed = 'Role.Tester@Strata.Local';
+  const PASSWORD = 'RolePass123!';
+  {
 
   const asTyped = await loginOrWait(
     () =>
       fetch(`${API}/auth/login`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: typed, password: 'GoodPass123!' }),
+        body: JSON.stringify({ email: typed, password: PASSWORD }),
       }),
     'as typed',
   );
@@ -134,7 +86,7 @@ console.log('===== mixed-case e-mail');
     () =>
       fetch(`${API}/auth/login`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: typed.toLowerCase(), password: 'GoodPass123!' }),
+        body: JSON.stringify({ email: typed.toLowerCase(), password: PASSWORD }),
       }),
     'lowercased',
   );
@@ -144,7 +96,7 @@ console.log('===== mixed-case e-mail');
     () =>
       fetch(`${API}/auth/login`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: `  ${typed}  `, password: 'GoodPass123!' }),
+        body: JSON.stringify({ email: `  ${typed}  `, password: PASSWORD }),
       }),
     'padded',
   );
@@ -181,12 +133,9 @@ console.log('===== mixed-case e-mail');
     'no new session is minted from the dead token', [...minted.keys()].join(','));
   }
   }
-  void registered;
 }
 
-// ---- 2b. the same normalisation, provable without registering -------------
-// A seeded account exercises login normalisation with no dependency on the
-// 3/hour registration limiter, so this half of the behaviour is always covered.
+// ---- 2b. the same normalisation on the administrator account ---------------
 console.log('\n===== case and whitespace on a seeded account');
 {
   const spellings = [

@@ -76,8 +76,13 @@ console.log('\n===== an approved time entry re-opens when it is edited');
   const again = await api(mgr, 'POST', `/time_entries/${id}/approve`);
   rec(again.s === 201 || again.s === 200, 'the manager can approve the NEW figures', `${again.s} ${again.t.slice(0, 160)}`);
 
+  // An hour of its own, before the first entry: the API now refuses an entry that
+  // overlaps one the same person already logged (it would count that time twice).
   const e2 = await api(dev, 'POST', '/time_entries', {
-    workspaceId: p.ws, projectId: p.project, description: 'race', startTime: start, endTime: end, duration: 30,
+    workspaceId: p.ws, projectId: p.project, description: 'race',
+    startTime: new Date(Date.now() - 3 * 3600_000).toISOString(),
+    endTime: new Date(Date.now() - 2 * 3600_000).toISOString(),
+    duration: 30,
   });
   const r2 = await Promise.all([
     api(mgr, 'POST', `/time_entries/${e2.j.id}/approve`),

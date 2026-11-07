@@ -9,7 +9,8 @@
     "sweep:routes": "node sweep-all.mjs",
     "sweep:dialogs": "node sweep-dialogs.mjs",
     "sweep:entry": "node sweep-entry.mjs",
-    "sweep:roles": "node sweep-roles.mjs"
+    "sweep:roles": "node sweep-roles.mjs",
+    "demo-data": "node demo-data.mjs"
   },
   "dependencies": {
     "axe-core": "^4.10.0",

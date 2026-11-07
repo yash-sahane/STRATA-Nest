@@ -40,7 +40,6 @@ or IP+email for password-reset (`AuthThrottlerGuard.getTracker`, honors XFF).
 | default | 120 | 60s |
 | login | 5 | 60s |
 | refresh | 20 | 60s |
-| register | 3 | 3600s |
 | password-reset | 3 (per IP+email) | 3600s |
 
 ## Tests

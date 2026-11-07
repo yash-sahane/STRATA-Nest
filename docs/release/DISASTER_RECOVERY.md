@@ -11,7 +11,7 @@
 | **API region/cluster down** | fail over to standby region (IaC re-provision); stateless api/worker redeploy from images; point at replica DB promoted to primary |
 | **Postgres primary loss** | promote replica; repoint `DATABASE_URL`; verify schema via introspection; resume |
 | **Redis loss** | recreate; cache/socket rebuild automatically; queue restored from AOF (idempotent) or re-driven; throttler fails open meanwhile |
-| **S3/blob loss** | restore from versioned/replicated bucket |
+| **File volume loss** | restore the volume snapshot taken with the database backup |
 | **Data corruption (bad deploy/migration)** | PITR to just before the event; redeploy the previous image tag while reconciling |
 | **Secret compromise** | rotate all secrets; re-encrypt integration tokens with a new key; invalidate sessions (rotate refresh secret) |
 

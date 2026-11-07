@@ -8,7 +8,7 @@
 //  (new) the notification row was role="button" AROUND its delete button —
 //        28 axe nested-interactive violations in one open popover
 import { readFileSync } from 'node:fs';
-import { chromium, api, adminJar, provision, addRole, signedInPage, visit, whoami } from './kit.mjs';
+import { createSprint, chromium, api, adminJar, provision, addRole, signedInPage, visit, whoami } from './kit.mjs';
 import { createRequire } from 'node:module';
 
 const AXE = readFileSync(
@@ -30,7 +30,7 @@ const mgrId = await whoami(mgr);
 const today = new Date().toISOString().slice(0, 10);
 const plus = (d) => { const x = new Date(); x.setUTCDate(x.getUTCDate() + d); return x.toISOString().slice(0, 10); };
 
-await api(mgr, 'POST', '/sprints', {
+await createSprint(mgr, {
   workspaceId: p.ws, projectId: p.project, name: 'Rows Sprint',
   goal: 'g', startDate: today, endDate: plus(10), status: 'ACTIVE',
 });
@@ -161,7 +161,8 @@ console.log('\n===== the dashboard "My Tasks" rows');
   const boxes = await page.locator('[role="checkbox"]').count();
   console.log(`   checkboxes in the task list: ${boxes}`);
   rec(boxes === 0, 'the checkbox that could not be ticked is gone', `${boxes} remain`);
-  const opener = page.getByRole('button', { name: /^Open task: Reachable task 1$/ }).first();
+  // The row goes to a page, so its named action is a link (RowLink).
+  const opener = page.getByRole('link', { name: /^Open task: Reachable task 1$/ }).first();
   rec(await opener.count() > 0, 'the row offers a named action instead', String(await opener.count()));
   if (await opener.count()) {
     await opener.focus();
@@ -174,18 +175,19 @@ console.log('\n===== the dashboard "My Tasks" rows');
 }
 
 // ---- the other three rows --------------------------------------------------
-for (const [route, label, prep] of [
+// A row that opens a dialog is labelled by a button; one that goes to a page, by a link.
+for (const [route, label, prep, kind] of [
   ['/requirements', /^Open requirement: Reachable requirement$/, async () => {
     await page.waitForTimeout(3000);
-  }],
-  ['/sprints', /^Open sprint board: Rows Sprint$/, async () => {}],
+  }, 'button'],
+  ['/sprints', /^Open sprint board: Rows Sprint$/, async () => {}, 'link'],
 ]) {
   console.log(`\n===== ${route}`);
   await visit(page, route, 6000);
   await prep();
-  const btn = page.getByRole('button', { name: label }).first();
+  const btn = page.getByRole(kind, { name: label }).first();
   const n = await btn.count();
-  const labelled = await page.locator('button[aria-label^="Open "]').evaluateAll(
+  const labelled = await page.locator('button[aria-label^="Open "], a[aria-label^="Open "]').evaluateAll(
     (els) => els.map((e) => e.getAttribute('aria-label')),
   );
   rec(n > 0, `${route} row offers a named keyboard action`,

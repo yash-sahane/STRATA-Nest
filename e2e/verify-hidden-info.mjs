@@ -77,7 +77,8 @@ console.log('\n===== the theme toggle');
 console.log('\n===== the "+N" label badge');
 {
   const { ctx, page } = await signedInPage(browser, 'role.manager@strata.local', p.ws);
-  await visit(page, `/tasks?projectId=${p.project}`, 9000);
+  // All tasks: the manager filed it for the developer, and "my tasks" are the ones assigned to me.
+  await visit(page, `/tasks?projectId=${p.project}&scope=all`, 9000);
   const overflow = await page.evaluate(() => {
     const badge = [...document.querySelectorAll('*')].find(
       (el) => el.children.length === 0 && /^\+\d+$/.test((el.textContent ?? '').trim()),
