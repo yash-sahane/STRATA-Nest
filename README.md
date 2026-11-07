@@ -107,6 +107,9 @@ Known and deliberately left:
 | `braces` GHSA-vfj7-8cjw-p6xm (high) | No patched release exists. Development tooling only (jest, typescript-eslint, the Nest CLI) — absent from every production dependency closure — so it is listed in `pnpm.auditConfig.ignoreGhsas`. Remove that entry when a fix ships. |
 | `@nestjs/core` GHSA-36xv-jgw5-4q75 (moderate) | Fixed only in Nest 11. Needs the framework's major upgrade. |
 | `file-type` (moderate, 2) | Fixed only in v21, a major. Reached through `@nestjs/common`'s `FileTypeValidator`, which the API does not use. |
+| `zod` GHSA-mrhx-c7xc-m3w5 (high) | Fixed only in zod 4, a major that also needs `@hookform/resolvers` 5. Zod checks the server's own environment at start-up and each user's form input in their own browser; no request to the API or to the frontend's server routes is validated with it. Listed in `pnpm.auditConfig.ignoreGhsas`; remove that entry with the zod 4 upgrade. |
+| `glob`, `minimatch` (moderate) | Fixed only in new majors (glob 14, minimatch 11). Development tooling only: the Nest CLI and typescript-eslint. |
+| `deepmerge` (low) | No patched release exists. Development tooling only (jest, the Nest CLI). |
 
 ## Configuration
 All env is validated at boot by `@strata/config`. In **production** the app refuses
