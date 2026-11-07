@@ -65,10 +65,12 @@ describe('Auth (e2e)', () => {
     expect(res.status).toBe(404);
   });
 
-  it('rejects bad credentials with a 400 error envelope', async () => {
+  it('rejects bad credentials with a 401 AuthenticationFailed error envelope', async () => {
     const res = await login('wrong-password');
-    expect(res.status).toBe(400);
-    expect(res.body).toHaveProperty('error.code', 400);
+    expect(res.status).toBe(401);
+    expect(res.body).toHaveProperty('error.code', 401);
+    expect(res.body).toHaveProperty('error.type', 'AuthenticationFailed');
+    expect(res.body).toHaveProperty('error.message', ['Invalid email or password']);
   });
 
   it('login sets both cookies (HttpOnly, Path=/, SameSite=Lax) and returns {user, sessionId}', async () => {
@@ -131,7 +133,7 @@ describe('Auth (e2e)', () => {
     expect(ok.status).toBe(200);
     expect(ok.body).toEqual({ ok: true });
 
-    expect((await login(password)).status).toBe(400); // old password rejected
+    expect((await login(password)).status).toBe(401); // old password rejected
     expect((await login('Newpass!2')).status).toBe(200); // new password accepted
   });
 

@@ -1,0 +1,11 @@
+-- An audit row may now name no user.
+--
+-- A task moved by a commit whose author has no account in the workspace (an outside
+-- contributor, GitHub's no-reply address, a commit from before the worker sent the
+-- address) is still a move worth recording: the row keeps the commit and the name it
+-- gave. `user_id` was NOT NULL with a foreign key to accounts_user, so that row could
+-- not be written at all, and those moves silently never reached the audit trail.
+--
+-- The foreign key stays: NULL satisfies it, and every other row still names a real
+-- account. The API keeps answering `userId` as a string ('' for nobody), as v1 has.
+ALTER TABLE "activity_activitylog" ALTER COLUMN "user_id" DROP NOT NULL;

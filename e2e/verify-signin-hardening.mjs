@@ -124,14 +124,16 @@ console.log('===== ten wrong guesses at one account, and it takes no more');
   const target = `e2e.lockout.${Date.now()}@strata.local`;
   const statuses = [];
   for (let i = 0; i < 10; i += 1) statuses.push((await attempt(target, `Wrong-Guess-${i}`)).s);
-  rec(statuses.every((s) => s === 400), 'ten wrong guesses are each answered "invalid email or password"',
+  // 401, not the 400 "ValidationError" this used to be: the request was well
+  // formed, the credentials in it were wrong.
+  rec(statuses.every((s) => s === 401), 'ten wrong guesses are each answered 401 "invalid email or password"',
     JSON.stringify(statuses));
   const eleventh = await attempt(target, 'Wrong-Guess-10');
   rec(eleventh.paused && /minute/.test(eleventh.t),
     'the eleventh is not looked at: the account is paused, and says for how long',
     `${eleventh.s} ${eleventh.t.slice(0, 220)}`);
   const other = await attempt(`e2e.lockout.other.${Date.now()}@strata.local`, 'Wrong-Guess');
-  rec(other.s === 400 && !other.paused, 'another account is not paused with it', `${other.s} ${other.t.slice(0, 160)}`);
+  rec(other.s === 401 && !other.paused, 'another account is not paused with it', `${other.s} ${other.t.slice(0, 160)}`);
 }
 
 // ---- a colleague cannot lock you out; a new password lets you back in ------------------

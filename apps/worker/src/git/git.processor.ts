@@ -159,7 +159,15 @@ export class GitProcessor implements OnModuleInit, OnModuleDestroy {
       provider === 'GITLAB'
         ? await this.prisma.gitLabIntegration.findUnique({ where: { projectId } })
         : null;
-    const autoUpdate = Boolean(github?.autoUpdateStatus || gitlab?.autoUpdateStatus);
+    // An archived project is read-only: nobody may change its tasks through the
+    // API, and a push is not an exception. Its commits are still recorded and
+    // linked — the repository went on without the board — but no task moves.
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: { status: true },
+    });
+    const archived = project?.status === 'ARCHIVED';
+    const autoUpdate = !archived && Boolean(github?.autoUpdateStatus || gitlab?.autoUpdateStatus);
 
     let recorded = 0;
     let linked = 0;
@@ -279,8 +287,10 @@ export class GitProcessor implements OnModuleInit, OnModuleDestroy {
       kind: 'tasks.moved_by_commit',
       id: randomUUID(),
       projectId,
-      moves: moved.map((task) => ({ taskId: task.id, from: task.status })),
-      commit: { sha: commit.sha, author: commit.author },
+      moves: moved.map((task) => ({ taskId: task.id, from: task.status, to: 'REVIEW' })),
+      // The address as well as the name: it is what the API matches to a
+      // member, so the audit trail can say who moved the task.
+      commit: { sha: commit.sha, author: commit.author, authorEmail: commit.authorEmail },
     };
     try {
       // BullMQ types its connection by the commands BullMQ itself uses; the

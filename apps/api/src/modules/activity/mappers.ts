@@ -8,7 +8,9 @@ export function activityLogResponse(a: ActivityLog) {
   return {
     id: String(a.id),
     workspaceId: a.workspaceId,
-    userId: a.userId,
+    // Null in the table for an act no account did (a commit by a non-member);
+    // the v1 wire has always carried a string here, and '' says "nobody".
+    userId: a.userId ?? '',
     action: a.action,
     entityType: a.entityType,
     entityId: a.entityId,

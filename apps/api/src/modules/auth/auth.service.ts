@@ -1,4 +1,4 @@
-import { BadRequestException, HttpException, HttpStatus, Injectable } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '@strata/prisma';
 import type { User } from '@prisma/client';
@@ -103,11 +103,18 @@ export class AuthService {
     const verified = user
       ? await this.passwords.verify(password, user.password)
       : await this.passwords.verifyDecoy(password);
-    // Frozen contract: 400 ValidationError (message is a list) on any login failure.
+    // One answer for every way the credentials can be wrong — no such account,
+    // wrong password, account switched off — so it says nothing about which.
+    // A 401 AuthenticationFailed, the message still a list: this was a 400
+    // ValidationError, kept from the API this one replaced, which told every
+    // client "your request was malformed" about a request that was fine — the
+    // credentials in it were not. The web client sends no refresh for a 401
+    // from /auth/login (rest-client NO_REFRESH_RETRY): it is the answer, not an
+    // expired session.
     if (!user || !verified || !user.isActive) {
       await this.attempts.recordFailure(emailKey, address);
       this.audit.loginFailure(email);
-      throw new BadRequestException({ message: ['Invalid email or password'], type: 'ValidationError' });
+      throw new UnauthorizedException({ message: ['Invalid email or password'], type: 'AuthenticationFailed' });
     }
     await this.attempts.clear(emailKey);
     // A hash made with fewer iterations than today's is replaced while the

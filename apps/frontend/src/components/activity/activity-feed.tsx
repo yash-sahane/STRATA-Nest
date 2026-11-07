@@ -113,6 +113,11 @@ const ACTIVITY_CONFIG: Record<string, ActivityConfig> = {
   'sprint.started': { icon: PlayCircle, color: 'text-sky-500', label: 'Sprint Started' },
   'sprint.completed': { icon: PartyPopper, color: 'text-emerald-700 dark:text-emerald-500', label: 'Sprint Completed' },
 
+  // A commit that said "fixes #ID" moved the task — the worker's doing, written
+  // down by the API's WorkerEventsBridge. The row names the commit
+  // (`metadata.commitSha`, shown beside the label) and the name its author gave.
+  'task.moved_by_commit': { icon: GitBranch, color: 'text-sky-500', label: 'Moved to Review by Commit' },
+
   // Plain CRUD on the planning domain, written by ScopedCrudService for every
   // collection that opts in via `auditEntity`. The `<entity>.<created|updated|
   // deleted>` shape means one entry per verb; anything not listed still renders
@@ -288,7 +293,14 @@ export function ActivityFeed({ workspaceId, showFilters = true, className }: Act
   const { data: teamMembers = [] } = useTeamMembers(workspaceId);
   const nameOf = React.useMemo(() => {
     const byId = new Map(teamMembers.map((m) => [m.userId, m.name || m.email || 'Someone']));
-    return (userId: string) => byId.get(userId) ?? 'Someone';
+    // A move made by a commit whose author has no account here is recorded with
+    // no user: the name the commit gave is still somebody, where "Someone" is not.
+    return (activity: ActivityLog) => {
+      const member = byId.get(activity.userId);
+      if (member) return member;
+      const author = activity.metadata?.commitAuthor;
+      return typeof author === 'string' && author ? author : 'Someone';
+    };
   }, [teamMembers]);
 
   // Only actions that have actually been recorded, so the picker never offers an
@@ -375,7 +387,7 @@ export function ActivityFeed({ workspaceId, showFilters = true, className }: Act
               {activities.map((activity) => {
                 const config = configFor(activity.action);
                 const Icon = config.icon;
-                const userName = nameOf(activity.userId);
+                const userName = nameOf(activity);
 
                 return (
                   <div
@@ -406,6 +418,17 @@ export function ActivityFeed({ workspaceId, showFilters = true, className }: Act
                           <span className="text-sm text-muted-foreground">
                             {config.label.toLowerCase()}
                           </span>
+                          {/* Which commit, for a move a commit made: the short
+                              form people quote, the whole sha on hover. */}
+                          {typeof activity.metadata?.commitSha === 'string' &&
+                            activity.metadata.commitSha && (
+                              <code
+                                className="shrink-0 rounded bg-muted px-1 font-mono text-xs"
+                                title={activity.metadata.commitSha}
+                              >
+                                {activity.metadata.commitSha.slice(0, 7)}
+                              </code>
+                            )}
                           {/* Which epic, which task. The server records a
                               title/name on the row it audits, and without this
                               every entry read "someone created a task" with no

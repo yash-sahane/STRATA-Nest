@@ -84,16 +84,49 @@ describe('AuthService — sign-in does not say who has an account', () => {
   // An unknown address used to skip the hash entirely and answer at once.
   it('pays for a hash when the address has no account', async () => {
     const { svc, passwords, attempts } = build({ account: null });
-    await expect(svc.login('nobody@corp.com', 'guess')).rejects.toMatchObject({ status: 400 });
+    await expect(svc.login('nobody@corp.com', 'guess')).rejects.toMatchObject({ status: 401 });
     expect(passwords.verifyDecoy).toHaveBeenCalledWith('guess');
     expect(attempts.recordFailure).toHaveBeenCalled();
   });
 
   it('checks a real account against its own hash, not the decoy', async () => {
     const { svc, passwords } = build({ verifies: false });
-    await expect(svc.login('asha@corp.com', 'guess')).rejects.toMatchObject({ status: 400 });
+    await expect(svc.login('asha@corp.com', 'guess')).rejects.toMatchObject({ status: 401 });
     expect(passwords.verify).toHaveBeenCalledWith('guess', user.password);
     expect(passwords.verifyDecoy).not.toHaveBeenCalled();
+  });
+
+  // It was a 400 ValidationError: "your request is malformed", about a request
+  // that was fine. Whichever way the credentials are wrong, the answer is the
+  // same 401 — a difference between them would say which one it was.
+  it('answers every wrong sign-in with one 401 AuthenticationFailed', async () => {
+    const answers = await Promise.all(
+      [
+        build({ account: null }),
+        build({ verifies: false }),
+        build({ account: { ...user, isActive: false } as User }),
+      ].map(({ svc }) =>
+        svc.login('asha@corp.com', 'guess').then(
+          () => null,
+          (err: { getStatus(): number; getResponse(): unknown }) => ({
+            status: err.getStatus(),
+            body: err.getResponse(),
+          }),
+        ),
+      ),
+    );
+    for (const answer of answers) {
+      expect(answer).toEqual({
+        status: 401,
+        body: { message: ['Invalid email or password'], type: 'AuthenticationFailed' },
+      });
+    }
+  });
+
+  it('still pauses an account that has had too many wrong guesses, with a 429', async () => {
+    const { svc, passwords } = build({ lockedFor: 120 });
+    await expect(svc.login('asha@corp.com', 'the-password')).rejects.toMatchObject({ status: 429 });
+    expect(passwords.verify).not.toHaveBeenCalled();
   });
 });
 

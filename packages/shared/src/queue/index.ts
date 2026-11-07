@@ -62,8 +62,16 @@ export interface TasksMovedByCommit {
   /** Unique per message: every API instance hears it, and only the first acts on it. */
   id?: string;
   projectId: string;
-  moves: Array<{ taskId: string; from: string }>;
-  commit: { sha: string; author: string };
+  /** `to` is where the worker put the task (Review); absent from a worker older than this. */
+  moves: Array<{ taskId: string; from: string; to?: string }>;
+  /**
+   * Who wrote the commit, as the push payload says. The name alone could not
+   * be matched to anybody, so the audit trail had no row for these moves at
+   * all; the address is what the API matches to a workspace member. Optional:
+   * a worker older than this does not send it, and the move is still recorded,
+   * under the name.
+   */
+  commit: { sha: string; author: string; authorEmail?: string };
 }
 
 /** Job name used when adding to the git queue. */

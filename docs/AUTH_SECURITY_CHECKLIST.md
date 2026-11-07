@@ -41,7 +41,7 @@
 - ⏳ Confirm end-to-end via the browser checklist; the reset email is queued via the worker; the token flow itself is complete.
 
 ## Credential enumeration — ✅
-- Login failure returns a generic `Invalid email or password` (400) regardless of which factor failed; reset is constant-time. (ASVS 2.2.1)
+- Login failure returns a generic `Invalid email or password` (401 `AuthenticationFailed`) regardless of which factor failed — unknown address, wrong password or switched-off account — and pays for a password hash either way; reset is constant-time. (ASVS 2.2.1)
 
 ## Brute-force / rate limiting — ✅ (🟡 storage + lockout)
 - **Implemented** via `@nestjs/throttler` (`AuthThrottlerGuard`, global, runs **before** auth): login 5/min·IP, refresh 20/min·IP, password-reset 3/hr·(IP+email); env-configurable (`THROTTLE_*`). Honors `X-Forwarded-For`. Unit-tested (tracker) — [`auth-throttler.guard.spec.ts`](../apps/api/src/throttling/auth-throttler.guard.spec.ts). (ASVS 2.2.1)

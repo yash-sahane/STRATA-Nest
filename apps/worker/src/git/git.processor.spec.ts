@@ -111,6 +111,7 @@ function makeProcessor(
     gitLabIntegration: { findUnique: jest.fn().mockResolvedValue(null) },
     discordIntegration: { findUnique: jest.fn().mockResolvedValue(null) },
     gitCommit: { createMany, updateMany: commitUpdateMany },
+    project: { findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }) },
     task: { findMany, updateMany, count },
     functionalRequirement: {
       findUnique: jest.fn().mockResolvedValue({ status: 'APPROVED', progress: 0 }),
@@ -198,6 +199,45 @@ describe('GitProcessor.handle', () => {
     });
     await proc.handle(job('fixes #ABC-12'));
     expect(updateMany).not.toHaveBeenCalled();
+  });
+
+  // Archived is read-only through the API; a push is not a way around that.
+  it('records and links a commit to an archived project, but moves none of its tasks', async () => {
+    const { proc, updateMany, createMany } = makeProcessor({
+      project: { findUnique: jest.fn().mockResolvedValue({ status: 'ARCHIVED' }) },
+    });
+    const res = await proc.handle(job('fixes #ABC-12'));
+    expect(createMany).toHaveBeenCalledTimes(1);
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(res).toEqual({ recorded: 1, linked: 1 });
+  });
+
+  // The API matches the address to a member, for the audit trail; the name
+  // alone matched nobody, and the move left no row in it at all.
+  it('says what it moved, where to, and who wrote the commit — name and address', async () => {
+    const { proc } = makeProcessor();
+    const publish = jest.fn().mockResolvedValue(1);
+    (proc as unknown as { worker: unknown }).worker = { client: Promise.resolve({ publish }) };
+    await proc.handle(job('fixes #ABC-12'));
+    expect(publish).toHaveBeenCalledTimes(1);
+    const [channel, raw] = publish.mock.calls[0] as [string, string];
+    expect(channel).toBe('strata:worker-events');
+    expect(JSON.parse(raw)).toMatchObject({
+      kind: 'tasks.moved_by_commit',
+      projectId: 'p1',
+      moves: [{ taskId: 'task-1', from: 'TODO', to: 'REVIEW' }],
+      commit: { sha: 'sha1', author: 'A', authorEmail: 'a@b.c' },
+    });
+  });
+
+  it('announces nothing for an archived project, since nothing moved', async () => {
+    const { proc } = makeProcessor({
+      project: { findUnique: jest.fn().mockResolvedValue({ status: 'ARCHIVED' }) },
+    });
+    const publish = jest.fn().mockResolvedValue(1);
+    (proc as unknown as { worker: unknown }).worker = { client: Promise.resolve({ publish }) };
+    await proc.handle(job('fixes #ABC-12'));
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it('posts to Discord only when the stored URL is Discord’s', async () => {
