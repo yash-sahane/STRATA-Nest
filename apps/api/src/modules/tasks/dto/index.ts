@@ -1,10 +1,8 @@
 import {
   IsArray,
   IsIn,
-  IsInt,
   IsNotEmpty,
   IsNumber,
-  IsObject,
   IsOptional,
   IsString,
   Max,
@@ -20,11 +18,20 @@ import { BasedOn, StrictString, TrimmedText } from '@strata/common';
 export const TASK_STATUSES = ['BACKLOG', 'TODO', 'IN_PROGRESS', 'REVIEW', 'DONE'] as const;
 export const TASK_PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] as const;
 
+/**
+ * One label: "colour:text". Checked item by item because `@IsArray()` alone let
+ * `labels: [42]` or `[{}]` be stored, and every board then called `.split` on it
+ * and crashed — for everybody who opened the project, not only the sender.
+ * 100 characters, the same cap as an id: a label is a word or two on a card.
+ */
+export const LABEL_MAX_LENGTH = 100;
+
 // --- Task ---
 export class CreateTaskDto {
   @IsString() workspaceId!: string;
   @IsString() projectId!: string;
-  @IsString() @MaxLength(100) hierarchyId!: string;
+  /** Left out, the server mints one (generation/hierarchy-ids.ts). */
+  @IsOptional() @IsString() @MaxLength(100) hierarchyId?: string;
   @StrictString() @TrimmedText() @IsString() @IsNotEmpty() @MaxLength(500) title!: string;
   @IsOptional() @IsString() sprintId?: string;
   @IsOptional() @IsString() epicId?: string;
@@ -33,18 +40,12 @@ export class CreateTaskDto {
   @IsOptional() @IsString() description?: string;
   @IsOptional() @IsIn(TASK_STATUSES) status?: string;
   @IsOptional() @IsIn(TASK_PRIORITIES) priority?: string;
+  /** Who does it. Their names, and who assigned them, are the server's to write. */
   @IsOptional() @IsArray() assigneeIds?: string[];
-  @IsOptional() @IsString() assignedBy?: string;
-  @IsOptional() @IsString() assignedByName?: string;
-  @IsOptional() @IsArray() assignedTo?: string[];
-  @IsOptional() @IsArray() assignedToNames?: string[];
-  @IsOptional() @IsArray() watcherIds?: string[];
   @IsOptional() @IsString() dueDate?: string;
   @IsOptional() @IsNumber() @Min(0) @Max(10_000) estimatedHours?: number;
-  @IsOptional() @IsNumber() @Min(0) @Max(10_000) actualHours?: number;
-  @IsOptional() @IsArray() labels?: unknown[];
-  @IsOptional() @IsArray() attachments?: unknown[];
-  @IsOptional() @IsObject() customFields?: Record<string, unknown>;
+  @IsOptional() @IsArray() @IsString({ each: true }) @MaxLength(LABEL_MAX_LENGTH, { each: true })
+  labels?: string[];
   @IsOptional() @IsNumber() position?: number;
   // blockedBy/blocks are NOT accepted on create, for the same reason PATCH
   // rejects them: each is only half of an edge. Writing one side alone leaves
@@ -68,18 +69,21 @@ export class UpdateTaskDto {
   @IsOptional() @IsIn(TASK_STATUSES) status?: string;
   @IsOptional() @IsIn(TASK_PRIORITIES) priority?: string;
   @IsOptional() @IsArray() assigneeIds?: string[];
-  @IsOptional() @IsString() assignedBy?: string;
-  @IsOptional() @IsString() assignedByName?: string;
-  @IsOptional() @IsArray() assignedTo?: string[];
-  @IsOptional() @IsArray() assignedToNames?: string[];
-  @IsOptional() @IsArray() watcherIds?: string[];
   @IsOptional() @IsString() dueDate?: string;
   @IsOptional() @IsNumber() @Min(0) @Max(10_000) estimatedHours?: number;
-  @IsOptional() @IsNumber() @Min(0) @Max(10_000) actualHours?: number;
-  @IsOptional() @IsArray() labels?: unknown[];
-  @IsOptional() @IsArray() attachments?: unknown[];
-  @IsOptional() @IsObject() customFields?: Record<string, unknown>;
+  @IsOptional() @IsArray() @IsString({ each: true }) @MaxLength(LABEL_MAX_LENGTH, { each: true })
+  labels?: string[];
   @IsOptional() @IsNumber() position?: number;
+  /**
+   * Where a dragged card lands, named by the card it now sits in front of — or
+   * '' for the end of its column. The server works out `position` from the
+   * neighbours as they are stored (see TasksService.placedPosition), so a drop
+   * is ONE write. Boards used to send a rank instead: a rank within whatever
+   * the board happened to show, written over positions that are project-wide,
+   * which then took a PATCH of every other card in the column to make true.
+   * Wins over `position` when both are sent.
+   */
+  @IsOptional() @IsString() placeBefore?: string;
   @IsOptional() @IsArray() blockedBy?: string[];
   @IsOptional() @IsArray() blocks?: string[];
 }
@@ -109,42 +113,12 @@ export class CreateTaskCommentDto {
   // bare HTTP 500, and a whitespace-only one posted an empty bubble.
   @StrictString() @TrimmedText() @IsString() @IsNotEmpty() @MaxLength(10_000) content!: string;
   @IsOptional() @IsArray() mentions?: unknown[];
-  @IsOptional() @IsArray() attachments?: unknown[];
 }
 export class UpdateTaskCommentDto {
-  @IsOptional() @IsString() content?: string;
+  // The same rules as posting one. An edit skipped all three, so a comment
+  // could be emptied to a blank bubble, padded with spaces, or rewritten past
+  // the cap that a new comment is held to.
+  @StrictString() @TrimmedText() @IsOptional() @IsString() @IsNotEmpty() @MaxLength(10_000)
+  content?: string;
   @IsOptional() @IsArray() mentions?: unknown[];
-  @IsOptional() @IsArray() attachments?: unknown[];
-}
-
-// --- Kanban column (unscoped) ---
-export class CreateKanbanColumnDto {
-  @IsString() projectId!: string;
-  @IsString() @MaxLength(100) name!: string;
-  @IsString() status!: string;
-  @IsOptional() @IsInt() wipLimit?: number;
-  @IsOptional() @IsNumber() position?: number;
-  @IsOptional() @IsString() color?: string;
-}
-export class UpdateKanbanColumnDto {
-  @IsOptional() @IsString() @MaxLength(100) name?: string;
-  @IsOptional() @IsString() status?: string;
-  @IsOptional() @IsInt() wipLimit?: number;
-  @IsOptional() @IsNumber() position?: number;
-  @IsOptional() @IsString() color?: string;
-}
-
-// --- Label (workspace-scoped) ---
-export class CreateLabelDto {
-  @IsString() workspaceId!: string;
-  @IsString() @MaxLength(100) name!: string;
-  @IsString() color!: string;
-  @IsOptional() @IsString() projectId?: string;
-  @IsOptional() @IsString() description?: string;
-}
-export class UpdateLabelDto {
-  @IsOptional() @IsString() @MaxLength(100) name?: string;
-  @IsOptional() @IsString() color?: string;
-  @IsOptional() @IsString() projectId?: string;
-  @IsOptional() @IsString() description?: string;
 }

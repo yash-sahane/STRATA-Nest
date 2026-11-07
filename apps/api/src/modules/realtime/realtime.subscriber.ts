@@ -1,9 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import {
+  AuthEvents,
   PlanningEvents,
   WorkspaceEvents,
   type DomainEvent,
+  type SessionsRevokedPayload,
   type JoinRequestHandledPayload,
   type SprintLifecyclePayload,
   type WorkspaceMemberAddedPayload,
@@ -26,19 +28,22 @@ export class RealtimeSubscriber {
     });
   }
 
-  @OnEvent(WorkspaceEvents.InvitationAccepted)
-  onInvitationAccepted(e: DomainEvent<{ workspaceId: string; userId: string }>): void {
-    this.realtime.emitEvent('workspace_members', e.name, e.payload.userId, e.payload.workspaceId, {
-      ...e.payload,
-    });
-  }
-
+  /**
+   * Join requests are read by `join:manage` holders and their author only, so
+   * the frame carries the id and nothing else (ID_ONLY_COLLECTIONS) — it used
+   * to name the requester to every member subscribed to the channel.
+   */
   @OnEvent(WorkspaceEvents.JoinRequestApproved)
   @OnEvent(WorkspaceEvents.JoinRequestRejected)
   onJoinHandled(e: DomainEvent<JoinRequestHandledPayload>): void {
     this.realtime.emitEvent('join_requests', e.name, e.payload.requestId, e.payload.workspaceId, {
-      ...e.payload,
+      id: e.payload.requestId,
     });
+  }
+
+  @OnEvent(AuthEvents.SessionsRevoked)
+  onSessionsRevoked(e: DomainEvent<SessionsRevokedPayload>): void {
+    this.realtime.disconnectUser(e.payload.userId);
   }
 
   @OnEvent(PlanningEvents.SprintStarted)

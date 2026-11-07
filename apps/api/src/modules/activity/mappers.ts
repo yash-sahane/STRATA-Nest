@@ -1,5 +1,5 @@
 import { formatApiTimestamp } from '@strata/common';
-import type { ActivityLog, Prisma, SavedSearch } from '@prisma/client';
+import type { ActivityLog, Prisma } from '@prisma/client';
 
 const asJson = (v: Prisma.JsonValue): unknown => v ?? {};
 
@@ -16,19 +16,5 @@ export function activityLogResponse(a: ActivityLog) {
     metadata: asJson(a.metadata),
     createdAt: formatApiTimestamp(a.createdAt),
     updatedAt: formatApiTimestamp(a.updatedAt),
-  };
-}
-
-/** The API's SavedSearch field order (createdAt/updatedAt appended last). */
-export function savedSearchResponse(s: SavedSearch) {
-  return {
-    id: String(s.id),
-    workspaceId: s.workspaceId,
-    userId: s.userId,
-    name: s.name,
-    query: s.query,
-    filters: asJson(s.filters),
-    createdAt: formatApiTimestamp(s.createdAt),
-    updatedAt: formatApiTimestamp(s.updatedAt),
   };
 }

@@ -1,24 +1,20 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Put, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import type { User } from '@prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Permission } from '../authz/permissions';
 import { RequirePermission } from '../authz/require-permission.decorator';
 import {
-  CreateKanbanColumnDto,
-  CreateLabelDto,
   CreateTaskCommentDto,
   CreateTaskDto,
   TaskDependencyDto,
   TaskDependencyQueryDto,
-  UpdateKanbanColumnDto,
-  UpdateLabelDto,
   UpdateTaskCommentDto,
   UpdateTaskDto,
 } from './dto';
 import { TaskDeletionService } from '../deletion/task-deletion.service';
-import { LabelsService, TasksService } from './tasks.services';
-import { KanbanColumnsService, TaskCommentsService } from './unscoped.services';
+import { TasksService } from './tasks.services';
+import { TaskCommentsService } from './unscoped.services';
 
 type Q = Record<string, string | string[] | undefined>;
 
@@ -30,10 +26,11 @@ export class TasksController {
     private readonly deletion: TaskDeletionService,
   ) {}
   @Get() list(@CurrentUser() u: User, @Query() q: Q) { return this.svc.list(u, q); }
-  @Post() @RequirePermission(Permission.TaskWrite) create(@CurrentUser() u: User, @Body() d: CreateTaskDto) { return this.svc.create(u, d); }
+  /** Each person's open, finished and overdue tasks in a workspace — counted here. */
+  @Get('summary') summary(@CurrentUser() u: User, @Query('workspaceId') workspaceId: string) { return this.svc.summary(u, workspaceId); }
+  @Post() @RequirePermission(Permission.TaskCreate) create(@CurrentUser() u: User, @Body() d: CreateTaskDto) { return this.svc.create(u, d); }
   @Get(':id') get(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.retrieve(u, id); }
   @Patch(':id') patch(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateTaskDto) { return this.svc.patch(u, id, d); }
-  @Put(':id') put(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateTaskDto) { return this.svc.patch(u, id, d); }
   /**
    * Dependency edges. Both halves (`blockedBy` on one task, `blocks` on the
    * other) are written in one transaction and the add is cycle-checked, which
@@ -45,19 +42,7 @@ export class TasksController {
   @Delete(':id') @HttpCode(204) remove(@CurrentUser() u: User, @Param('id') id: string) { return this.deletion.delete(u, id); }
 }
 
-@ApiTags('labels')
-@Controller('labels')
-export class LabelsController {
-  constructor(private readonly svc: LabelsService) {}
-  @Get() list(@CurrentUser() u: User, @Query() q: Q) { return this.svc.list(u, q); }
-  @Post() @RequirePermission(Permission.TaskWrite) create(@CurrentUser() u: User, @Body() d: CreateLabelDto) { return this.svc.create(u, d); }
-  @Get(':id') get(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.retrieve(u, id); }
-  @Patch(':id') patch(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateLabelDto) { return this.svc.patch(u, id, d); }
-  @Put(':id') put(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateLabelDto) { return this.svc.patch(u, id, d); }
-  @Delete(':id') @HttpCode(204) remove(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.remove(u, id); }
-}
-
-// --- Parent-scoped through Task / Project (membership-checked) ---
+// --- Parent-scoped through Task (membership-checked) ---
 
 @ApiTags('task_comments')
 @Controller('task_comments')
@@ -67,18 +52,5 @@ export class TaskCommentsController {
   @Post() create(@CurrentUser() u: User, @Body() d: CreateTaskCommentDto) { return this.svc.create(u, d); }
   @Get(':id') get(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.retrieve(u, id); }
   @Patch(':id') patch(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateTaskCommentDto) { return this.svc.update(u, id, d); }
-  @Put(':id') put(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateTaskCommentDto) { return this.svc.update(u, id, d); }
-  @Delete(':id') @HttpCode(204) remove(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.remove(u, id); }
-}
-
-@ApiTags('kanban_columns')
-@Controller('kanban_columns')
-export class KanbanColumnsController {
-  constructor(private readonly svc: KanbanColumnsService) {}
-  @Get() list(@CurrentUser() u: User, @Query() q: Q) { return this.svc.list(u, q); }
-  @Post() create(@CurrentUser() u: User, @Body() d: CreateKanbanColumnDto) { return this.svc.create(u, d); }
-  @Get(':id') get(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.retrieve(u, id); }
-  @Patch(':id') patch(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateKanbanColumnDto) { return this.svc.update(u, id, d); }
-  @Put(':id') put(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateKanbanColumnDto) { return this.svc.update(u, id, d); }
   @Delete(':id') @HttpCode(204) remove(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.remove(u, id); }
 }

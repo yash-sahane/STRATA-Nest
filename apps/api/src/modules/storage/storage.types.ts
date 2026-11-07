@@ -9,7 +9,7 @@ export interface StorageDriver {
   save(key: string, data: Buffer, contentType?: string): Promise<void>;
   /** Whole-object read (used where a Buffer is convenient). */
   read(key: string): Promise<Buffer>;
-  /** Streaming read (used by the download/view/preview endpoints). */
+  /** Streaming read (used by the download and view endpoints). */
   createReadStream(key: string): Readable;
   /** Remove the object; must not throw if it is already gone. */
   remove(key: string): Promise<void>;

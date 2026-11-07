@@ -22,7 +22,7 @@ import { FilesService, type UploadPart } from './files.service';
 type Q = Record<string, string | string[] | undefined>;
 
 /**
- * Files: multipart upload + CRUD + streaming (preview/view = inline,
+ * Files: multipart upload + CRUD + streaming (view = inline,
  * download = attachment). Auth + membership scoping only (no role gate);
  * blob IO is delegated to StorageService.
  */
@@ -50,8 +50,6 @@ export class FilesController {
   @Get(':id') get(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.retrieve(u, id); }
   @Delete(':id') @HttpCode(204) remove(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.remove(u, id); }
 
-  @Get(':id/preview') @Header('X-Content-Type-Options', 'nosniff')
-  preview(@CurrentUser() u: User, @Param('id') id: string) { return this.stream(u, id, false); }
 
   @Get(':id/view') @Header('X-Content-Type-Options', 'nosniff')
   view(@CurrentUser() u: User, @Param('id') id: string) { return this.stream(u, id, false); }

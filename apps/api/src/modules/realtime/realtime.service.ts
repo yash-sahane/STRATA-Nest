@@ -4,15 +4,32 @@ import type Redis from 'ioredis';
 import type { RealtimeFrame } from '@strata/shared';
 import { PrismaService, type WriteAction } from '@strata/prisma';
 import { REDIS_CLIENT } from '../../redis/redis.constants';
-import { MODEL_COLLECTION, USER_SCOPED_COLLECTIONS } from './realtime.constants';
+import {
+  ID_ONLY_COLLECTIONS,
+  MODEL_COLLECTION,
+  USER_SCOPED_COLLECTIONS,
+  WORKSPACE_VIA,
+} from './realtime.constants';
 import { SocketRegistry, type SocketInfo } from './socket-registry';
 
 const REDIS_CHANNEL = 'realtime:broadcast';
 const nowIso = (): string => new Date().toISOString();
 
+/** A change to who belongs to a workspace, applied to the socket registry of
+ *  every instance alongside the frame that announces it. */
+interface MembershipChange {
+  userId: string;
+  workspaceId: string;
+  active: boolean;
+}
+
 interface BroadcastMessage {
-  frame: RealtimeFrame;
+  /** Absent on a control message (`disconnectUserId`). */
+  frame?: RealtimeFrame;
   workspaceId?: string;
+  membership?: MembershipChange;
+  /** Close this user's sockets on every instance. */
+  disconnectUserId?: string;
   origin: string;
 }
 
@@ -47,7 +64,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
     this.subscriber.on('message', (_channel, raw) => {
       try {
         const msg = JSON.parse(raw) as BroadcastMessage;
-        if (msg.origin !== this.instanceId) this.broadcastLocal(msg.frame, msg.workspaceId);
+        if (msg.origin !== this.instanceId) this.deliver(msg);
       } catch {
         /* ignore malformed */
       }
@@ -68,7 +85,48 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
   private onWrite(model: string, action: WriteAction, result: unknown): void {
     const collection = MODEL_COLLECTION[model];
     if (!collection) return;
-    const row = (result ?? {}) as { id?: string; workspaceId?: string; userId?: string };
+    const row = (result ?? {}) as {
+      id?: string;
+      workspaceId?: string;
+      userId?: string;
+      status?: string;
+    };
+    if (!row.id) return;
+    const via = WORKSPACE_VIA[model];
+    if (via && row.workspaceId === undefined) {
+      // Look the workspace up, then announce: late by one query, never to the
+      // wrong people. A row whose parent is already gone (a cascade) is dropped
+      // — whoever deleted the parent announced that.
+      void this.workspaceOf(via, row as Record<string, unknown>)
+        .then((workspaceId) => {
+          if (workspaceId) this.announce(model, collection, action, { ...row, workspaceId });
+        })
+        .catch((e: Error) => this.logger.warn(`realtime: ${model} not announced: ${e.message}`));
+      return;
+    }
+    this.announce(model, collection, action, row);
+  }
+
+  private async workspaceOf(
+    via: { parent: 'task' | 'project' | 'self'; key: string },
+    row: Record<string, unknown>,
+  ): Promise<string | undefined> {
+    const id = typeof row[via.key] === 'string' ? (row[via.key] as string) : '';
+    if (!id) return undefined;
+    if (via.parent === 'self') return id;
+    const parent =
+      via.parent === 'task'
+        ? await this.prisma.task.findUnique({ where: { id }, select: { workspaceId: true } })
+        : await this.prisma.project.findUnique({ where: { id }, select: { workspaceId: true } });
+    return parent?.workspaceId || undefined;
+  }
+
+  private announce(
+    model: string,
+    collection: string,
+    action: WriteAction,
+    row: { id?: string; workspaceId?: string; userId?: string; status?: string },
+  ): void {
     if (!row.id) return;
 
     /**
@@ -84,17 +142,39 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
      */
     const unfilterable = row.workspaceId === undefined;
     const minimal: Record<string, unknown> = { id: String(row.id) };
-    if (unfilterable && USER_SCOPED_COLLECTIONS.has(collection) && row.userId !== undefined) {
+    // The recipient travels with every user-scoped frame, the delete included:
+    // without it `isAddressedTo` fails closed, so a notification deleted in one
+    // tab stayed in every other tab of the same person.
+    if (USER_SCOPED_COLLECTIONS.has(collection) && row.userId !== undefined) {
       minimal.userId = row.userId;
     }
+    // The row itself only where every member of the workspace may read it over
+    // REST anyway — see ID_ONLY_COLLECTIONS for the ones that may not.
+    const idOnly = action === 'delete' || unfilterable || ID_ONLY_COLLECTIONS.has(collection);
     const frame: RealtimeFrame = {
       event: `${collection}.${action}`,
       // Minimal/best-effort payload (frontend refetches on the channel).
-      payload: action === 'delete' || unfilterable ? minimal : row,
+      payload: idOnly ? minimal : row,
       channels: [collection, `${collection}.${row.id}`],
       timestamp: nowIso(),
     };
-    this.emit(frame, row.workspaceId);
+    this.emit(frame, row.workspaceId, RealtimeService.membershipChange(model, action, row));
+  }
+
+  /** A write to a membership row decides who may receive this workspace's frames
+   *  from here on. ACTIVE only, the same rule `accessibleWorkspaceIds` applies
+   *  when a socket connects. */
+  private static membershipChange(
+    model: string,
+    action: WriteAction,
+    row: { workspaceId?: string; userId?: string; status?: string },
+  ): MembershipChange | undefined {
+    if (model !== 'WorkspaceMember' || !row.workspaceId || !row.userId) return undefined;
+    return {
+      userId: row.userId,
+      workspaceId: row.workspaceId,
+      active: action !== 'delete' && row.status === 'ACTIVE',
+    };
   }
 
   /** Bridge a business domain event onto a collection channel (RealtimeSubscriber). */
@@ -112,16 +192,50 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Broadcast locally + publish to Redis for other instances. */
-  emit(frame: RealtimeFrame, workspaceId?: string): void {
-    this.broadcastLocal(frame, workspaceId);
-    const msg: BroadcastMessage = { frame, workspaceId, origin: this.instanceId };
+  emit(frame: RealtimeFrame, workspaceId?: string, membership?: MembershipChange): void {
+    this.send({ frame, workspaceId, membership, origin: this.instanceId });
+  }
+
+  /** End a user's live connections everywhere — their sessions were revoked. */
+  disconnectUser(userId: string): void {
+    this.send({ disconnectUserId: userId, origin: this.instanceId });
+  }
+
+  private send(msg: BroadcastMessage): void {
+    this.deliver(msg);
     this.redis.publish(REDIS_CHANNEL, JSON.stringify(msg)).catch(() => undefined);
+  }
+
+  /**
+   * Deliver one message on this instance. Access is granted BEFORE the frame goes
+   * out and revoked AFTER it, so the member the change is about still receives
+   * the frame announcing it — and nothing from that workspace afterwards.
+   */
+  private deliver(msg: BroadcastMessage): void {
+    if (msg.disconnectUserId) {
+      this.registry.closeUser(msg.disconnectUserId);
+      return;
+    }
+    if (!msg.frame) return;
+    const { membership } = msg;
+    if (membership?.active) {
+      this.registry.setMembership(membership.userId, membership.workspaceId, true);
+    }
+    this.broadcastLocal(msg.frame, msg.workspaceId);
+    if (membership && !membership.active) {
+      this.registry.setMembership(membership.userId, membership.workspaceId, false);
+    }
   }
 
   private broadcastLocal(frame: RealtimeFrame, workspaceId?: string): void {
     const data = JSON.stringify(frame);
+    // A user-scoped row is its recipient's whether or not they still belong to
+    // the workspace it was filed under — the notice that says they were removed
+    // is filed under the workspace they lost. REST answers them by recipient
+    // alone, and so does this.
+    const addressed = USER_SCOPED_COLLECTIONS.has(frame.channels[0]);
     for (const [socket, info] of this.registry.entries()) {
-      if (!RealtimeService.canReceive(info, workspaceId)) continue;
+      if (!addressed && !RealtimeService.canReceive(info, workspaceId)) continue;
       if (!RealtimeService.isAddressedTo(info, frame)) continue;
       if (!frame.channels.some((c) => info.channels.has(c))) continue;
       try {
@@ -134,7 +248,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
 
   /** Workspace-membership authorization for a broadcast. */
   static canReceive(info: Pick<SocketInfo, 'workspaceIds'>, workspaceId?: string): boolean {
-    if (workspaceId === undefined) return true; // unscoped resource (comments/kanban) — broadcasts to every connected socket
+    if (workspaceId === undefined) return true; // nothing left that is unscoped: see WORKSPACE_VIA
     if (info.workspaceIds === null) return true; // platform admin
     return info.workspaceIds.has(workspaceId);
   }

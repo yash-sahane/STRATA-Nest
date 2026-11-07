@@ -4,8 +4,9 @@ import { IsOptional, IsString } from 'class-validator';
 export class CreateFileDto {
   @IsOptional() @IsString() id?: string;
   @IsOptional() @IsString() workspaceId?: string;
-  @IsOptional() @IsString() workspace_id?: string;
   @IsOptional() @IsString() projectId?: string;
-  @IsOptional() @IsString() project_id?: string;
+  /** What the file is attached to inside its project: a task, or a client requirement. */
+  @IsOptional() @IsString() taskId?: string;
+  @IsOptional() @IsString() clientRequirementId?: string;
   @IsOptional() @IsString() bucketId?: string;
 }

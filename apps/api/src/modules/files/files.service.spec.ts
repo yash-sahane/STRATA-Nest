@@ -13,16 +13,28 @@ const row = {
   size: BigInt(5),
   workspaceId: 'w1',
   projectId: '',
+  taskId: '',
+  clientRequirementId: '',
   uploadedById: 'u1',
   bucket: 'default',
   createdAt: new Date('2026-02-01'),
   updatedAt: new Date('2026-02-01'),
 };
 
-function build(part: UploadPart | undefined, overrides: Record<string, unknown> = {}) {
+function build(
+  part: UploadPart | undefined,
+  overrides: Record<string, unknown> = {},
+  records: { task?: { projectId: string } | null; clientRequirement?: { projectId: string } | null } = {},
+) {
   const create = jest.fn().mockResolvedValue(row);
   const del = jest.fn().mockResolvedValue(row);
-  const prisma = { uploadedFile: { create, delete: del } } as unknown as PrismaService;
+  const findTask = jest.fn().mockResolvedValue(records.task ?? null);
+  const findRequirement = jest.fn().mockResolvedValue(records.clientRequirement ?? null);
+  const prisma = {
+    uploadedFile: { create, delete: del },
+    task: { findFirst: findTask },
+    clientRequirement: { findFirst: findRequirement },
+  } as unknown as PrismaService;
   const assertMember = jest.fn().mockResolvedValue(undefined);
   // Uploading and deleting now take file:write, which the read-only MEMBER role
   // no longer holds.
@@ -36,7 +48,10 @@ function build(part: UploadPart | undefined, overrides: Record<string, unknown> 
   } as never;
   const save = jest.fn().mockResolvedValue(undefined);
   const storage = { save, url: (k: string) => `media/${k}` } as unknown as StorageService;
-  return { svc: new FilesService(prisma, access, storage), create, save, assertMember, assertPermission, del };
+  return {
+    svc: new FilesService(prisma, access, storage),
+    create, save, assertMember, assertPermission, del, findTask, findRequirement,
+  };
 }
 
 describe('FilesService.create (multipart upload)', () => {
@@ -112,6 +127,50 @@ describe('FilesService.create (multipart upload)', () => {
     // workspaceId '' lands in every user's file list, so it is admin-only.
     await expect(svc.create(user, part, {})).rejects.toThrow(ForbiddenException);
     expect(save).not.toHaveBeenCalled();
+  });
+
+  describe('attached to a task or a client requirement', () => {
+    const part: UploadPart = { originalname: 'shot.png', buffer: Buffer.from('png'), size: 3 };
+    const stored = (create: jest.Mock) =>
+      (create.mock.calls[0][0] as { data: Record<string, string> }).data;
+
+    it("goes in the task's project, found in the upload's own workspace", async () => {
+      const { svc, create, findTask } = build(part, {}, { task: { projectId: 'p1' } });
+      await svc.create(user, part, { workspaceId: 'w1', taskId: 't1' });
+      expect(findTask).toHaveBeenCalledWith({ where: { id: 't1', workspaceId: 'w1' }, select: { projectId: true } });
+      expect(stored(create)).toMatchObject({ projectId: 'p1', taskId: 't1', clientRequirementId: '' });
+    });
+
+    it('goes on a client requirement the same way', async () => {
+      const { svc, create } = build(part, {}, { clientRequirement: { projectId: 'p2' } });
+      await svc.create(user, part, { workspaceId: 'w1', clientRequirementId: 'cr1' });
+      expect(stored(create)).toMatchObject({ projectId: 'p2', taskId: '', clientRequirementId: 'cr1' });
+    });
+
+    it('refuses a task that is not in the workspace, before anything is written', async () => {
+      const { svc, create, save } = build(part, {}, { task: null });
+      await expect(svc.create(user, part, { workspaceId: 'w1', taskId: 'elsewhere' })).rejects.toThrow(
+        'Task not found in this workspace.',
+      );
+      expect(create).not.toHaveBeenCalled();
+      expect(save).not.toHaveBeenCalled();
+    });
+
+    it("refuses a project that is not the task's", async () => {
+      const { svc, create } = build(part, {}, { task: { projectId: 'p1' } });
+      await expect(svc.create(user, part, { workspaceId: 'w1', projectId: 'p9', taskId: 't1' })).rejects.toThrow(
+        'Task belongs to a different project.',
+      );
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it('refuses both at once', async () => {
+      const { svc, create } = build(part, {}, { task: { projectId: 'p1' }, clientRequirement: { projectId: 'p1' } });
+      await expect(
+        svc.create(user, part, { workspaceId: 'w1', taskId: 't1', clientRequirementId: 'cr1' }),
+      ).rejects.toThrow(BadRequestException);
+      expect(create).not.toHaveBeenCalled();
+    });
   });
 
   it('allows a platform admin to upload a global file', async () => {

@@ -1,23 +1,27 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { generateId, paginate, parseListQuery, requiredScopeParam, type ListQuerySpec } from '@strata/common';
+import {
+  generateId,
+  paginate,
+  parseListQuery,
+  pinScopeParam,
+  requiredScopeParam,
+  type ListQuerySpec,
+} from '@strata/common';
 import type { PaginatedResponse } from '@strata/shared';
 import { PrismaService } from '@strata/prisma';
 import type { Prisma, User } from '@prisma/client';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
-import type {
-  CreateKanbanColumnDto,
-  CreateTaskCommentDto,
-  UpdateKanbanColumnDto,
-  UpdateTaskCommentDto,
-} from './dto';
-import { kanbanColumnResponse, taskCommentResponse } from './mappers';
+import { Permission } from '../authz/permissions';
+import type { CreateTaskCommentDto, UpdateTaskCommentDto } from './dto';
+import { taskCommentResponse } from './mappers';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { tellPeople } from '../notifications/notice';
 
 /**
- * TaskComment / KanbanColumn have no workspace column of their own; they are
- * scoped through their parent (Task / Project respectively). Every read/write
- * of a single record verifies the caller is a member of the parent's
- * workspace, so no one can read, edit, or delete another workspace's comment
- * or column by guessing its id.
+ * A TaskComment has no workspace column of its own; it is scoped through its
+ * parent Task. Every read/write of a single record verifies the caller is a
+ * member of the task's workspace, so no one can read, edit, or delete another
+ * workspace's comment by guessing its id.
  */
 @Injectable()
 export class TaskCommentsService {
@@ -29,6 +33,7 @@ export class TaskCommentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly access: WorkspaceAccessService,
+    private readonly events?: EventEmitter2,
   ) {}
 
   async list(
@@ -45,8 +50,15 @@ export class TaskCommentsService {
     // a malformed request deserves.
     const taskId = requiredScopeParam(query.taskId, 'taskId');
     await this.assertTaskAccess(user, taskId);
-    const parsed = parseListQuery(query, this.spec);
-    const where = parsed.where as Prisma.TaskCommentWhereInput;
+    // TaskComment has no workspace column, so the task the caller was just
+    // authorised against is the ONLY scope this list has. It is pinned, not
+    // read back out of the query: `?taskId=<mine>&taskId__ne=x` used to pass the
+    // check on one task and then filter by `{ not: 'x' }` — every comment in
+    // every tenant.
+    const parsed = parseListQuery(pinScopeParam(query, 'taskId', taskId), this.spec);
+    const where: Prisma.TaskCommentWhereInput = {
+      AND: [{ taskId }, parsed.where as Prisma.TaskCommentWhereInput],
+    };
     const [items, total] = await this.prisma.$transaction([
       this.prisma.taskComment.findMany({
         where,
@@ -75,10 +87,42 @@ export class TaskCommentsService {
         userId: user.id, // stamped from the caller
         content: dto.content,
         mentions: (dto.mentions ?? []) as Prisma.InputJsonValue,
-        attachments: (dto.attachments ?? []) as Prisma.InputJsonValue,
       },
     });
+    await this.announceComment(user, dto.taskId);
     return taskCommentResponse(c);
+  }
+
+  /**
+   * A comment is said TO somebody: the people doing the task, and whoever
+   * raised it. It used to be said to nobody — it sat under the task until one
+   * of them happened to open it.
+   */
+  private async announceComment(author: User, taskId: string): Promise<void> {
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId },
+      select: {
+        workspaceId: true,
+        projectId: true,
+        title: true,
+        hierarchyId: true,
+        assigneeIds: true,
+        createdById: true,
+      },
+    });
+    if (!task) return;
+    const assignees = Array.isArray(task.assigneeIds) ? (task.assigneeIds as string[]) : [];
+    tellPeople(this.events, {
+      workspaceId: task.workspaceId,
+      recipients: [...assignees, task.createdById].filter((id): id is string => Boolean(id)),
+      actorId: author.id,
+      type: 'TASK_COMMENT_ADDED',
+      title: `New comment: ${task.title}`,
+      message: `${author.name || author.email} commented on "${task.title}" (${task.hierarchyId})`,
+      projectId: task.projectId,
+      relatedEntityId: taskId,
+      relatedEntityType: 'TASK',
+    });
   }
 
   async update(user: User, id: string, dto: UpdateTaskCommentDto) {
@@ -87,14 +131,43 @@ export class TaskCommentsService {
     const data: Prisma.TaskCommentUpdateInput = {};
     if (dto.content !== undefined) data.content = dto.content;
     if (dto.mentions !== undefined) data.mentions = dto.mentions as Prisma.InputJsonValue;
-    if (dto.attachments !== undefined) data.attachments = dto.attachments as Prisma.InputJsonValue;
     return taskCommentResponse(await this.prisma.taskComment.update({ where: { id: c.id }, data }));
   }
 
+  /**
+   * Its author deletes a comment — and so may whoever may delete tasks in the
+   * workspace (task:write), or a comment nobody else could take down stayed up
+   * whatever it said. Not edit: rewriting somebody's words under their name is
+   * worse than removing them. The author is told who removed it.
+   */
   async remove(user: User, id: string): Promise<void> {
     const c = await this.ensureAccess(user, id);
-    this.assertAuthor(user, c);
+    const byAuthor = c.userId === user.id;
+    const task = byAuthor
+      ? null
+      : await this.prisma.task.findUnique({
+          where: { id: c.taskId },
+          select: { workspaceId: true, projectId: true, title: true, hierarchyId: true },
+        });
+    if (!byAuthor && !this.access.isPlatformAdmin(user)) {
+      if (!task || !(await this.access.can(user, task.workspaceId, Permission.TaskWrite))) {
+        throw new ForbiddenException('You can only delete your own comments.');
+      }
+    }
     await this.prisma.taskComment.delete({ where: { id: c.id } });
+    if (task) {
+      tellPeople(this.events, {
+        workspaceId: task.workspaceId,
+        recipients: [c.userId],
+        actorId: user.id,
+        type: 'TASK_COMMENT_REMOVED',
+        title: `Comment removed: ${task.title}`,
+        message: `${user.name || user.email} removed your comment on "${task.title}" (${task.hierarchyId}).`,
+        projectId: task.projectId,
+        relatedEntityId: c.taskId,
+        relatedEntityType: 'TASK',
+      });
+    }
   }
 
   private async ensureAccess(
@@ -111,16 +184,20 @@ export class TaskCommentsService {
   }
 
   /**
-   * Editing or deleting a comment is the AUTHOR's right alone.
+   * Editing a comment is the AUTHOR's right alone (deleting one, see `remove`).
    *
    * Seeing the parent task is not enough: `ensureAccess` only proves the caller
    * is in the workspace, so without this any member could rewrite or delete
    * anyone else's comment through the API. The UI has always hidden those
    * controls for other people's comments — this makes the server agree, rather
    * than trusting a client that an attacker does not have to use.
+   *
+   * A platform admin included. They were let through here, which put words in
+   * somebody else's mouth under that person's name — the thing `remove` gives
+   * as its reason for allowing a takedown but not an edit. An admin who must
+   * act on a comment deletes it, and its author is told who did.
    */
   private assertAuthor(user: User, comment: { userId: string }): void {
-    if (this.access.isPlatformAdmin(user)) return;
     if (comment.userId !== user.id) {
       throw new ForbiddenException('You can only change your own comments.');
     }
@@ -134,102 +211,6 @@ export class TaskCommentsService {
       select: { workspaceId: true },
     });
     if (!task || !(await this.access.activeMembership(user.id, task.workspaceId))) {
-      throw new NotFoundException('Not found.');
-    }
-  }
-}
-
-@Injectable()
-export class KanbanColumnsService {
-  private readonly spec: ListQuerySpec = {
-    filterable: { projectId: { field: 'projectId' }, status: { field: 'status' } },
-    sortable: { createdAt: 'createdAt', position: 'position' },
-    defaultOrderBy: { position: 'asc' },
-  };
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly access: WorkspaceAccessService,
-  ) {}
-
-  async list(
-    user: User,
-    query: Record<string, string | string[] | undefined>,
-  ): Promise<PaginatedResponse<ReturnType<typeof kanbanColumnResponse>>> {
-    // Same fix as the comment list above: a repeated projectId is still one
-    // project, and a missing one is a malformed request rather than a 404.
-    const projectId = requiredScopeParam(query.projectId, 'projectId');
-    await this.assertProjectAccess(user, projectId);
-    const parsed = parseListQuery(query, this.spec);
-    const where = parsed.where as Prisma.KanbanColumnWhereInput;
-    const [items, total] = await this.prisma.$transaction([
-      this.prisma.kanbanColumn.findMany({
-        where,
-        orderBy: parsed.orderBy as Prisma.KanbanColumnOrderByWithRelationInput[],
-        skip: parsed.skip,
-        take: parsed.take,
-      }),
-      this.prisma.kanbanColumn.count({ where }),
-    ]);
-    return paginate(items.map(kanbanColumnResponse), total, parsed.page, parsed.pageSize);
-  }
-
-  async retrieve(user: User, id: string) {
-    const k = await this.prisma.kanbanColumn.findUnique({ where: { id } });
-    if (!k) throw new NotFoundException('Not found.');
-    await this.assertProjectAccess(user, k.projectId);
-    return kanbanColumnResponse(k);
-  }
-
-  async create(user: User, dto: CreateKanbanColumnDto) {
-    await this.assertProjectAccess(user, dto.projectId);
-    const k = await this.prisma.kanbanColumn.create({
-      data: {
-        id: generateId(),
-        projectId: dto.projectId,
-        name: dto.name,
-        status: dto.status,
-        wipLimit: dto.wipLimit ?? null,
-        position: dto.position ?? 0,
-        color: dto.color ?? '',
-      },
-    });
-    return kanbanColumnResponse(k);
-  }
-
-  async update(user: User, id: string, dto: UpdateKanbanColumnDto) {
-    const k = await this.ensureAccess(user, id);
-    const data: Prisma.KanbanColumnUpdateInput = {};
-    if (dto.name !== undefined) data.name = dto.name;
-    if (dto.status !== undefined) data.status = dto.status;
-    if (dto.wipLimit !== undefined) data.wipLimit = dto.wipLimit;
-    if (dto.position !== undefined) data.position = dto.position;
-    if (dto.color !== undefined) data.color = dto.color;
-    return kanbanColumnResponse(await this.prisma.kanbanColumn.update({ where: { id: k.id }, data }));
-  }
-
-  async remove(user: User, id: string): Promise<void> {
-    const k = await this.ensureAccess(user, id);
-    await this.prisma.kanbanColumn.delete({ where: { id: k.id } });
-  }
-
-  private async ensureAccess(user: User, id: string): Promise<{ id: string; projectId: string }> {
-    const k = await this.prisma.kanbanColumn.findUnique({
-      where: { id },
-      select: { id: true, projectId: true },
-    });
-    if (!k) throw new NotFoundException('Not found.');
-    await this.assertProjectAccess(user, k.projectId);
-    return k;
-  }
-
-  /** Resolve the project's workspace and require the caller to be a member (else 404). */
-  private async assertProjectAccess(user: User, projectId: string): Promise<void> {
-    if (this.access.isPlatformAdmin(user)) return;
-    const project = await this.prisma.project.findUnique({
-      where: { id: projectId },
-      select: { workspaceId: true },
-    });
-    if (!project || !(await this.access.activeMembership(user.id, project.workspaceId))) {
       throw new NotFoundException('Not found.');
     }
   }

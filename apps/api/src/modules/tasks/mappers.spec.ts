@@ -21,17 +21,12 @@ function task(over: Partial<Task> = {}): Task {
     assigneeIds: ['u1'],
     assignedBy: '',
     assignedByName: '',
-    assignedTo: [],
-    assignedToNames: [],
-    watcherIds: [],
+    assigneeNames: [],
     createdById: 'u1',
     createdByName: 'U',
     dueDate: null,
     estimatedHours: null,
-    actualHours: null,
     labels: ['lbl1'],
-    attachments: [],
-    customFields: {},
     position: 0,
     blockedBy: [],
     blocks: [],
@@ -40,7 +35,7 @@ function task(over: Partial<Task> = {}): Task {
 }
 
 describe('taskResponse', () => {
-  it('keeps JSON fields as arrays, maps createdBy, and preserves the 32-field order', () => {
+  it('keeps JSON fields as arrays, maps createdBy, and preserves the field order', () => {
     const r = taskResponse(task({ dueDate: new Date('2026-07-01T09:00:00.000Z') }));
     expect(r.labels).toEqual(['lbl1']);
     expect(r.assigneeIds).toEqual(['u1']);
@@ -51,9 +46,9 @@ describe('taskResponse', () => {
     expect(Object.keys(r)).toEqual([
       'id', 'workspaceId', 'projectId', 'hierarchyId', 'sprintId', 'epicId',
       'functionalRequirementId', 'parentTaskId', 'title', 'description', 'status', 'priority',
-      'assigneeIds', 'assignedBy', 'assignedByName', 'assignedTo', 'assignedToNames', 'watcherIds',
-      'createdBy', 'createdByName', 'dueDate', 'estimatedHours', 'actualHours', 'labels',
-      'attachments', 'customFields', 'position', 'blockedBy', 'blocks', 'completedAt', 'createdAt',
+      'assigneeIds', 'assigneeNames', 'assignedBy', 'assignedByName',
+      'createdBy', 'createdByName', 'dueDate', 'estimatedHours', 'labels',
+      'position', 'blockedBy', 'blocks', 'completedAt', 'createdAt',
       'updatedAt',
     ]);
   });

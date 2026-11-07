@@ -14,6 +14,7 @@ import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { StorageService } from '../storage/storage.service';
 import type { CreateFileDto } from './dto';
 import { uploadedFileResponse } from './mappers';
+import { assertProjectInWorkspace } from '../workspaces/workspace-refs';
 
 /** Longest filename kept, including the extension. */
 const MAX_FILENAME = 200;
@@ -81,6 +82,8 @@ const SPEC: ListQuerySpec = {
   filterable: {
     workspaceId: { field: 'workspaceId' },
     projectId: { field: 'projectId' },
+    taskId: { field: 'taskId' },
+    clientRequirementId: { field: 'clientRequirementId' },
     bucketId: { field: 'bucket' },
   },
   sortable: { createdAt: 'createdAt', name: 'name' },
@@ -155,7 +158,7 @@ export class FilesService {
   /** Multipart upload → persist blob via StorageService, then the metadata row. */
   async create(user: User, part: UploadPart | undefined, dto: CreateFileDto) {
     if (!part) throw new BadRequestException("Missing 'file' in multipart body");
-    const workspaceId = dto.workspaceId ?? dto.workspace_id ?? '';
+    const workspaceId = dto.workspaceId ?? '';
     // `scope()` only constrains READS. The upload target came straight off the
     // request body and was never checked, so any authenticated user could plant
     // a blob in another tenant's workspace — or in the global bucket
@@ -176,7 +179,7 @@ export class FilesService {
     // then produced hid the fact that the content had already been replaced and
     // the stored size no longer matched the served bytes.
     const id = generateId();
-    const projectId = dto.projectId ?? dto.project_id ?? '';
+    const { projectId, taskId, clientRequirementId } = await this.placement(dto, workspaceId);
     // A 300-character filename came back as a bare 500: the name is stored in a
     // bounded column and also becomes part of the storage key, and the operating
     // system has its own path limit. Truncate rather than refuse — the file is
@@ -200,6 +203,8 @@ export class FilesService {
         size: BigInt(part.size ?? part.buffer.length),
         workspaceId,
         projectId,
+        taskId,
+        clientRequirementId,
         uploadedById: user.id,
         bucket: dto.bucketId || 'default',
       },
@@ -211,6 +216,44 @@ export class FilesService {
       throw err;
     }
     return this.response(row);
+  }
+
+  /**
+   * Where an upload goes: its project, and the task or client requirement in it
+   * that it is attached to, if any.
+   *
+   * An attached file goes in its record's project, and that record has to be in
+   * the workspace the upload was checked against: a task id from another
+   * workspace is refused the same way whether or not it exists, so the answer
+   * says nothing about anybody else's work.
+   */
+  private async placement(
+    dto: CreateFileDto,
+    workspaceId: string,
+  ): Promise<{ projectId: string; taskId: string; clientRequirementId: string }> {
+    const named = dto.projectId ?? '';
+    const taskId = dto.taskId ?? '';
+    const clientRequirementId = dto.clientRequirementId ?? '';
+    if (taskId && clientRequirementId) {
+      throw new BadRequestException('Attach a file to a task or to a client requirement, not to both.');
+    }
+    if (!taskId && !clientRequirementId) {
+      // A project from another workspace was accepted, and deleting THAT project
+      // later took this workspace's file with it.
+      if (named) await assertProjectInWorkspace(this.prisma, named, workspaceId);
+      return { projectId: named, taskId, clientRequirementId };
+    }
+    const where = { id: taskId || clientRequirementId, workspaceId };
+    const select = { projectId: true };
+    const owner = taskId
+      ? await this.prisma.task.findFirst({ where, select })
+      : await this.prisma.clientRequirement.findFirst({ where, select });
+    const label = taskId ? 'Task' : 'Client requirement';
+    if (!owner || !workspaceId) throw new BadRequestException(`${label} not found in this workspace.`);
+    if (named && named !== owner.projectId) {
+      throw new BadRequestException(`${label} belongs to a different project.`);
+    }
+    return { projectId: owner.projectId, taskId, clientRequirementId };
   }
 
   async remove(user: User, id: string): Promise<void> {

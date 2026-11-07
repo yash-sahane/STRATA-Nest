@@ -1,6 +1,9 @@
 import { generateId } from '@strata/common';
 import { PrismaService } from '@strata/prisma';
 import type { Prisma } from '@prisma/client';
+import { Logger } from '@nestjs/common';
+
+const logger = new Logger('AuditWriter');
 
 /** The CRUD verbs the trail records, appended to the entity name. */
 export type AuditAction = 'created' | 'updated' | 'deleted';
@@ -56,7 +59,9 @@ export async function writeAuditRow(
         metadata: metadata as Prisma.InputJsonValue,
       },
     });
-  } catch {
-    // Never surface a trail failure to the caller.
+  } catch (error) {
+    // Never surface a trail failure to the caller — but say it happened: a
+    // trail with silent holes is one nobody can rely on.
+    logger.warn(`audit write failed (${input.entity}.${input.action} ${input.entityId}): ${(error as Error).message}`);
   }
 }

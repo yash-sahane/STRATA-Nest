@@ -14,6 +14,8 @@ export function uploadedFileResponse(f: UploadedFile, url: string) {
     size: Number(f.size),
     workspaceId: f.workspaceId,
     projectId: f.projectId,
+    taskId: f.taskId,
+    clientRequirementId: f.clientRequirementId,
     uploadedBy: f.uploadedById ?? null,
     bucketId: f.bucket,
     url,

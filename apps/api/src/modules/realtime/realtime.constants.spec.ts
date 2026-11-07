@@ -9,8 +9,7 @@ const REQUIRED_BROADCAST_COLLECTIONS = [
   'active_timers', 'activity_logs', 'attendance', 'client_requirements',
   'discord_integrations', 'epics', 'files', 'functional_requirements',
   'git_commits', 'github_integrations', 'gitlab_integrations', 'holidays',
-  'kanban_columns', 'labels', 'leave_balances', 'leave_requests',
-  'notifications', 'projects', 'retrospectives', 'saved_searches', 'sprints',
+  'leave_balances', 'leave_requests', 'notifications', 'projects', 'sprints',
   'task_comments', 'tasks', 'time_entries', 'workspace_members', 'workspaces',
 ];
 
