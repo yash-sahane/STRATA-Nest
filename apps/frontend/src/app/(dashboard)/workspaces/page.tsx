@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { NewWorkspaceButton } from '@/components/workspace/create-workspace-dialog';
 import { JoinWorkspaceDialog } from '@/components/workspace/join-workspace-dialog';
+import { PendingInvitations } from '@/components/workspace/pending-invitations';
 import { DeleteWorkspaceDialog } from '@/components/workspace/delete-workspace-dialog';
 import { LogOut, MoreVertical, Settings, Trash2, Users, Calendar } from 'lucide-react';
 import { useConfirm } from '@/components/providers/confirm-provider';
@@ -194,6 +195,10 @@ export default function WorkspacesPage() {
           </>
         }
       />
+
+      {/* Where an invitation notice leads: being added is an invitation now,
+          answered here. Nothing renders when none is waiting. */}
+      <PendingInvitations />
 
       {workspaces && workspaces.length > 0 ? (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">

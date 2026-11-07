@@ -16,6 +16,9 @@ export interface DomainEvent<TPayload = unknown> {
 // --- Workspace domain events (business-meaningful) ---------------------------
 export const WorkspaceEvents = {
   MemberAdded: 'workspace.member.added',
+  /** Somebody else asked a person to join; the membership waits, INVITED, for
+   *  that person to accept or decline it. */
+  MemberInvited: 'workspace.member.invited',
   MemberRoleChanged: 'workspace.member.role_changed',
   MemberRemoved: 'workspace.member.removed',
   /** A member's access was switched off (INACTIVE) or back on (ACTIVE). */
@@ -30,18 +33,30 @@ export interface WorkspaceMemberAddedPayload {
   userId: string;
   role: string;
   /** `created`: they made the workspace themselves. `invite`: they redeemed a
-   *  code. `join`: their request was approved. `direct`: somebody added them. */
-  via: 'invite' | 'join' | 'direct' | 'created';
-  /** Who did it: the person themselves for `created`/`invite`, else whoever added or approved them. */
+   *  code. `join`: their request was approved. `accepted`: they accepted an
+   *  invitation. `direct`: a platform administrator added them, or a manager
+   *  answered a request they had raised to join. */
+  via: 'invite' | 'join' | 'direct' | 'created' | 'accepted';
+  /** Who did it: the person themselves for `created`/`invite`/`accepted`, else whoever added or approved them. */
   actorId?: string;
 }
-/** `via: 'left'` is the member ending their own membership; anything else is
- *  somebody taking them out. */
+export interface WorkspaceMemberInvitedPayload {
+  workspaceId: string;
+  userId: string;
+  /** The role they will hold once they accept. */
+  role: string;
+  actorId: string;
+  /** Who asked them, as the invitation names them. */
+  inviterName: string;
+}
+/** `via: 'left'` is the member ending their own membership, `declined` the
+ *  person turning an invitation down, `withdrawn` a manager taking back an
+ *  invitation that was never accepted; `direct` is somebody taking them out. */
 export interface WorkspaceMemberRemovedPayload {
   workspaceId: string;
   userId: string;
   role: string;
-  via: 'direct' | 'left';
+  via: 'direct' | 'left' | 'declined' | 'withdrawn';
   actorId?: string;
 }
 export interface WorkspaceMemberStatusChangedPayload {
@@ -204,6 +219,7 @@ export interface TimeEntryDecisionPayload {
 // that spelling — so a reader compares types through normaliseNotificationType.
 export const NotifiableEvent = {
   [WorkspaceEvents.MemberAdded]: 'WORKSPACE_MEMBER_ADDED',
+  [WorkspaceEvents.MemberInvited]: 'WORKSPACE_INVITATION',
   [WorkspaceEvents.MemberRoleChanged]: 'WORKSPACE_ROLE_CHANGED',
   [WorkspaceEvents.JoinRequestCreated]: 'JOIN_REQUEST_RECEIVED',
   [WorkspaceEvents.JoinRequestApproved]: 'JOIN_REQUEST_APPROVED',
@@ -255,6 +271,7 @@ export const NOTIFICATION_TYPES = [
   'TIME_ENTRY_REJECTED',
   // Workspace
   'WORKSPACE_MEMBER_ADDED',
+  'WORKSPACE_INVITATION',
   'WORKSPACE_ROLE_CHANGED',
   'WORKSPACE_OWNERSHIP_TRANSFERRED',
   'WORKSPACE_ACCESS_CHANGED',

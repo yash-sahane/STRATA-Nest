@@ -64,9 +64,15 @@ function build(opts: {
   outranked?: boolean;
   /** The member's running timer — one per person, recorded with its workspace. */
   timer?: { id: string; workspaceId: string } | null;
+  /** The person being added has a PENDING request to join this workspace. */
+  askedToJoin?: boolean;
+  /** Rows a conditional update / delete of an invitation matches (1 unless it raced). */
+  matched?: number;
 }) {
   const update = jest.fn().mockImplementation(({ data }) => ({ ...opts.existing, ...data }));
   const remove = jest.fn().mockResolvedValue(undefined);
+  const updateMany = jest.fn().mockResolvedValue({ count: opts.matched ?? 1 });
+  const deleteMany = jest.fn().mockResolvedValue({ count: opts.matched ?? 1 });
   const customRoles = opts.customRoles ?? {};
   // Adding or re-activating a membership settles any request that person had
   // raised to join, in the same commit where the write is transactional.
@@ -77,11 +83,20 @@ function build(opts: {
   const prisma = {
     workspaceMember: {
       findFirst: jest.fn().mockResolvedValue(opts.existing),
+      findMany: jest.fn().mockResolvedValue([opts.existing]),
+      findUniqueOrThrow: jest
+        .fn()
+        .mockResolvedValue({ ...opts.existing, status: 'ACTIVE', joinedAt: new Date() }),
       create,
       update,
+      updateMany,
       delete: remove,
+      deleteMany,
     },
-    joinRequest: { updateMany: closeRequests },
+    joinRequest: {
+      updateMany: closeRequests,
+      count: jest.fn().mockResolvedValue(opts.askedToJoin ? 1 : 0),
+    },
     // Array form: the service reads the membership out of position 0.
     $transaction: jest.fn((ops: unknown[]) => Promise.resolve(ops)),
     workspaceRole: {
@@ -89,8 +104,18 @@ function build(opts: {
         .fn()
         .mockResolvedValue(Object.keys(customRoles).map((name) => ({ name }))),
     },
-    workspace: { findUnique: jest.fn().mockResolvedValue({ ownerId: opts.ownerId ?? 'owner' }) },
-    user: { findMany: jest.fn().mockResolvedValue([]) },
+    workspace: {
+      findUnique: jest.fn().mockResolvedValue({ ownerId: opts.ownerId ?? 'owner' }),
+      findMany: jest.fn().mockResolvedValue([{ id: 'w1', name: 'Acme Web' }]),
+    },
+    activityLog: {
+      findMany: jest.fn().mockResolvedValue([{ workspaceId: 'w1', userId: 'u-inviter' }]),
+    },
+    user: {
+      findMany: jest
+        .fn()
+        .mockResolvedValue([{ id: 'u-inviter', name: 'Priya Manager', email: 'priya@x.test' }]),
+    },
     // What a removal tidies: none, unless a case says otherwise.
     leaveRequest: {
       findMany: jest.fn().mockResolvedValue([]),
@@ -135,31 +160,155 @@ function build(opts: {
     svc: new WorkspaceMembersService(prisma, access, events),
     prisma,
     update,
+    updateMany,
     remove,
+    deleteMany,
     access,
     capabilitiesOrphanedBy,
     create,
     closeRequests,
     timerDelete,
     announceWrite,
+    events,
   };
 }
 
-describe('WorkspaceMembersService.create — a direct add answers the request to join', () => {
-  it('closes the pending request in the same commit as the membership', async () => {
-    const { svc, create, closeRequests } = build({ existing: member() });
+/** The domain events a case emitted, by name. */
+const emitted = (events: EventEmitter2) =>
+  (events.emit as jest.Mock).mock.calls.map(([name, e]) => ({ name, payload: e.payload }));
+
+describe('WorkspaceMembersService.create — somebody else’s add is an invitation', () => {
+  it('an add the person never asked for is INVITED, and tells them so', async () => {
+    const { svc, create, closeRequests, events } = build({ existing: member() });
     await svc.create(caller, { workspaceId: 'w1', userId: 'u9' });
-    expect(create).toHaveBeenCalled();
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'INVITED' }) }),
+    );
+    // Nothing to answer: they have not asked for anything.
+    expect(closeRequests).not.toHaveBeenCalled();
+    expect(emitted(events)).toEqual([
+      expect.objectContaining({
+        name: 'workspace.member.invited',
+        payload: expect.objectContaining({ userId: 'u9', actorId: 'u1' }),
+      }),
+    ]);
+  });
+
+  it('asking for ACTIVE or INACTIVE changes nothing: both are one step from access', async () => {
+    for (const status of ['ACTIVE', 'INACTIVE']) {
+      const { svc, create } = build({ existing: member() });
+      await svc.create(caller, { workspaceId: 'w1', userId: 'u9', status });
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'INVITED' }) }),
+      );
+    }
+  });
+
+  it('an add that answers their own request to join takes effect, and closes it in the same commit', async () => {
+    const { svc, create, closeRequests, events } = build({ existing: member(), askedToJoin: true });
+    await svc.create(caller, { workspaceId: 'w1', userId: 'u9' });
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'ACTIVE' }) }),
+    );
     expect(closeRequests).toHaveBeenCalledWith({
       where: { workspaceId: 'w1', userId: 'u9', status: 'PENDING' },
       data: { status: 'APPROVED', handledById: caller.id },
     });
+    expect(emitted(events)[0].name).toBe('workspace.member.added');
   });
 
-  it('leaves the request pending for an INVITED membership, which grants nothing yet', async () => {
-    const { svc, closeRequests } = build({ existing: member() });
-    await svc.create(caller, { workspaceId: 'w1', userId: 'u9', status: 'INVITED' });
-    expect(closeRequests).not.toHaveBeenCalled();
+  it("a platform administrator's add takes effect at once", async () => {
+    const { svc, create } = build({ existing: member(), platformAdmin: true });
+    await svc.create(caller, { workspaceId: 'w1', userId: 'u9' });
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'ACTIVE' }) }),
+    );
+  });
+});
+
+describe('WorkspaceMembersService — the invited person answers', () => {
+  it('lists their own invitations, with the workspace and who sent it', async () => {
+    const { svc, prisma } = build({ existing: member({ status: 'INVITED', userId: 'u1' }) });
+    const list = await svc.invitations(caller);
+    expect(prisma.workspaceMember.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { userId: 'u1', status: 'INVITED' } }),
+    );
+    expect(list).toEqual([
+      expect.objectContaining({
+        id: 'm1',
+        workspaceName: 'Acme Web',
+        role: 'MEMBER',
+        invitedByName: 'Priya Manager',
+      }),
+    ]);
+  });
+
+  it('accepting is theirs alone: the row is looked up by id AND the caller', async () => {
+    const { svc, prisma } = build({ existing: member({ status: 'INVITED', userId: 'u1' }) });
+    await svc.accept(caller, 'm1');
+    expect(prisma.workspaceMember.findFirst).toHaveBeenCalledWith({ where: { id: 'm1', userId: 'u1' } });
+  });
+
+  it('accepting makes it ACTIVE from now — only while it is still an invitation — and lets them in', async () => {
+    const { svc, updateMany, closeRequests, announceWrite, events } = build({
+      existing: member({ status: 'INVITED', userId: 'u1' }),
+    });
+    await svc.accept(caller, 'm1');
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: 'm1', userId: 'u1', status: 'INVITED' },
+      data: { status: 'ACTIVE', joinedAt: expect.any(Date) },
+    });
+    expect(closeRequests).toHaveBeenCalled();
+    expect(announceWrite).toHaveBeenCalledWith('WorkspaceMember', 'update', expect.anything());
+    expect(emitted(events)).toEqual([
+      expect.objectContaining({
+        name: 'workspace.member.added',
+        payload: expect.objectContaining({ via: 'accepted', actorId: 'u1' }),
+      }),
+    ]);
+  });
+
+  it('an invitation withdrawn as they accept is not resurrected', async () => {
+    const { svc, events } = build({ existing: member({ status: 'INVITED', userId: 'u1' }), matched: 0 });
+    await expect(svc.accept(caller, 'm1')).rejects.toThrow(/withdrawn/);
+    expect(events.emit).not.toHaveBeenCalled();
+  });
+
+  it('a switched-off membership is not an invitation to accept', async () => {
+    const { svc, updateMany } = build({ existing: member({ status: 'INACTIVE', userId: 'u1' }) });
+    await expect(svc.accept(caller, 'm1')).rejects.toThrow(/switched off/);
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
+  it('declining deletes it — only while it is still an invitation — and tells nobody', async () => {
+    const { svc, deleteMany, events } = build({ existing: member({ status: 'INVITED', userId: 'u1' }) });
+    await svc.decline(caller, 'm1');
+    expect(deleteMany).toHaveBeenCalledWith({ where: { id: 'm1', userId: 'u1', status: 'INVITED' } });
+    expect(emitted(events)).toEqual([
+      expect.objectContaining({
+        name: 'workspace.member.removed',
+        payload: expect.objectContaining({ via: 'declined' }),
+      }),
+    ]);
+  });
+});
+
+describe('WorkspaceMembersService.remove — withdrawing an invitation', () => {
+  it('asks member:invite and the rank rule, not the removal guards', async () => {
+    const { svc, access, deleteMany, capabilitiesOrphanedBy, events } = build({
+      existing: member({ status: 'INVITED' }),
+    });
+    await svc.remove(caller, 'm1');
+    expect(access.assertPermission).toHaveBeenCalledWith(caller, 'w1', Permission.MemberInvite);
+    expect(access.assertNotOutranked).toHaveBeenCalled();
+    expect(capabilitiesOrphanedBy).not.toHaveBeenCalled();
+    expect(deleteMany).toHaveBeenCalledWith({ where: { id: 'm1', status: 'INVITED' } });
+    expect(emitted(events)[0].payload).toEqual(expect.objectContaining({ via: 'withdrawn' }));
+  });
+
+  it('says so when they accepted in the same moment', async () => {
+    const { svc } = build({ existing: member({ status: 'INVITED' }), matched: 0 });
+    await expect(svc.remove(caller, 'm1')).rejects.toThrow(/accepted the invitation a moment ago/);
   });
 });
 
@@ -457,10 +606,32 @@ describe('WorkspaceMembersService.update — INVITED is not reversible', () => {
     expect(update).toHaveBeenCalled();
   });
 
-  it('still lets an INVITED membership be activated', async () => {
+  it('a manager cannot answer an invitation for the person — in either direction', async () => {
+    for (const status of ['ACTIVE', 'INACTIVE']) {
+      const { svc, update } = build({ existing: member({ status: 'INVITED' }), otherManagers: 2 });
+      await expect(svc.update(caller, 'm1', { status })).rejects.toThrow(/only they can/);
+      expect(update).not.toHaveBeenCalled();
+    }
+  });
+
+  it('but can still correct the role it offers', async () => {
     const { svc, update } = build({ existing: member({ status: 'INVITED' }), otherManagers: 2 });
+    await svc.update(caller, 'm1', { role: 'TESTER' });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ data: { role: 'TESTER' } }));
+  });
+
+  it('a platform administrator can let an invitation in: they join from now, and are told they were added', async () => {
+    const { svc, update, events } = build({
+      existing: member({ status: 'INVITED' }),
+      otherManagers: 2,
+      platformAdmin: true,
+    });
     await svc.update(caller, 'm1', { status: 'ACTIVE' });
-    expect(update).toHaveBeenCalledWith(expect.objectContaining({ data: { status: 'ACTIVE' } }));
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { status: 'ACTIVE', joinedAt: expect.any(Date) } }),
+    );
+    // Not "access switched back on": they never had it.
+    expect(emitted(events).map((e) => e.name)).toEqual(['workspace.member.added']);
   });
 });
 

@@ -20,6 +20,7 @@ const SUITES = [
   ['verify-session-expiry.mjs', 'a form survives its own session expiring, and fails loudly when it cannot'],
   ['verify-offline-save.mjs', 'a save survives the connection dropping, and says the connection is why'],
   ['verify-workspace-refetch-blip.mjs', 'a workspace list that fails to refresh keeps the page; one that never came says so'],
+  ['verify-invitation-consent.mjs', 'being added is an invitation the person accepts or declines, and nobody answers it for them'],
   ['verify-concurrent-edit.mjs', 'two people editing one record: neither loses work silently'],
   ['verify-stale-baseline.mjs', 'a save is checked against what the person was looking at, not what the record became'],
   ['verify-optimistic-locking.mjs', 'the same field is refused, a different one is not (API, 5 collections)'],

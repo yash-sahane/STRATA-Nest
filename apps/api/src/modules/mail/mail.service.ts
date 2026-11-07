@@ -104,8 +104,10 @@ export class MailService {
   }
 
   /**
-   * Tell somebody who ALREADY has an account that a manager added them to a
-   * workspace.
+   * Tell somebody who ALREADY has an account that they were added to a
+   * workspace — by a platform administrator, or in answer to their own request
+   * to join. Anybody else's add is an invitation, and the invitation notice
+   * carries its own mail (WorkNotificationSubscriber.onMemberInvited).
    *
    * It used to say "use invite code X", quoting `Workspace.inviteCode` — a
    * column nothing redeems — to a person who by then was already a member. So

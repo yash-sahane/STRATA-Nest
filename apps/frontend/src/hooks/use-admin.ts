@@ -33,6 +33,12 @@ export interface InviteUserResult {
   success: boolean;
   userId: string;
   message: string;
+  /**
+   * Whether they still have to accept. An add is an invitation unless a
+   * platform administrator made it, or the person had asked to join — and it
+   * is the same for a new account as for an existing one.
+   */
+  invited?: boolean;
   emailSent?: boolean;
   temporaryPassword?: string;
 }
@@ -40,7 +46,14 @@ export interface InviteUserResult {
 /** One sentence saying what actually happened, for the toast. */
 export function describeInviteResult(result: InviteUserResult, email: string): string {
   if (result.temporaryPassword) {
-    return 'No email was sent — copy their temporary password before you leave this screen.';
+    return result.invited
+      ? 'No email was sent — copy their temporary password before you leave this screen. They join once they sign in and accept the invitation.'
+      : 'No email was sent — copy their temporary password before you leave this screen.';
+  }
+  if (result.invited) {
+    return result.emailSent
+      ? `${email} has been invited and emailed. They join this workspace once they accept.`
+      : `${email} has been invited. No email was sent, so let them know: they join once they accept, from their Workspaces page.`;
   }
   return result.emailSent
     ? `${email} now has access to this workspace, and has been emailed about it.`

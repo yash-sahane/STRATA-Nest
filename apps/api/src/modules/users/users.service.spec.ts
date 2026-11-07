@@ -29,6 +29,8 @@ function build(
     elsewhere?: { workspaceId: string; role: string; callerManages: boolean }[];
     /** UserDeactivationService refuses (an owner, a last manager), with this message. */
     deactivationRefuses?: string;
+    /** The person being added has a PENDING request to join the workspace. */
+    askedToJoin?: boolean;
   } = {},
 ) {
   const memberCreate = jest.fn().mockResolvedValue({ id: 'm1' });
@@ -63,7 +65,10 @@ function build(
       create: userCreate,
       update: userUpdate,
     },
-    joinRequest: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    joinRequest: {
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      count: jest.fn().mockResolvedValue(over.askedToJoin ? 1 : 0),
+    },
     $transaction: jest.fn((ops: unknown[]) => Promise.all(ops)),
   } as unknown as PrismaService;
   const access = {
@@ -169,12 +174,51 @@ describe('UsersService.invite', () => {
     }
   });
 
-  it('creates the user and an ACTIVE membership with the validated role', async () => {
-    const { svc, memberCreate, userCreate } = build();
+  it('creates the user and an INVITED membership with the validated role', async () => {
+    const { svc, memberCreate, userCreate, emit } = build();
     const res = await svc.invite(caller, dto);
     expect(res).toMatchObject({ status: 201 });
     expect(userCreate.mock.calls[0][0].data).toMatchObject({ email: 'new@x.com', role: 'MANAGER' });
+    expect(memberCreate.mock.calls[0][0].data).toMatchObject({ role: 'MANAGER', status: 'INVITED' });
+    expect(emit).toHaveBeenCalledWith(
+      'workspace.member.invited',
+      expect.objectContaining({
+        payload: { workspaceId: 'w1', userId: expect.any(String), role: 'MANAGER', actorId: 'u1', inviterName: 'A' },
+      }),
+    );
+  });
+
+  it("a platform administrator's add is a membership at once", async () => {
+    const { svc, memberCreate } = build();
+    await svc.invite({ ...caller, isSuperuser: true } as User, dto);
     expect(memberCreate.mock.calls[0][0].data).toMatchObject({ role: 'MANAGER', status: 'ACTIVE' });
+  });
+});
+
+describe('UsersService.invite — an existing account is asked, not added', () => {
+  const dto = { name: 'Known', email: 'known@x.com', roleName: 'MEMBER', workspaceId: 'w1' };
+  const known = { id: 'u9', email: 'known@x.com' } as User;
+
+  it('makes an INVITED membership, tells them, and sends no "you were added" mail', async () => {
+    const { svc, memberCreate, emit, mail, prisma } = build({ existingUser: known });
+    const res = (await svc.invite(caller, dto)) as { body: Record<string, unknown> };
+    expect(memberCreate.mock.calls[0][0].data).toMatchObject({ userId: 'u9', status: 'INVITED' });
+    expect(emit).toHaveBeenCalledWith('workspace.member.invited', expect.anything());
+    expect(emit).not.toHaveBeenCalledWith('workspace.member.added', expect.anything());
+    // The invitation notice carries its own mail; this one says "added".
+    expect(mail.sendWorkspaceInvitation).not.toHaveBeenCalled();
+    // Nothing of theirs is answered: they asked for nothing.
+    const { updateMany } = (prisma as unknown as { joinRequest: { updateMany: jest.Mock } }).joinRequest;
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(res.body).toMatchObject({ invited: true, message: 'Invitation sent' });
+  });
+
+  it('refuses a second invitation while the first is unanswered', async () => {
+    const { svc, prisma, memberCreate } = build({ existingUser: known });
+    (prisma.workspaceMember.findFirst as jest.Mock).mockResolvedValueOnce({ status: 'INVITED' });
+    const res = await svc.invite(caller, dto);
+    expect(res).toEqual({ softError: { status: 400, message: expect.stringMatching(/already been invited/) } });
+    expect(memberCreate).not.toHaveBeenCalled();
   });
 });
 
@@ -223,17 +267,21 @@ describe('UsersService.invite — the account has to be reachable', () => {
       return { status, ...rest };
     };
     expect(shape(known)).toEqual(shape(fresh));
+    // Both are invitations: were the new account ACTIVE at once, the roster
+    // would answer the question the response no longer does.
     expect(shape(fresh)).toEqual({
       status: 201,
       success: true,
-      message: 'Added to the workspace',
+      invited: true,
+      message: 'Invitation sent',
       emailSent: true,
     });
   });
 
-  it('adding an existing account settles their request to join and tells them', async () => {
+  it('adding an existing account who had asked to join settles the request and tells them', async () => {
     const { svc, emit, prisma, mail } = build({
       existingUser: { id: 'u9', email: 'new@x.com' } as User,
+      askedToJoin: true,
     });
     await svc.invite(caller, dto);
     const { updateMany } = (prisma as unknown as { joinRequest: { updateMany: jest.Mock } }).joinRequest;

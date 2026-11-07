@@ -315,11 +315,10 @@ function TeamPageContent() {
         detail: `${stats.activeRate}% active rate`,
         icon: UserCheck,
       },
-      // Was "Pending Invites", counting memberships with status INVITED — a
-      // state no server path ever writes, so the number could only ever be
-      // non-zero as the side effect of an admin deactivating somebody. The real
-      // queue of people waiting on a decision is the join requests, which only
-      // a caller who can action them is allowed to read — hence the gate.
+      // Was "Pending Invites". Invitations waiting on an answer show on the
+      // roster itself, as "Invited (not joined yet)"; the queue waiting on a
+      // decision HERE is the join requests, which only a caller who can action
+      // them is allowed to read — hence the gate.
       ...(canReviewRequests
         ? [
             {
@@ -435,7 +434,11 @@ function TeamPageContent() {
         workspaceId: memberToDelete.workspaceId,
       });
 
-      toast.success(`${memberToDelete.name} removed from the workspace`);
+      toast.success(
+        memberToDelete.status === 'INVITED'
+          ? `Invitation to ${memberToDelete.name} withdrawn`
+          : `${memberToDelete.name} removed from the workspace`
+      );
       setDeleteDialogOpen(false);
       setMemberToDelete(null);
     } catch (error) {
@@ -642,8 +645,14 @@ function TeamPageContent() {
                         const isOwner = member.userId === currentWorkspace.ownerId;
                         // ...nor a member whose role can do more than the caller's.
                         const outranksMe = !canGrantRole(member.rawRole);
+                        // An unanswered invitation is withdrawn, not removed — and
+                        // asking somebody in and taking it back are one permission.
+                        const isInvitation = member.status === 'INVITED';
                         const canRemoveThisMember =
-                          canRemoveMembers && !isOwner && !isCurrentUser && !outranksMe;
+                          (isInvitation ? canInviteMembers : canRemoveMembers) &&
+                          !isOwner &&
+                          !isCurrentUser &&
+                          !outranksMe;
                         // Same rule as removal: the API refuses to demote or
                         // deactivate the owner or the caller, so don't offer it.
                         const canEditThisMember =
@@ -802,7 +811,7 @@ function TeamPageContent() {
                                           className="text-destructive-text focus:text-destructive-text"
                                         >
                                           <Trash2 className="h-4 w-4 mr-2" />
-                                          Remove Member
+                                          {isInvitation ? 'Withdraw Invitation' : 'Remove Member'}
                                         </DropdownMenuItem>
                                       )}
                                     </DropdownMenuContent>
@@ -893,6 +902,18 @@ function TeamPageContent() {
                 </div>
                 <div>
                   <Label htmlFor="status">Status</Label>
+                  {editingMember.status === 'INVITED' && user?.isAdmin !== true ? (
+                    // An invitation is the invited person's to answer: the API
+                    // refuses any other status for it, so none is offered.
+                    <>
+                      <input type="hidden" name="status" value="INVITED" />
+                      <p className="mt-2 text-sm text-muted-foreground">
+                        Invited — waiting for {editingMember.name} to accept. Only they can; to
+                        withdraw the invitation, remove it from the member list.
+                      </p>
+                    </>
+                  ) : (
+                  <>
                   {/* "Invited" is not an edit you can make to somebody who has
                       already joined: the API authorizes on `status: 'ACTIVE'`
                       alone, so applying it locks the member out of the whole
@@ -919,6 +940,8 @@ function TeamPageContent() {
                     Only Active members can open this workspace. Any other status revokes their
                     access — their data is kept, but they see nothing until it is set back.
                   </p>
+                  </>
+                  )}
                 </div>
               </div>
               <DialogFooter className="mt-6">

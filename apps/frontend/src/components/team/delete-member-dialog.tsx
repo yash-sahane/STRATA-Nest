@@ -35,10 +35,13 @@ export function DeleteMemberDialog({
   isDeleting = false,
   onDeactivate,
 }: DeleteMemberDialogProps) {
+  // An unanswered invitation is withdrawn: it never gave them anything, so
+  // there is nothing to leave behind and nothing to switch off instead.
+  const isInvitation = member?.status === 'INVITED';
   // What they leave behind, asked when the dialog opens.
   const { data: footprint } = useQuery({
     queryKey: ['member-footprint', member?.id],
-    enabled: open && Boolean(member?.id),
+    enabled: open && Boolean(member?.id) && !isInvitation,
     queryFn: async () =>
       (await restClient.get(`/api/v1/workspace_members/${member!.id}/footprint/`)) as {
         openTasks: number;
@@ -47,6 +50,35 @@ export function DeleteMemberDialog({
       },
   });
   if (!member) return null;
+
+  if (isInvitation) {
+    return (
+      <AlertDialog open={open} onOpenChange={onOpenChange}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Withdraw Invitation</AlertDialogTitle>
+            <AlertDialogDescription>
+              <strong className="text-foreground">{member.name}</strong> ({member.email}) has not
+              accepted yet. Withdrawing means they will not join; they are told, and you can invite
+              them again later.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                onConfirm();
+              }}
+              disabled={isDeleting}
+            >
+              {isDeleting ? 'Withdrawing...' : 'Withdraw Invitation'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    );
+  }
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>

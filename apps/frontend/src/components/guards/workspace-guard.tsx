@@ -13,6 +13,7 @@ import { InviteCodeForm } from '@/components/workspace/invite-code-form';
 import { TempPasswordGuard } from '@/components/guards/temp-password-guard';
 import { useQueryClient } from '@tanstack/react-query';
 import { RecentNotices } from '@/components/guards/recent-notices';
+import { PendingInvitations } from '@/components/workspace/pending-invitations';
 
 /**
  * The membership check runs BEHIND the temporary-password gate, not beside it.
@@ -146,11 +147,21 @@ function WorkspaceMembershipGuard({ children }: { children: React.ReactNode }) {
             <Users className="h-10 w-10 text-muted-foreground/60" />
             <CardTitle>No workspace open to you</CardTitle>
             <CardDescription>
-              Enter an invite code, or request access to a workspace and one of its managers will
-              review it.
+              Accept an invitation if one is waiting, enter an invite code, or request access to a
+              workspace and one of its managers will review it.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* Somebody added by a manager is invited, not added, and this is
+                where most of them land: an account made for them belongs to no
+                workspace until they accept. A full navigation afterwards, as
+                after redeeming a code, so every provider re-reads its list. */}
+            <PendingInvitations
+              poll
+              onAccepted={() => {
+                window.location.href = '/dashboard';
+              }}
+            />
             {/* Why there is nothing here, when something happened: removed,
                 switched off, declined. Those notices were written — filed under
                 the workspace lost — and this screen, which has no header and no

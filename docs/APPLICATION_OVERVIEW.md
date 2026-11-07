@@ -270,14 +270,25 @@ See the [deletion module](../apps/api/src/modules/deletion).
 There is no self sign-up. Accounts come from an invitation (`POST /users/invite`, which needs
 `member:invite` and gives the new user a temporary password) or from the seed script.
 
+Being added to a workspace by somebody else is an **invitation**: an `INVITED` membership that
+grants nothing until the person accepts it (`POST /workspace_members/:id/accept`) or declines it
+(`.../decline`). Nobody can answer it for them; a manager can only withdraw it (DELETE). New and
+existing accounts are treated alike, so the roster never reveals whether an address already had
+an account. Two adds take effect at once: a platform administrator's, and one that answers the
+person's own pending request to join. Redeeming an invite code while invited also accepts.
+
 ```
 /login ─▶ (temp password?) /change-password ─▶ /dashboard
                                                    │ no workspace → WorkspaceGuard
                                                    ▼
                  platform admin ─▶ /onboarding: create a workspace (only admins can)
-                 everyone else  ─▶ enter an invite code (InviteCode)
+                 everyone else  ─▶ accept an invitation waiting for them
+                                   or enter an invite code (InviteCode)
                                    or request access (JoinRequest → a manager approves)
 ```
+
+Somebody already in a workspace finds new invitations on `/workspaces`, where the invitation
+notice leads.
 
 Forgot password follows `/forgot-password`, then an email from the worker, then `/reset-password`.
 

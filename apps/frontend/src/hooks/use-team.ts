@@ -207,11 +207,11 @@ export const STATUS_CONFIG = {
     label: 'Inactive',
     color: 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200',
   },
-  // Spelled out because it is not what it sounds like: the API authorizes on
-  // `status: 'ACTIVE'` alone, so an INVITED membership is a lockout, not a
-  // pending welcome — and a bare "Invited" badge read as the opposite.
+  // Somebody asked in who has not accepted yet. It grants nothing until they
+  // do — the API authorizes on `status: 'ACTIVE'` alone — which the label says,
+  // so the roster does not read as if they were already here.
   INVITED: {
-    label: 'Invited (no access)',
+    label: 'Invited (not joined yet)',
     color: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200',
   },
 } as const;

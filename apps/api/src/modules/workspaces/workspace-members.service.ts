@@ -9,8 +9,20 @@ import { ADMIN_CAPABILITIES } from '../authz/administration';
 import { Permission, type PermissionKey } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import type { CreateMemberDto, UpdateMemberDto } from './dto';
+import { joinsWithoutBeingAsked } from './invitation-consent';
 import { closePendingJoinRequests } from './join-request-sync';
 import { memberResponse } from './mappers';
+
+/** An invitation as the person it is addressed to sees it. */
+export interface InvitationResponse {
+  id: string;
+  workspaceId: string;
+  workspaceName: string;
+  role: string;
+  invitedAt: string;
+  /** Who sent it, when the audit trail still says; '' otherwise. */
+  invitedByName: string;
+}
 
 /** The only membership states the app renders and authorizes against. */
 const MEMBER_STATUSES = new Set(['ACTIVE', 'INACTIVE', 'INVITED']);
@@ -125,6 +137,29 @@ export class WorkspaceMembersService {
     throw new BadRequestException(
       'This person has already joined, so their membership cannot go back to "Invited". ' +
         'Use "Inactive" to revoke their access.',
+    );
+  }
+
+  /**
+   * An invitation is the invited person's to answer.
+   *
+   * A manager who could move an INVITED membership to ACTIVE could skip the
+   * question altogether — invite, then accept on the person's behalf — and
+   * INACTIVE is no better: it is one "switch back on" away from ACTIVE. So the
+   * status of an unanswered invitation moves only when the person accepts it
+   * (or a platform administrator acts). Its role can still be corrected, and
+   * removing it withdraws it.
+   */
+  private assertNotAnsweringForThem(
+    user: User,
+    existing: WorkspaceMember,
+    next: string | undefined,
+  ): void {
+    if (existing.status !== 'INVITED' || next === undefined || next === 'INVITED') return;
+    if (this.access.isPlatformAdmin(user)) return;
+    throw new ForbiddenException(
+      'This person has not accepted the invitation yet, and only they can. ' +
+        'Remove it to withdraw the invitation.',
     );
   }
 
@@ -261,7 +296,17 @@ export class WorkspaceMembersService {
     if (dto.role !== undefined) await this.access.assertValidRole(dto.workspaceId, dto.role);
     await this.access.assertCanGrantRole(user, dto.workspaceId, dto.role ?? 'MEMBER');
     if (dto.status !== undefined) this.assertValidStatus(dto.status);
-    const status = dto.status ?? 'ACTIVE';
+    // Somebody else's add is an invitation unless the person already said yes
+    // (see invitation-consent). Whatever status was asked for, an add they have
+    // not agreed to waits for them: an INACTIVE row would only be one "switch
+    // back on" away from ACTIVE.
+    const consented = await joinsWithoutBeingAsked(
+      this.prisma,
+      this.access.isPlatformAdmin(user),
+      dto.workspaceId,
+      dto.userId,
+    );
+    const status = consented ? (dto.status ?? 'ACTIVE') : 'INVITED';
     const created = this.prisma.workspaceMember.create({
       data: {
         id: generateId(),
@@ -285,14 +330,139 @@ export class WorkspaceMembersService {
             ])
           )[0]
         : await created;
-    this.emit(WorkspaceEvents.MemberAdded, m.workspaceId, {
-      workspaceId: m.workspaceId,
-      userId: m.userId,
-      role: m.role,
-      via: 'direct',
+    if (status === 'INVITED') {
+      this.emit(WorkspaceEvents.MemberInvited, m.workspaceId, {
+        workspaceId: m.workspaceId,
+        userId: m.userId,
+        role: m.role,
+        actorId: user.id,
+        inviterName: user.name || user.email,
+      });
+    } else {
+      this.emit(WorkspaceEvents.MemberAdded, m.workspaceId, {
+        workspaceId: m.workspaceId,
+        userId: m.userId,
+        role: m.role,
+        via: 'direct',
+        actorId: user.id,
+      });
+    }
+    return this.withUser(m);
+  }
+
+  /**
+   * The invitations waiting on the caller — theirs, whichever workspace sent
+   * them. The ordinary list cannot show them: it is scoped to workspaces the
+   * caller is an ACTIVE member of, and an invitation is exactly the row from a
+   * workspace they are not in yet.
+   */
+  async invitations(user: User): Promise<InvitationResponse[]> {
+    const rows = await this.prisma.workspaceMember.findMany({
+      where: { userId: user.id, status: 'INVITED' },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!rows.length) return [];
+    const workspaces = await this.prisma.workspace.findMany({
+      where: { id: { in: rows.map((r) => r.workspaceId) } },
+      select: { id: true, name: true },
+    });
+    const names = new Map(workspaces.map((w) => [w.id, w.name]));
+    // Who asked is not stored on the membership; the audit row of the invite is
+    // where it is recorded.
+    const sent = await this.prisma.activityLog.findMany({
+      where: {
+        action: WorkspaceEvents.MemberInvited,
+        entityId: user.id,
+        workspaceId: { in: rows.map((r) => r.workspaceId) },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { workspaceId: true, userId: true },
+    });
+    const inviterOf = new Map<string, string>();
+    for (const row of sent) if (!inviterOf.has(row.workspaceId)) inviterOf.set(row.workspaceId, row.userId);
+    const inviters = await this.prisma.user.findMany({
+      where: { id: { in: [...new Set(inviterOf.values())] } },
+      select: { id: true, name: true, email: true },
+    });
+    const inviterName = new Map(inviters.map((u) => [u.id, u.name || u.email]));
+    return rows
+      .filter((r) => names.has(r.workspaceId))
+      .map((r) => ({
+        id: r.id,
+        workspaceId: r.workspaceId,
+        workspaceName: names.get(r.workspaceId) as string,
+        role: r.role,
+        invitedAt: r.createdAt.toISOString(),
+        invitedByName: inviterName.get(inviterOf.get(r.workspaceId) ?? '') ?? '',
+      }));
+  }
+
+  /** The caller's own unanswered invitation, or 404 — for any other row too. */
+  private async ownInvitation(user: User, id: string): Promise<WorkspaceMember> {
+    const row = await this.prisma.workspaceMember.findFirst({ where: { id, userId: user.id } });
+    if (!row) throw new NotFoundException('That invitation does not exist, or it was withdrawn.');
+    if (row.status === 'ACTIVE') {
+      throw new BadRequestException('You are already a member of this workspace.');
+    }
+    if (row.status !== 'INVITED') {
+      throw new ForbiddenException(
+        'Your access to this workspace is switched off. One of its managers has to switch it back on.',
+      );
+    }
+    return row;
+  }
+
+  /**
+   * Accept an invitation: the membership becomes ACTIVE, from now.
+   *
+   * Conditional on it still being an invitation, so an accept that crosses a
+   * manager withdrawing it (or a second click) cannot resurrect or double it.
+   */
+  async accept(user: User, id: string) {
+    const invitation = await this.ownInvitation(user, id);
+    // The role named in the invitation may have been deleted or renamed since;
+    // a membership on a role nobody can authorize falls to the read-only floor.
+    // Refused, as redeeming a code with such a role is.
+    await this.access.assertValidRole(invitation.workspaceId, invitation.role);
+    const { count } = await this.prisma.workspaceMember.updateMany({
+      where: { id, userId: user.id, status: 'INVITED' },
+      data: { status: 'ACTIVE', joinedAt: new Date() },
+    });
+    if (count === 0) {
+      throw new NotFoundException('That invitation does not exist, or it was withdrawn.');
+    }
+    // Any request they had raised to join is answered by this.
+    await closePendingJoinRequests(this.prisma, invitation.workspaceId, user.id);
+    const accepted = await this.prisma.workspaceMember.findUniqueOrThrow({ where: { id } });
+    // `updateMany` is invisible to the write hook; the rosters open on it are not.
+    this.prisma.announceWrite?.('WorkspaceMember', 'update', accepted);
+    this.emit(WorkspaceEvents.MemberAdded, accepted.workspaceId, {
+      workspaceId: accepted.workspaceId,
+      userId: user.id,
+      role: accepted.role,
+      via: 'accepted',
       actorId: user.id,
     });
-    return this.withUser(m);
+    return this.withUser(accepted);
+  }
+
+  /** Decline an invitation: it is gone, and the managers' roster says so. */
+  async decline(user: User, id: string): Promise<void> {
+    const invitation = await this.ownInvitation(user, id);
+    const { count } = await this.prisma.workspaceMember.deleteMany({
+      where: { id, userId: user.id, status: 'INVITED' },
+    });
+    if (count === 0) {
+      throw new NotFoundException('That invitation does not exist, or it was withdrawn.');
+    }
+    this.prisma.announceWrite?.('WorkspaceMember', 'delete', invitation);
+    this.emit(WorkspaceEvents.MemberRemoved, invitation.workspaceId, {
+      workspaceId: invitation.workspaceId,
+      userId: user.id,
+      role: invitation.role,
+      via: 'declined',
+      actorId: user.id,
+    });
   }
 
   async update(user: User, id: string, dto: UpdateMemberDto) {
@@ -301,6 +471,7 @@ export class WorkspaceMembersService {
     if (dto.role !== undefined) await this.access.assertValidRole(existing.workspaceId, dto.role);
     if (dto.status !== undefined) this.assertValidStatus(dto.status);
     this.assertNotReInviting(existing, dto.status);
+    this.assertNotAnsweringForThem(user, existing, dto.status);
     // A role change, or any move off ACTIVE, can orphan the workspace exactly
     // as a removal does — so it runs the same owner/self/last-manager guards.
     const changesRole = dto.role !== undefined && dto.role !== existing.role;
@@ -339,6 +510,9 @@ export class WorkspaceMembersService {
     const data: Prisma.WorkspaceMemberUpdateInput = {};
     if (dto.role !== undefined) data.role = dto.role;
     if (dto.status !== undefined) data.status = dto.status;
+    // A platform administrator letting an invitation in: they join from now.
+    const letIn = existing.status === 'INVITED' && dto.status === 'ACTIVE';
+    if (letIn) data.joinedAt = new Date();
     const updated = await this.prisma.workspaceMember.update({ where: { id }, data });
     // Switched off: a timer they had running here can no longer be stopped —
     // stopping files the time in this workspace, which now refuses them — and
@@ -356,7 +530,16 @@ export class WorkspaceMembersService {
         user.id,
       );
     }
-    if (changesStatus) {
+    if (letIn) {
+      // Not "access switched back on": they never had it.
+      this.emit(WorkspaceEvents.MemberAdded, updated.workspaceId, {
+        workspaceId: updated.workspaceId,
+        userId: updated.userId,
+        role: updated.role,
+        via: 'direct',
+        actorId: user.id,
+      });
+    } else if (changesStatus) {
       // The person is told — see WorkNotificationSubscriber. Losing access used
       // to be something they found out by trying to open the workspace.
       this.emit(WorkspaceEvents.MemberStatusChanged, updated.workspaceId, {
@@ -516,6 +699,7 @@ export class WorkspaceMembersService {
 
   async remove(user: User, id: string): Promise<void> {
     const existing = await this.findScoped(user, id);
+    if (existing.status === 'INVITED') return this.withdraw(user, existing);
     await this.access.assertPermission(user, existing.workspaceId, Permission.MemberRemove);
     this.assertNotSelfEdit(user, existing, 'removed');
     await this.access.assertNotOutranked(user, existing.workspaceId, existing.role);
@@ -530,6 +714,37 @@ export class WorkspaceMembersService {
       userId: existing.userId,
       role: existing.role,
       via: 'direct',
+      actorId: user.id,
+    });
+  }
+
+  /**
+   * Take back an invitation nobody has answered.
+   *
+   * Asking somebody in and taking the question back are one capability, so it
+   * is member:invite (not member:remove), and the rank rule still holds: an
+   * invitation at a role above yours is not yours to withdraw. None of a
+   * removal's other guards apply — an invitation grants nothing, owns nothing
+   * and counts towards no capability — and there is nothing to tidy after it.
+   * Conditional, because the person may be accepting it in the same moment.
+   */
+  private async withdraw(user: User, invitation: WorkspaceMember): Promise<void> {
+    await this.access.assertPermission(user, invitation.workspaceId, Permission.MemberInvite);
+    await this.access.assertNotOutranked(user, invitation.workspaceId, invitation.role);
+    const { count } = await this.prisma.workspaceMember.deleteMany({
+      where: { id: invitation.id, status: 'INVITED' },
+    });
+    if (count === 0) {
+      throw new BadRequestException(
+        'They accepted the invitation a moment ago, so they are a member now. Remove them as a member instead.',
+      );
+    }
+    this.prisma.announceWrite?.('WorkspaceMember', 'delete', invitation);
+    this.emit(WorkspaceEvents.MemberRemoved, invitation.workspaceId, {
+      workspaceId: invitation.workspaceId,
+      userId: invitation.userId,
+      role: invitation.role,
+      via: 'withdrawn',
       actorId: user.id,
     });
   }
@@ -567,6 +782,11 @@ export class WorkspaceMembersService {
     // who switched somebody's access off made a decision, and leaving deleted
     // the row that recorded it: the same person could then redeem an invite
     // code and be ACTIVE again a moment later.
+    if (existing.status === 'INVITED') {
+      throw new BadRequestException(
+        'You have not joined this workspace — decline the invitation instead.',
+      );
+    }
     if (existing.status !== 'ACTIVE') {
       throw new ForbiddenException(
         'Your access to this workspace is switched off. One of its managers has to remove you or switch it back on.',

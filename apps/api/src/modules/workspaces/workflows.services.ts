@@ -1,4 +1,10 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { generateId } from '@strata/common';
 import { WorkspaceEvents } from '@strata/shared';
@@ -80,6 +86,32 @@ export class InvitationAcceptanceService {
       // Switched off is not "already in". This answered `success: true` for an
       // INACTIVE or INVITED row as well, so the screen said "You now have
       // access" to somebody who had none and left them guessing why.
+      // Invited, and now redeeming a code for the same workspace: that is a yes.
+      // The invitation is accepted, at the role it offered (somebody chose it
+      // for this person; a code is for anybody), and no seat is spent.
+      if (existing.status === 'INVITED') {
+        await this.access.assertValidRole(invite.workspaceId, existing.role);
+        const { count } = await this.prisma.workspaceMember.updateMany({
+          where: { id: existing.id, status: 'INVITED' },
+          data: { status: 'ACTIVE', joinedAt: new Date() },
+        });
+        if (count > 0) {
+          await closePendingJoinRequests(this.prisma, invite.workspaceId, user.id);
+          const accepted = await this.prisma.workspaceMember.findUniqueOrThrow({ where: { id: existing.id } });
+          this.prisma.announceWrite?.('WorkspaceMember', 'update', accepted);
+          emit(this.events, WorkspaceEvents.MemberAdded, invite.workspaceId, {
+            workspaceId: invite.workspaceId,
+            userId: user.id,
+            role: accepted.role,
+            via: 'accepted',
+            actorId: user.id,
+          });
+          return { success: true, workspaceId: invite.workspaceId, role: accepted.role, membershipId: existing.id };
+        }
+        // Withdrawn in the same moment: nothing is held now, so the code can be
+        // redeemed afresh.
+        throw new ConflictException('Your invitation to this workspace was just withdrawn. Enter the code again to join.');
+      }
       if (existing.status !== 'ACTIVE') {
         throw new ForbiddenException(
           'Your access to this workspace is switched off. Ask one of its managers to switch it back on.',

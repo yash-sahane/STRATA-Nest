@@ -17,6 +17,7 @@ import { MailService } from '../mail/mail.service';
 import { PasswordService } from '../auth/services/password.service';
 import { RefreshTokenStore } from '../auth/services/refresh-token.store';
 import { UserDeactivationService } from '../deletion/user-deactivation.service';
+import { joinsWithoutBeingAsked } from '../workspaces/invitation-consent';
 import { closePendingJoinRequests } from '../workspaces/join-request-sync';
 import type { InviteUserDto, UpdateUserDto } from './dto';
 import { UserMapper, type UserResponse } from './user.mapper';
@@ -91,6 +92,16 @@ export class UsersService {
       name: WorkspaceEvents.MemberAdded,
       workspaceId,
       payload: { workspaceId, userId, role, via: 'direct', actorId },
+      occurredAt: new Date().toISOString(),
+    });
+  }
+
+  /** The person is told — in the inbox and by mail — and the audit trail records who asked. */
+  private emitMemberInvited(workspaceId: string, userId: string, role: string, caller: User): void {
+    this.events.emit(WorkspaceEvents.MemberInvited, {
+      name: WorkspaceEvents.MemberInvited,
+      workspaceId,
+      payload: { workspaceId, userId, role, actorId: caller.id, inviterName: caller.name || caller.email },
       occurredAt: new Date().toISOString(),
     });
   }
@@ -192,7 +203,12 @@ export class UsersService {
     if (!membership || !target) throw new NotFoundException('That user does not exist here.');
 
     if (!this.isPlatformAdmin(caller)) {
-      if (membership.status !== 'ACTIVE') {
+      // INVITED counts: an account a manager made for somebody is invited, and
+      // it is accepted by signing in — so a first password lost on the way
+      // would otherwise lock it out of the one step that lets it in. The rules
+      // below still hold it: only while it is on a temporary password, and only
+      // for whoever manages every other workspace it belongs to.
+      if (membership.status !== 'ACTIVE' && membership.status !== 'INVITED') {
         throw new ForbiddenException(
           'This person’s access to this workspace is switched off, so it is not this workspace’s to give them a password.',
         );
@@ -314,8 +330,10 @@ export class UsersService {
     const workspace = await this.prisma.workspace.findUnique({ where: { id: dto.workspaceId } });
     if (!workspace) return { softError: { status: 404, message: 'Workspace not found' } };
 
-    // Inviting mints an ACTIVE membership with the caller-supplied role, so it
-    // requires member:invite — not merely "is a member" — and the role must be
+    // Inviting mints a membership with the caller-supplied role — INVITED until
+    // the person accepts, unless they had already asked to join (see
+    // invitation-consent) — so it requires member:invite — not merely "is a
+    // member" — and the role must be
     // one the workspace actually defines (an unknown one silently resolves to
     // the read-only floor). No owner exemption: an owner whose access had been
     // switched off, or whose role no longer adds people, went on creating
@@ -341,7 +359,37 @@ export class UsersService {
         where: { workspaceId: workspace.id, userId: existing.id },
       });
       if (already) {
-        return { softError: { status: 400, message: 'User is already a member of this workspace' } };
+        return {
+          softError: {
+            status: 400,
+            message:
+              already.status === 'INVITED'
+                ? 'They have already been invited to this workspace and have not answered yet.'
+                : 'User is already a member of this workspace',
+          },
+        };
+      }
+      // Somebody else's add is a question, not a fact: the person is invited and
+      // joins when they accept. Unless they had asked to join already.
+      const joinsNow = await joinsWithoutBeingAsked(
+        this.prisma,
+        this.isPlatformAdmin(caller),
+        workspace.id,
+        existing.id,
+      );
+      if (!joinsNow) {
+        await this.prisma.workspaceMember.create({
+          data: {
+            id: generateId(),
+            workspaceId: workspace.id,
+            userId: existing.id,
+            role: roleName,
+            status: 'INVITED',
+          },
+        });
+        // The notice the event raises carries its own mail copy.
+        this.emitMemberInvited(workspace.id, existing.id, roleName, caller);
+        return this.added(existing.id, undefined, true);
       }
       // Adding somebody answers a request they had raised to join, so it is
       // settled in the same commit — exactly as a direct add does.
@@ -364,7 +412,7 @@ export class UsersService {
         caller.name || caller.email,
         workspace.id,
       );
-      return this.added(existing.id);
+      return this.added(existing.id, undefined, false);
     }
 
     const tempPassword = this.tempPassword();
@@ -379,16 +427,22 @@ export class UsersService {
         hasTempPassword: true,
       },
     });
+    // A new account is invited like an existing one — see invitation-consent:
+    // were it ACTIVE at once, the roster would tell whoever added it which
+    // addresses already had an account. It has never asked to join anything,
+    // so only a platform administrator's add takes effect at once.
+    const joinsNow = this.isPlatformAdmin(caller);
     await this.prisma.workspaceMember.create({
       data: {
         id: generateId(),
         workspaceId: workspace.id,
         userId: newUser.id,
         role: roleName,
-        status: 'ACTIVE',
+        status: joinsNow ? 'ACTIVE' : 'INVITED',
       },
     });
-    this.emitMemberAdded(workspace.id, newUser.id, roleName, caller.id);
+    if (joinsNow) this.emitMemberAdded(workspace.id, newUser.id, roleName, caller.id);
+    else this.emitMemberInvited(workspace.id, newUser.id, roleName, caller);
     await this.mail.sendWelcome(newUser.email, newUser.name, tempPassword);
     /**
      * The temporary password exists in exactly one place: the welcome mail. Where
@@ -402,7 +456,7 @@ export class UsersService {
      * effect: `hasTempPassword` locks the session to the change-password screen
      * until it is replaced. When mail does deliver, it is never returned.
      */
-    return this.added(newUser.id, this.mail.delivers ? undefined : tempPassword);
+    return this.added(newUser.id, this.mail.delivers ? undefined : tempPassword, !joinsNow);
   }
 
   /**
@@ -417,14 +471,20 @@ export class UsersService {
    * The one difference left is the temporary password, and only where mail
    * cannot be delivered: a new account has to be handed one or nobody can ever
    * sign in to it, and an existing account must never be.
+   *
+   * `invited` says whether the person still has to accept. It is the same for a
+   * new account and an existing one: both are invited unless a platform
+   * administrator added them, or (an existing account only, and for a reason
+   * the caller already knows) they had asked to join.
    */
-  private added(userId: string, temporaryPassword?: string): InviteResult {
+  private added(userId: string, temporaryPassword: string | undefined, invited: boolean): InviteResult {
     return {
       status: 201,
       body: {
         success: true,
         userId,
-        message: 'Added to the workspace',
+        invited,
+        message: invited ? 'Invitation sent' : 'Added to the workspace',
         emailSent: this.mail.delivers,
         ...(temporaryPassword ? { temporaryPassword } : {}),
       },

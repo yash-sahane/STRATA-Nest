@@ -10,6 +10,7 @@ import {
   type SprintLifecyclePayload,
   type TimeEntryDecisionPayload,
   type WorkspaceMemberAddedPayload,
+  type WorkspaceMemberInvitedPayload,
   type WorkspaceMemberRemovedPayload,
   type WorkspaceMemberRoleChangedPayload,
   type WorkspaceMemberStatusChangedPayload,
@@ -62,6 +63,20 @@ export class AuditSubscriber {
       entityType: 'workspace_member',
       entityId: e.payload.userId,
       metadata: { ...(await this.subject(e.payload.userId)), role: e.payload.role, via: e.payload.via },
+    });
+  }
+
+  /** Who asked whom in, at what role. Accepting is recorded as MemberAdded
+   *  (via `accepted`), declining and withdrawing as MemberRemoved. */
+  @OnEvent(WorkspaceEvents.MemberInvited)
+  async onMemberInvited(e: DomainEvent<WorkspaceMemberInvitedPayload>): Promise<void> {
+    return this.record({
+      workspaceId: e.payload.workspaceId,
+      userId: e.payload.actorId,
+      action: WorkspaceEvents.MemberInvited,
+      entityType: 'workspace_member',
+      entityId: e.payload.userId,
+      metadata: { ...(await this.subject(e.payload.userId)), role: e.payload.role },
     });
   }
 

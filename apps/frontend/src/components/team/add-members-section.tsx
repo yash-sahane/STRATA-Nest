@@ -135,7 +135,9 @@ export function AddMembersSection({
       }
       // Said as it happened — this used to announce "Welcome email sent" on a
       // server that had sent nothing.
-      toast.success('User added', { description: describeInviteResult(result, userData.email) });
+      toast.success(result.invited ? 'Invitation sent' : 'User added', {
+        description: describeInviteResult(result, userData.email),
+      });
 
       // Reset form
       formRef.current?.reset();
@@ -196,6 +198,8 @@ export function AddMembersSection({
     const results = {
       success: 0,
       failed: 0,
+      /** Of the successes, how many still have to accept. */
+      invited: 0,
       errors: [] as Array<{ row: number; email: string; error: string }>,
     };
     const issuedNow: IssuedCredential[] = [];
@@ -224,6 +228,7 @@ export function AddMembersSection({
         }
 
         results.success++;
+        if (result.invited) results.invited++;
       } catch (error: unknown) {
         results.failed++;
         results.errors.push({
@@ -249,7 +254,14 @@ export function AddMembersSection({
     }
 
     if (results.success > 0) {
-      toast.success(`Successfully added ${results.success} users!`, {
+      const people = (n: number) => `${n} ${n === 1 ? 'person' : 'people'}`;
+      toast.success(
+        results.invited === results.success
+          ? `Invited ${people(results.success)}. They join once they accept.`
+          : results.invited === 0
+            ? `Added ${people(results.success)}.`
+            : `Added ${people(results.success - results.invited)}; invited ${people(results.invited)}, who join once they accept.`,
+        {
         description:
           issuedNow.length > 0
             ? 'No email was sent — their temporary passwords are listed at the top of this tab.'
@@ -257,7 +269,7 @@ export function AddMembersSection({
       });
     }
     if (results.failed > 0) {
-      toast.error(`Failed to add ${results.failed} users. Check the results below.`);
+      toast.error(`Could not add ${results.failed === 1 ? '1 person' : `${results.failed} people`}. Check the results below.`);
     }
   };
 
@@ -382,8 +394,9 @@ export function AddMembersSection({
               <Alert>
                 <AlertCircle className="h-4 w-4" />
                 <AlertDescription>
-                  The user has to replace the temporary password the first time they sign in.
-                  Someone who already has an account is simply added to this workspace.
+                  Everybody you add is invited: they join this workspace once they accept, from
+                  their Workspaces page. A new account also has to replace its temporary password
+                  the first time it signs in.
                 </AlertDescription>
               </Alert>
 

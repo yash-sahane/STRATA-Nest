@@ -72,6 +72,7 @@ function build(
         .fn()
         .mockResolvedValue({ email: 'dev@corp.com', name: 'Dev', isActive: true }),
     },
+    workspace: { findUnique: jest.fn().mockResolvedValue({ name: 'Acme Web' }) },
     workspaceMember: {
       // Asked "which of these are still members?": all of them, bar the former
       // ones. Asked for everybody: the roster.
@@ -342,5 +343,66 @@ describe('WorkNotificationSubscriber — mail and failures', () => {
       sub.onTaskAssigned(event(TaskEvents.Assigned, { ...task, assigneeIds: ['a', 'b'] })),
     ).resolves.toBeUndefined();
     expect(deliver).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('WorkNotificationSubscriber — invitations', () => {
+  const invited = event('workspace.member.invited', {
+    workspaceId: 'w1',
+    userId: 'guest',
+    role: 'SOFTWARE_DEVELOPER',
+    actorId: 'mgr',
+    inviterName: 'Priya',
+  });
+
+  it('tells the invited person — although they are not a member — who asked, where, as what, and how to answer', async () => {
+    // Not on the roster: an invitation is exactly a notice to somebody outside.
+    const { sub, deliver, sendNotification } = build({ formerMembers: ['guest'], mailDelivers: true });
+    await sub.onMemberInvited(invited);
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'guest',
+        type: 'WORKSPACE_INVITATION',
+        relatedEntityType: 'workspace',
+        message: expect.stringMatching(
+          /^Priya invited you to "Acme Web" as Software Developer\. Accept or decline it/,
+        ),
+      }),
+    );
+    // Somebody with no workspace yet has no inbox open: mailed as well.
+    expect(sendNotification).toHaveBeenCalled();
+  });
+
+  it('a declined invitation tells nobody — it was their own answer', async () => {
+    const { sub, deliver } = build();
+    await sub.onMemberRemoved(
+      event('workspace.member.removed', {
+        workspaceId: 'w1',
+        userId: 'guest',
+        role: 'MEMBER',
+        via: 'declined' as const,
+        actorId: 'guest',
+      }),
+    );
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it('a withdrawn one says withdrawn, not "removed ... no longer have access"', async () => {
+    const { sub, deliver } = build({ formerMembers: ['guest'] });
+    await sub.onMemberRemoved(
+      event('workspace.member.removed', {
+        workspaceId: 'w1',
+        userId: 'guest',
+        role: 'MEMBER',
+        via: 'withdrawn' as const,
+        actorId: 'mgr',
+      }),
+    );
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Invitation withdrawn',
+        message: 'Your invitation to "Acme Web" was withdrawn.',
+      }),
+    );
   });
 });

@@ -80,6 +80,7 @@ function crud(
 
 const ACTIVITY_CONFIG: Record<string, ActivityConfig> = {
   'workspace.member.added': { icon: UserPlus, color: 'text-emerald-700 dark:text-emerald-500', label: 'Member Added' },
+  'workspace.member.invited': { icon: UserPlus, color: 'text-sky-500', label: 'Member Invited' },
   'workspace.member.role_changed': {
     icon: ShieldCheck,
     color: 'text-violet-500',

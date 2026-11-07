@@ -23,6 +23,28 @@ export class WorkspaceMembersController {
     return this.members.create(user, dto);
   }
 
+  /** The invitations waiting on the caller, from whichever workspace. Declared
+   *  before `:id`, which would otherwise take "invitations" for an id. */
+  @Get('invitations')
+  invitations(@CurrentUser() user: User) {
+    return this.members.invitations(user);
+  }
+
+  /** The invited person saying yes. Theirs alone: no permission is asked,
+   *  because the row is looked up by id AND the caller. */
+  @Post(':id/accept')
+  @HttpCode(200)
+  accept(@CurrentUser() user: User, @Param('id') id: string) {
+    return this.members.accept(user, id);
+  }
+
+  /** The invited person saying no. The invitation is deleted. */
+  @Post(':id/decline')
+  @HttpCode(204)
+  decline(@CurrentUser() user: User, @Param('id') id: string) {
+    return this.members.decline(user, id);
+  }
+
   /** What removing this member would leave behind — asked before a removal. */
   @Get(':id/footprint')
   footprint(@CurrentUser() user: User, @Param('id') id: string) {

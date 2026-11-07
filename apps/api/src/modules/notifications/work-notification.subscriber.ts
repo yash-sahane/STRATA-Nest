@@ -15,12 +15,13 @@ import {
   NotifiableEvent,
   WorkspaceEvents,
   type JoinRequestHandledPayload,
+  type WorkspaceMemberInvitedPayload,
   type WorkspaceMemberRemovedPayload,
   type WorkspaceMemberStatusChangedPayload,
   type NotificationType,
 } from '@strata/shared';
 import { PrismaService } from '@strata/prisma';
-import { Permission } from '../authz/permissions';
+import { Permission, isBuiltInRole } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { MailService } from '../mail/mail.service';
 import { NotificationPreferencesService } from './notification-preferences.service';
@@ -416,16 +417,53 @@ export class WorkNotificationSubscriber {
   @OnEvent(WorkspaceEvents.MemberRemoved)
   async onMemberRemoved(e: DomainEvent<WorkspaceMemberRemovedPayload>): Promise<void> {
     const p = e.payload;
-    if (p.via === 'left') return;
+    // Leaving, or turning an invitation down, is the person's own act.
+    if (p.via === 'left' || p.via === 'declined') return;
     const workspace = await this.workspaceLabel(p.workspaceId);
+    // An invitation taken back was never access: "removed ... no longer have
+    // access" would tell them they had lost something they never had.
+    const withdrawn = p.via === 'withdrawn';
     await this.tell(
       [p.userId],
       undefined,
       {
         workspaceId: p.workspaceId,
         type: NotifiableEvent[WorkspaceEvents.MemberRemoved],
-        title: 'Removed from a workspace',
-        message: `You were removed from ${workspace} and no longer have access to it.`,
+        title: withdrawn ? 'Invitation withdrawn' : 'Removed from a workspace',
+        message: withdrawn
+          ? `Your invitation to ${workspace} was withdrawn.`
+          : `You were removed from ${workspace} and no longer have access to it.`,
+        relatedEntityId: p.workspaceId,
+        relatedEntityType: 'workspace',
+      },
+      { email: !withdrawn, formerMembers: true },
+    );
+  }
+
+  /**
+   * Somebody was asked to join a workspace: tell them, and how to answer.
+   *
+   * Adding a person used to put them straight in — a stranger's workspace in
+   * their switcher, its notices in their inbox, and a role in it they never
+   * agreed to. An invitation grants nothing until they accept it, so they have
+   * to hear of it: in the inbox, which is filed by recipient and so shows a
+   * notice from a workspace they cannot see into yet, and by mail, since
+   * somebody with no workspace yet has no inbox open.
+   */
+  @OnEvent(WorkspaceEvents.MemberInvited)
+  async onMemberInvited(e: DomainEvent<WorkspaceMemberInvitedPayload>): Promise<void> {
+    const p = e.payload;
+    const workspace = await this.workspaceLabel(p.workspaceId);
+    // SOFTWARE_DEVELOPER -> "Software Developer"; a custom role as its author wrote it.
+    const role = isBuiltInRole(p.role) ? p.role.split('_').map(titleCase).join(' ') : p.role;
+    await this.tell(
+      [p.userId],
+      undefined,
+      {
+        workspaceId: p.workspaceId,
+        type: NotifiableEvent[WorkspaceEvents.MemberInvited],
+        title: 'Invitation to a workspace',
+        message: `${p.inviterName} invited you to ${workspace} as ${role}. Accept or decline it on your Workspaces page; until you accept, you are not a member.`,
         relatedEntityId: p.workspaceId,
         relatedEntityType: 'workspace',
       },
