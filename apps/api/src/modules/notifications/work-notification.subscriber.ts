@@ -27,6 +27,7 @@ import { MailService } from '../mail/mail.service';
 import { NotificationPreferencesService } from './notification-preferences.service';
 import { NotificationsService, type NotificationInput } from './notifications.service';
 import { NOTICE_EVENT, type NoticePayload } from './notice';
+import { appPathFor } from './notice-links';
 
 /** A work notice, before it is addressed: its type is one of NOTIFICATION_TYPES. */
 type Notice = Omit<NotificationInput, 'userId' | 'type'> & { type: NotificationType };
@@ -137,6 +138,7 @@ export class WorkNotificationSubscriber {
       name: user.name || user.email,
       title: notice.title,
       message: notice.message,
+      path: appPathFor(notice),
     });
   }
 

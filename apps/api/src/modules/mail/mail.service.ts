@@ -39,8 +39,14 @@ export class MailService {
     await this.email.enqueue({
       kind: EmailKind.PasswordReset,
       to: email,
-      subject: 'Reset your password',
-      text: `Reset your password using this link: ${link}`,
+      subject: 'Reset your STRATA password',
+      // The link is single-use and lives an hour (PasswordResetStore.TTL). It
+      // used to arrive as one bare line, saying neither, nor what to do with a
+      // mail somebody else asked for — the commonest way one lands in an inbox.
+      text:
+        `Somebody asked to reset the password for the STRATA account ${email}. ` +
+        `To choose a new password, open this link within the next hour; it works once: ${link} ` +
+        `If you did not ask for this, ignore this mail. Your password stays as it is.`,
       context: { link },
       // A digest of the link, never the link: this key becomes the queue's
       // job id, which the worker prints in its logs and Redis keeps for a
@@ -129,6 +135,16 @@ export class MailService {
     });
   }
 
+  /**
+   * The line that takes the reader to where the mail is acted on. A notice
+   * mailed without one ("accept it on your Workspaces page") left them to find
+   * the app, sign in and hunt for the page. Signed out, the app sends them
+   * through sign-in and back to this path.
+   */
+  private openIn(path?: string): string {
+    return path ? `\n\nOpen it in STRATA: ${this.frontend}${path}` : '';
+  }
+
   /** The mail copy of an in-app notification. Title and body are rendered by
    *  the caller, so the two channels can never say different things. */
   async sendNotification(input: {
@@ -136,12 +152,14 @@ export class MailService {
     name: string;
     title: string;
     message: string;
+    /** Where the notice is acted on — see appPathFor. */
+    path?: string;
   }): Promise<void> {
     await this.email.enqueue({
       kind: EmailKind.Notification,
       to: input.to,
       subject: input.title,
-      text: `Hi ${input.name}, ${input.message}`,
+      text: `Hi ${input.name}, ${input.message}${this.openIn(input.path)}`,
       context: { name: input.name, title: input.title },
     });
   }
@@ -159,12 +177,14 @@ export class MailService {
     title: string;
     message: string;
     idempotencyKey: string;
+    /** The task's place in the app — see appPathFor. */
+    path?: string;
   }): Promise<void> {
     await this.email.enqueue({
       kind: EmailKind.Notification,
       to: input.to,
       subject: input.title,
-      text: `Hi ${input.name}, ${input.message}`,
+      text: `Hi ${input.name}, ${input.message}${this.openIn(input.path)}`,
       context: { name: input.name, title: input.title },
       idempotencyKey: input.idempotencyKey,
       // One reminder per task, person and day. The key already says so, but a

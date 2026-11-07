@@ -43,6 +43,7 @@ import {
 } from '@/lib/ai-generator';
 import { fetchWithSession, restClient } from '@/lib/api/rest-client';
 import { useMyPermissionKeys } from '@/hooks/use-permissions';
+import { useProject } from '@/hooks/use-project';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { toast } from 'sonner';
 
@@ -248,6 +249,12 @@ export function AIGenerateDialog({
   const [step, setStep] = React.useState<GenerationStep>('input');
   const [progress, setProgress] = React.useState(0);
   const [generatedData, setGeneratedData] = React.useState<GeneratedHierarchy | null>(null);
+  // The client a saved requirement is filed under is the PROJECT's (bulk-save
+  // takes `project.clientName || 'Client'` and ignores the model's guess). The
+  // preview printed the guess — usually the prompt's own fallback, "Client" —
+  // so every card read "Client: Client" and then saved as "QA Client".
+  const { data: project } = useProject(projectId);
+  const savedClientName = project?.clientName || 'Client';
   const [analysis, setAnalysis] = React.useState<DocumentAnalysis | null>(null);
   const [saveProgress, setSaveProgress] = React.useState(0);
   /** Stable per generated tree: makes an accidental second "Confirm & Save All" a no-op server-side. */
@@ -759,7 +766,7 @@ We need a mobile app for our e-commerce business that allows customers to browse
                           <Badge>{getPriorityConfig(savedAs(PRIORITIES, req.priority, 'MEDIUM')).label}</Badge>
                         </CardTitle>
                         <CardDescription className="text-xs">
-                          Client: {req.clientName}
+                          Client: {savedClientName}
                         </CardDescription>
                       </CardHeader>
                       <CardContent>

@@ -29,9 +29,14 @@ function build(
     /** The workspace's declared zone. UTC unless a test is about zones, so the
      *  suite does not depend on the zone of the machine running it. */
     timezone?: string;
+    /** Ids of the workspace's archived projects. */
+    archivedProjects?: string[];
   } = {},
 ) {
   const taskFindMany = jest.fn().mockResolvedValue(options.tasks ?? []);
+  const projectFindMany = jest
+    .fn()
+    .mockResolvedValue((options.archivedProjects ?? []).map((id) => ({ id })));
   const notificationFindMany = jest
     .fn()
     .mockResolvedValue((options.alreadySent ?? []).map((row) => ({ createdAt: NOW, ...row })));
@@ -51,6 +56,7 @@ function build(
     notification: { findMany: notificationFindMany },
     user: { findMany: userFindMany },
     workspaceMember: { findMany: jest.fn().mockResolvedValue(members.map((userId) => ({ userId }))) },
+    project: { findMany: projectFindMany },
   } as unknown as PrismaService;
 
   const assertMember = jest.fn().mockResolvedValue(undefined);
@@ -148,6 +154,20 @@ describe('DeadlineReminderService.scan', () => {
 
     await expect(svc.scan('w1', NOW)).resolves.toBe(1);
     expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ userId: 'a1' }));
+  });
+
+  it('leaves an archived project out of the scan: its tasks cannot be finished or moved', async () => {
+    const { svc, taskFindMany } = build({ tasks: [], archivedProjects: ['p-old', 'p-older'] });
+    await svc.scan('w1', NOW);
+    expect(taskFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ projectId: { notIn: ['p-old', 'p-older'] } }),
+      }),
+    );
+
+    const none = build({ tasks: [] });
+    await none.svc.scan('w1', NOW);
+    expect(none.taskFindMany.mock.calls[0][0].where).not.toHaveProperty('projectId');
   });
 
   it('mails the reminder unless the recipient turned the email channel off', async () => {
@@ -285,6 +305,7 @@ describe('DeadlineReminderService.scan — business days', () => {
       },
       user: { findMany: jest.fn().mockResolvedValue([{ id: 'a1', email: 'a1@example.com', name: 'Ann' }]) },
       workspaceMember: { findMany: jest.fn().mockResolvedValue([{ userId: 'a1' }]) },
+      project: { findMany: jest.fn().mockResolvedValue([]) },
     } as unknown as PrismaService;
     const deliver = jest.fn((row: { userId: string; type: string; relatedEntityId: string; message: string }) => {
       written.push({ ...row, createdAt: clock });

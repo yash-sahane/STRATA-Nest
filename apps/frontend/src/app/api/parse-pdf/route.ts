@@ -7,6 +7,7 @@ import { checkWorkspacePermissions, hasApiSession } from '@/lib/api/server-proxy
 import { refuseCrossSite } from '@/lib/api/server-proxy';
 import { GENERATION_PERMISSIONS, MAX_PDF_BYTES } from '@/lib/ai-generator';
 import { logger } from '@/lib/logger';
+import { pdfText } from '@/lib/pdf-text';
 
 /**
  * How long one parse may take. pdf2json reports through two events, and a PDF
@@ -118,39 +119,13 @@ export async function POST(request: NextRequest) {
       Promise.resolve(pdfParser.loadPDF(tempFilePath!)).catch(reject);
     }).finally(() => clearTimeout(parseTimer));
 
-    // Extract text from all pages
-    let fullText = '';
-
-    if (parsedData && parsedData.Pages) {
-      for (const page of parsedData.Pages) {
-        if (page.Texts) {
-          for (const text of page.Texts) {
-            if (text.R) {
-              for (const r of text.R) {
-                if (r.T) {
-                  // Decode URI component (pdf2json encodes text). A stray '%'
-                  // in the source makes decodeURIComponent throw a URIError,
-                  // which used to fail the whole document over one glyph.
-                  let decodedText: string;
-                  try {
-                    decodedText = decodeURIComponent(r.T);
-                  } catch {
-                    decodedText = r.T;
-                  }
-                  fullText += decodedText + ' ';
-                }
-              }
-            }
-          }
-          fullText += '\n';
-        }
-      }
-    }
+    // Lines and paragraphs as the document has them — see pdfText.
+    const fullText = pdfText(parsedData);
 
     const numPages = parsedData?.Pages?.length || 0;
 
     return NextResponse.json({
-      text: fullText.trim(),
+      text: fullText,
       pages: numPages,
       info: { pages: numPages },
     });

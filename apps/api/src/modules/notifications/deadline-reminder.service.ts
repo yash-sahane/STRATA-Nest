@@ -8,6 +8,8 @@ import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { MailService } from '../mail/mail.service';
 import { NotificationPreferencesService } from './notification-preferences.service';
 import { NotificationsService } from './notifications.service';
+import { appPathFor } from './notice-links';
+import { ARCHIVED_PROJECT_STATUS } from '../projects/project-archive';
 
 /**
  * Deadline + overdue reminders, computed SERVER-SIDE.
@@ -155,11 +157,19 @@ export class DeadlineReminderService {
     // which side of today a row falls on. The old client did two round trips and
     // then an N+1 `GET /projects/:id` per task for a project name that neither
     // notification template actually renders.
+    // An archived project is read-only: nobody can finish its tasks or move
+    // their deadlines, so a reminder about one is something the reader cannot
+    // act on — and an overdue one would have repeated every day for good.
+    const archived = await this.prisma.project.findMany({
+      where: { workspaceId, status: ARCHIVED_PROJECT_STATUS },
+      select: { id: true },
+    });
     const tasks = await this.prisma.task.findMany({
       where: {
         workspaceId,
         status: { not: 'DONE' },
         dueDate: { gte: oldest, lte: horizon },
+        ...(archived.length ? { projectId: { notIn: archived.map((p) => p.id) } } : {}),
       },
       select: { id: true, title: true, projectId: true, dueDate: true, assigneeIds: true },
     });
@@ -312,6 +322,7 @@ export class DeadlineReminderService {
         // One mail per recipient/task/type/business day, matching the in-app
         // dedupe: a retried scan re-enqueues the same BullMQ jobId and is ignored.
         idempotencyKey: `deadline:${c.userId}:${c.type}:${c.taskId}:${dayKey}`,
+        path: appPathFor({ type: c.type, relatedEntityId: c.taskId, projectId: c.projectId }),
       });
     } catch (err) {
       this.logger.warn(`deadline reminder mail failed (${c.taskId}): ${(err as Error).message}`);

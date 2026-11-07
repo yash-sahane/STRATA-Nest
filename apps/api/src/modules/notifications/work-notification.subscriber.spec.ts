@@ -317,6 +317,8 @@ describe('WorkNotificationSubscriber — mail and failures', () => {
       name: 'Dev',
       title: 'New Task Assigned: Fix login',
       message: 'Asha assigned you a task in Apollo',
+      // The task itself, as the bell opens it.
+      path: expect.stringMatching(/^\/tasks\?projectId=[^&]+&taskId=.+$/),
     });
   });
 
