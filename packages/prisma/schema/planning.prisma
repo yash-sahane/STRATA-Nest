@@ -62,6 +62,11 @@ model Sprint {
   totalTaskCount      Int?      @map("total_task_count")
   rolledOverTaskCount Int?      @map("rolled_over_task_count")
 
+  // One ACTIVE sprint per project is held by a PARTIAL unique index,
+  // "sprints_one_active_per_project" (migration 20261107000000), which Prisma's
+  // schema cannot express. If `prisma migrate dev` generates a DROP INDEX for
+  // it, delete that line from the generated migration: the API relies on the
+  // index to refuse a second start (SprintsService.start).
   @@index([projectId, status])
   @@map("sprints_sprint")
 }

@@ -3,7 +3,7 @@ import { type ListQuerySpec } from '@strata/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PlanningEvents } from '@strata/shared';
 import { PrismaService } from '@strata/prisma';
-import type { Sprint, User } from '@prisma/client';
+import { Prisma, type Sprint, type User } from '@prisma/client';
 import { Permission, type PermissionKey } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { ScopedCrudService } from '../workspaces/scoped-crud.base';
@@ -100,31 +100,63 @@ export class SprintsService extends ScopedCrudService<Sprint, ReturnType<typeof 
   }
 
   /**
-   * Start a sprint — one start per project at a time.
+   * Start a sprint — one running sprint per project, held by the database.
    *
    * The one-active check reads and the write lands afterwards, so two starts at
-   * once (two sprints of a project, or two managers) each read "nothing is
-   * running" and BOTH went ACTIVE. A transaction-scoped advisory lock per
-   * project makes them queue, the way leave requests do: the check runs again
-   * inside it, and the write is awaited inside it, so it has committed before
-   * the next start in the queue looks. That one is refused — or, when it was
-   * the same sprint, finds it already running and does not announce the start a
-   * second time.
+   * once each read "nothing is running" and BOTH went ACTIVE. That was closed
+   * with an advisory lock, but the work done under it went through the shared
+   * client: every start held one pooled connection while it waited for a
+   * second — the shape that stalled the whole API when time entries did it.
+   *
+   * The rule is the database's now: a partial unique index allows one ACTIVE
+   * sprint per project (migration one_active_sprint_per_project), so of two
+   * starts of different sprints the second write fails there, and is answered
+   * as the check answers it. The flip itself is one conditional write, so of
+   * two starts of the SAME sprint only the one that moved it off Planning
+   * announces it — a double click cannot announce a start, or move its
+   * backlog, twice. No transaction, no lock, one connection.
+   *
+   * The status is written here and nowhere else in the request: the rest of
+   * the patch (a name, a goal) goes through the ordinary update without it,
+   * so a sprint completed in the same moment cannot be set running again.
    */
-  private async startUnderLock(
+  private async start(
     user: User,
     sprint: Sprint,
     data: Record<string, unknown>,
     basedOn?: Record<string, unknown>,
   ): Promise<{ result: ReturnType<typeof sprintResponse>; started: boolean }> {
-    const lockKey = `sprint-start:${sprint.projectId}`;
-    return this.prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey})::bigint)`;
-      const current = await this.findScoped(user, sprint.id);
-      const started = current.status !== 'ACTIVE';
-      if (started) await this.assertTransition(current, 'ACTIVE');
-      return { result: await this.update(user, sprint.id, data, basedOn), started };
-    });
+    await this.access.assertPermission(user, sprint.workspaceId, this.updatePermission);
+    await this.assertTransition(sprint, 'ACTIVE');
+    let started: boolean;
+    try {
+      const { count } = await this.prisma.sprint.updateMany({
+        where: { id: sprint.id, status: { notIn: ['ACTIVE', 'COMPLETED'] } },
+        data: { status: 'ACTIVE', version: { increment: 1 } },
+      });
+      started = count === 1;
+    } catch (err) {
+      if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== 'P2002') throw err;
+      // Another sprint of the project went ACTIVE between the check and this write.
+      await this.assertNoOtherActiveSprint(sprint.projectId, 'ACTIVE', sprint.id);
+      throw new BadRequestException(
+        'Another sprint of this project was started at the same moment. Refresh to see which.',
+      );
+    }
+    const row = await this.prisma.sprint.findUniqueOrThrow({ where: { id: sprint.id } });
+    if (started) {
+      // `updateMany` is invisible to the realtime write hook and leaves no trail.
+      this.prisma.announceWrite?.('Sprint', 'update', row);
+      await this.recordAudit(user, row.workspaceId, 'updated', row.id, row as Record<string, unknown>, ['status']);
+    }
+    const { status: _status, ...rest } = data;
+    const restBasedOn = basedOn
+      ? Object.fromEntries(Object.entries(basedOn).filter(([field]) => field !== 'status'))
+      : undefined;
+    const result = Object.keys(rest).length
+      ? await this.update(user, sprint.id, rest, restBasedOn)
+      : this.map(row);
+    return { result, started };
   }
 
   async create(user: User, dto: CreateSprintDto) {
@@ -196,7 +228,7 @@ export class SprintsService extends ScopedCrudService<Sprint, ReturnType<typeof 
     // transition only, never on a repeat PATCH of an already-active sprint.
     const { result, started } =
       before && dto.status === 'ACTIVE' && before.status !== 'ACTIVE'
-        ? await this.startUnderLock(user, before, data, dto.basedOn)
+        ? await this.start(user, before, data, dto.basedOn)
         : { result: await this.update(user, id, data, dto.basedOn), started: false };
     if (before && started) {
       // AWAITED: starting a sprint also moves its Backlog tasks to To Do (a

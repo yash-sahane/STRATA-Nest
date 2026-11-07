@@ -1,6 +1,6 @@
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import type { PrismaService } from '@strata/prisma';
-import type { Sprint, User } from '@prisma/client';
+import { Prisma, type Sprint, type User } from '@prisma/client';
 import type { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { SprintsService } from './sprints.services';
 
@@ -44,13 +44,19 @@ function build(
   const findFirst = jest.fn((args: { select?: unknown }) =>
     Promise.resolve(args?.select ? (opts.activeClash ?? null) : row),
   );
-  // A start runs inside a transaction that holds the project's start lock.
-  const $executeRaw = jest.fn().mockResolvedValue(1);
-  const $transaction = jest.fn((cb: (tx: unknown) => unknown) => cb({ $executeRaw }));
+  // A start is one conditional write: it moves the sprint only while it is not
+  // already running (count 1), and a second ACTIVE sprint in the project is
+  // refused by the database's partial unique index.
+  const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+  const findUniqueOrThrow = jest.fn().mockResolvedValue({ ...row, status: 'ACTIVE' });
+  // Nothing about a start may take a transaction any more (see SprintsService.start).
+  const $transaction = jest.fn();
+  const announceWrite = jest.fn();
   const prisma = {
-    sprint: { create, update, findFirst },
+    sprint: { create, update, findFirst, updateMany, findUniqueOrThrow },
     project,
     $transaction,
+    announceWrite,
   } as unknown as PrismaService;
   const access = {
     scopeWhere: jest.fn().mockResolvedValue({}),
@@ -65,7 +71,9 @@ function build(
     update,
     project,
     findFirst,
-    $executeRaw,
+    updateMany,
+    findUniqueOrThrow,
+    announceWrite,
     $transaction,
     events,
   };
@@ -182,9 +190,11 @@ describe('SprintsService.create — a sprint starts life in Planning', () => {
 
 describe('SprintsService status changes through PATCH', () => {
   it('starts a planned sprint when no other is running', async () => {
-    const { svc, update } = build();
+    const { svc, updateMany, announceWrite } = build();
     await expect(svc.patch(user, 's1', { status: 'ACTIVE' })).resolves.toBeDefined();
-    expect(update).toHaveBeenCalled();
+    expect(updateMany).toHaveBeenCalled();
+    // The flip is an updateMany, which the realtime hook does not see.
+    expect(announceWrite).toHaveBeenCalledWith('Sprint', 'update', expect.objectContaining({ status: 'ACTIVE' }));
   });
 
   it('makes a project still in Planning Active when its sprint starts, and no other', async () => {
@@ -219,65 +229,67 @@ describe('SprintsService status changes through PATCH', () => {
     expect(update).not.toHaveBeenCalled();
   });
 
-  // Checked before the write, outside any lock, two starts at once each saw
-  // nothing running and both went ACTIVE.
-  it('starts under the project lock, and checks again for a running sprint once it holds it', async () => {
-    const { svc, update, findFirst, $executeRaw } = build();
+  // Checked before the write, two starts at once each saw nothing running and
+  // both went ACTIVE. An advisory lock fixed that at the cost of two pooled
+  // connections per start; the rule is the database's now.
+  it('starts with one conditional write — no transaction, no lock — that moves only a sprint not yet running', async () => {
+    const { svc, updateMany, $transaction } = build();
     await svc.patch(user, 's1', { status: 'ACTIVE' });
-
-    expect($executeRaw).toHaveBeenCalledTimes(1);
-    const [sql, key] = $executeRaw.mock.calls[0] as [TemplateStringsArray, string];
-    expect(sql.join('?')).toContain('pg_advisory_xact_lock');
-    expect(key).toBe('sprint-start:p1');
-    const locked = $executeRaw.mock.invocationCallOrder[0];
-    // The clash probe is the findFirst that selects; one of them runs under the lock.
-    const probes = findFirst.mock.calls
-      .map(([args], i) => ({ args, at: findFirst.mock.invocationCallOrder[i] }))
-      .filter(({ args }) => (args as { select?: unknown })?.select);
-    expect(probes.some(({ at }) => at > locked)).toBe(true);
-    // And the write is made while the lock is held, so the next start sees it.
-    expect(update.mock.invocationCallOrder[0]).toBeGreaterThan(locked);
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: 's1', status: { notIn: ['ACTIVE', 'COMPLETED'] } },
+      data: { status: 'ACTIVE', version: { increment: 1 } },
+    });
+    expect($transaction).not.toHaveBeenCalled();
   });
 
-  it('is refused under the lock when another start got there first', async () => {
-    const { svc, update, findFirst } = build();
-    // Nothing running when it first looked; a concurrent start has committed by
-    // the time this one holds the lock.
-    findFirst.mockImplementation((args: { select?: unknown }) =>
-      Promise.resolve(
-        args?.select
-          ? findFirst.mock.calls.filter(([a]) => (a as { select?: unknown })?.select).length > 1
-            ? { name: 'Sprint 8' }
-            : null
-          : { ...stored },
-      ),
+  it('a start that loses to another sprint of the project is refused as the check refuses it', async () => {
+    const { svc, updateMany, findFirst, events } = build();
+    const emitted = jest.spyOn(events, 'emitAsync');
+    // Nothing running when it looked; the other start committed first, and the
+    // one-active index refuses this write.
+    updateMany.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+        code: 'P2002',
+        clientVersion: 'test',
+      }),
     );
+    let probes = 0;
+    findFirst.mockImplementation((args: { select?: unknown }) => {
+      if (!args?.select) return Promise.resolve({ ...stored });
+      probes += 1;
+      return Promise.resolve(probes > 2 ? { name: 'Sprint 8' } : null);
+    });
     await expect(svc.patch(user, 's1', { status: 'ACTIVE' })).rejects.toThrow(
       '"Sprint 8" is already the active sprint for this project. Complete it first.',
     );
-    expect(update).not.toHaveBeenCalled();
+    expect(emitted).not.toHaveBeenCalled();
   });
 
   it('announces a start once, when two requests start the same sprint', async () => {
-    const { svc, project, findFirst, events } = build();
+    const { svc, project, updateMany, events } = build();
     const emitted = jest.spyOn(events, 'emitAsync');
-    // PLANNING when the request first read it; already ACTIVE under the lock,
-    // because the other request's start committed first.
-    let reads = 0;
-    findFirst.mockImplementation((args: { select?: unknown }) => {
-      if (args?.select) return Promise.resolve(null);
-      reads += 1;
-      return Promise.resolve({ ...stored, status: reads === 1 ? 'PLANNING' : 'ACTIVE' });
-    });
+    // PLANNING when this request read it; the other request's start moved it
+    // first, so this write matches nothing.
+    updateMany.mockResolvedValueOnce({ count: 0 });
     await expect(svc.patch(user, 's1', { status: 'ACTIVE' })).resolves.toBeDefined();
     expect(emitted).not.toHaveBeenCalled();
     expect(project.updateMany).not.toHaveBeenCalled();
   });
 
-  it('takes no lock for an edit that starts nothing', async () => {
-    const { svc, $transaction } = build({ status: 'ACTIVE' });
+  it('saves the rest of a starting patch without writing the status again', async () => {
+    const { svc, update } = build();
+    await svc.patch(user, 's1', { status: 'ACTIVE', name: 'Sprint 1 — Checkout' });
+    // A sprint completed in the same moment must not be set running again.
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.not.objectContaining({ status: expect.anything() }) }),
+    );
+  });
+
+  it('takes no transaction for an edit that starts nothing', async () => {
+    const { svc, $transaction, updateMany } = build({ status: 'ACTIVE' });
     await svc.patch(user, 's1', { name: 'Renamed', status: 'ACTIVE' });
     expect($transaction).not.toHaveBeenCalled();
+    expect(updateMany).not.toHaveBeenCalled();
   });
 
   it('does not close a sprint: that is what POST /complete is for', async () => {
