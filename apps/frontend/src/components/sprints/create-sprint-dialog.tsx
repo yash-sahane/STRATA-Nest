@@ -28,17 +28,16 @@ import { Calendar as CalendarIcon, Loader2 } from 'lucide-react';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { format, startOfDay } from 'date-fns';
+import { businessToday } from '@/lib/task-dates';
 import { cn } from '@/lib/utils';
 
 const formSchema = z.object({
   name: z.string().min(3, 'Sprint name must be at least 3 characters'),
   goal: z.string().optional(),
-  startDate: z.date({
-    required_error: 'Start date is required',
-  }),
-  endDate: z.date({
-    required_error: 'End date is required',
-  }),
+  // zod 4 has one `error` for every way a value can fail. A date picker can only
+  // fail by being empty, so "required" is the right sentence for all of them.
+  startDate: z.date({ error: 'Start date is required' }),
+  endDate: z.date({ error: 'End date is required' }),
 }).refine(
   // >=, not >: a one-day sprint (start === end) is legitimate.
   (data) => data.endDate >= data.startDate,
@@ -104,7 +103,9 @@ export function CreateSprintDialog({
    * API accepts. A past start is a normal thing to record; it is pointed out
    * rather than forbidden.
    */
-  const today = React.useMemo(() => startOfDay(new Date()), []);
+  // The workspace's day: sprint dates are office days, so "already started" is
+  // judged on the office calendar rather than the viewer's.
+  const today = React.useMemo(() => businessToday(), []);
 
   const handleSubmit = async (data: FormData) => {
     try {

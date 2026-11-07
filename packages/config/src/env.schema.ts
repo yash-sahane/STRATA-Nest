@@ -109,7 +109,7 @@ export const envSchema = z.object({
       const val = (env[field] as string | undefined) ?? '';
       if (val.length < min) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: 'custom',
           path: [field as string],
           message: `${String(field)} must be ≥ ${min} chars in production (${why}).`,
         });
@@ -120,7 +120,7 @@ export const envSchema = z.object({
     requireLen('INTEGRATION_TOKEN_ENC_KEY', 32, 'token encryption at rest');
     if (!env.JWT_COOKIE_SECURE) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: 'custom',
         path: ['JWT_COOKIE_SECURE'],
         message: 'JWT_COOKIE_SECURE must be true in production (auth cookies over HTTPS only).',
       });

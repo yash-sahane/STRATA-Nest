@@ -85,14 +85,17 @@ const dotClassFor = (label: unknown): string =>
 // NaN is NOT normalised away — it is the sentinel the Estimated Hours input
 // stores when the browser reports validity.badInput, which is what turns "e",
 // "-" and "1e-" into a visible message instead of a silently dropped estimate.
+//
+// The parameter type is what the form can hold here (see TaskFormInput): zod 4
+// takes a preprocess step's input type from it.
 const optionalEstimatedHours = z.preprocess(
-  (value) => {
+  (value: string | number | null | undefined) => {
     if (value === null) return undefined;
     if (typeof value === 'string' && value.trim() === '') return undefined;
     return value;
   },
   z.coerce
-    .number({ invalid_type_error: 'Estimated hours must be a number' })
+    .number({ error: 'Estimated hours must be a number' })
     .min(0, 'Estimated hours cannot be negative')
     .max(1000, 'Estimated hours cannot exceed 1000')
     .optional()
@@ -115,6 +118,16 @@ const taskSchema = z.object({
 });
 
 export type TaskFormValues = z.infer<typeof taskSchema>;
+
+/**
+ * What the form holds while it is filled in, as opposed to what it submits.
+ * The estimate is whatever the number input last reported — the typed string,
+ * NaN for input the browser could not read, or a number seeded from the task —
+ * and becomes a number (or nothing) only when the resolver runs. zod 4's
+ * resolver types keep the two apart; this was always the runtime truth, which
+ * the single `TaskFormValues` type papered over.
+ */
+type TaskFormInput = z.input<typeof taskSchema>;
 
 const EMPTY: TaskFormValues = {
   title: '',
@@ -211,7 +224,7 @@ export function TaskFormDialog({
     [task, defaultFunctionalRequirementId]
   );
 
-  const form = useForm<TaskFormValues>({
+  const form = useForm<TaskFormInput, unknown, TaskFormValues>({
     resolver: zodResolver(taskSchema),
     defaultValues: startingValues(),
   });
