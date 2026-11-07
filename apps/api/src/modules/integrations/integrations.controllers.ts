@@ -9,7 +9,6 @@ import {
   Param,
   Patch,
   Post,
-  Put,
   Query,
   Req,
   UnauthorizedException,
@@ -23,11 +22,9 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
 import {
   CreateDiscordIntegrationDto,
-  CreateGitCommitDto,
   CreateGitHubIntegrationDto,
   CreateGitLabIntegrationDto,
   UpdateDiscordIntegrationDto,
-  UpdateGitCommitDto,
   UpdateGitHubIntegrationDto,
   UpdateGitLabIntegrationDto,
 } from './dto';
@@ -40,6 +37,7 @@ import {
 } from './integrations.services';
 import { normalizeCommits, verifyGithubSignature, verifyGitlabToken } from './webhook.util';
 import { IntegrationTestService } from './integration-test.service';
+import { TokenCipher } from './token-cipher';
 
 type Q = Record<string, string | string[] | undefined>;
 
@@ -51,9 +49,10 @@ export class GitHubIntegrationsController {
   @Post() create(@CurrentUser() u: User, @Body() d: CreateGitHubIntegrationDto) { return this.svc.create(u, d); }
   @Get(':id') get(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.retrieve(u, id); }
   @Patch(':id') patch(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateGitHubIntegrationDto) { return this.svc.patch(u, id, d); }
-  @Put(':id') put(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateGitHubIntegrationDto) { return this.svc.patch(u, id, d); }
   /** Ask the provider whether this credential actually works, and record the answer. */
   @Post(':id/test') test(@CurrentUser() u: User, @Param('id') id: string) { return this.tester.testGitHub(u, id); }
+  /** Mint (or replace) the webhook signing secret. The only response that carries it. */
+  @Post(':id/webhook-secret') rotate(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.rotateWebhookSecret(u, id); }
   @Delete(':id') @HttpCode(204) remove(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.remove(u, id); }
 }
 
@@ -65,9 +64,10 @@ export class GitLabIntegrationsController {
   @Post() create(@CurrentUser() u: User, @Body() d: CreateGitLabIntegrationDto) { return this.svc.create(u, d); }
   @Get(':id') get(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.retrieve(u, id); }
   @Patch(':id') patch(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateGitLabIntegrationDto) { return this.svc.patch(u, id, d); }
-  @Put(':id') put(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateGitLabIntegrationDto) { return this.svc.patch(u, id, d); }
   /** Ask the provider whether this credential actually works, and record the answer. */
   @Post(':id/test') test(@CurrentUser() u: User, @Param('id') id: string) { return this.tester.testGitLab(u, id); }
+  /** Mint (or replace) the webhook token. The only response that carries it. */
+  @Post(':id/webhook-secret') rotate(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.rotateWebhookSecret(u, id); }
   @Delete(':id') @HttpCode(204) remove(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.remove(u, id); }
 }
 
@@ -79,7 +79,6 @@ export class DiscordIntegrationsController {
   @Post() create(@CurrentUser() u: User, @Body() d: CreateDiscordIntegrationDto) { return this.svc.create(u, d); }
   @Get(':id') get(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.retrieve(u, id); }
   @Patch(':id') patch(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateDiscordIntegrationDto) { return this.svc.patch(u, id, d); }
-  @Put(':id') put(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateDiscordIntegrationDto) { return this.svc.patch(u, id, d); }
   /** Ask the provider whether this credential actually works, and record the answer. */
   @Post(':id/test') test(@CurrentUser() u: User, @Param('id') id: string) { return this.tester.testDiscord(u, id); }
   @Delete(':id') @HttpCode(204) remove(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.remove(u, id); }
@@ -90,11 +89,8 @@ export class DiscordIntegrationsController {
 export class GitCommitsController {
   constructor(private readonly svc: GitCommitsService) {}
   @Get() list(@CurrentUser() u: User, @Query() q: Q) { return this.svc.list(u, q); }
-  @Post() create(@CurrentUser() u: User, @Body() d: CreateGitCommitDto) { return this.svc.create(u, d); }
+  // Read-only: commits arrive from the provider's webhook, through the worker.
   @Get(':id') get(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.retrieve(u, id); }
-  @Patch(':id') patch(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateGitCommitDto) { return this.svc.patch(u, id, d); }
-  @Put(':id') put(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateGitCommitDto) { return this.svc.patch(u, id, d); }
-  @Delete(':id') @HttpCode(204) remove(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.remove(u, id); }
 }
 
 /**
@@ -108,7 +104,20 @@ export class WebhookController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly git: GitQueueService,
+    private readonly cipher: TokenCipher,
   ) {}
+
+  /**
+   * The stored secret, in the clear. One that cannot be read — or was not
+   * written encrypted — verifies nothing, which is a refusal.
+   */
+  private secretOf(stored: string): string {
+    try {
+      return this.cipher.decrypt(stored);
+    } catch {
+      return '';
+    }
+  }
 
   @Public()
   @Post('github/webhook/:projectId')
@@ -123,7 +132,7 @@ export class WebhookController {
     const integration = await this.prisma.gitHubIntegration.findUnique({ where: { projectId } });
     if (!integration) throw new NotFoundException('No GitHub integration for this project.');
     const raw = req.rawBody ?? Buffer.from('');
-    if (!verifyGithubSignature(raw, integration.webhookSecret, signature)) {
+    if (!verifyGithubSignature(raw, this.secretOf(integration.webhookSecret), signature)) {
       throw new UnauthorizedException('Invalid webhook signature.');
     }
     return this.dispatch('GITHUB', projectId, event, raw, delivery);
@@ -142,7 +151,7 @@ export class WebhookController {
     const integration = await this.prisma.gitLabIntegration.findUnique({ where: { projectId } });
     if (!integration) throw new NotFoundException('No GitLab integration for this project.');
     const raw = req.rawBody ?? Buffer.from('');
-    if (!verifyGitlabToken(integration.webhookSecret, token)) {
+    if (!verifyGitlabToken(this.secretOf(integration.webhookSecret), token)) {
       throw new UnauthorizedException('Invalid webhook token.');
     }
     return this.dispatch('GITLAB', projectId, event, raw, delivery);

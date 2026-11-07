@@ -1,6 +1,7 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { randomBytes } from 'node:crypto';
 import { generateId, paginate, parseListQuery, type ListQuerySpec } from '@strata/common';
-import type { PaginatedResponse } from '@strata/shared';
+import { isDiscordWebhookUrl, type PaginatedResponse } from '@strata/shared';
 import { PrismaService } from '@strata/prisma';
 import type {
   DiscordIntegration,
@@ -16,11 +17,9 @@ import { IntegrationAccess } from './integration-access.service';
 import { TokenCipher } from './token-cipher';
 import type {
   CreateDiscordIntegrationDto,
-  CreateGitCommitDto,
   CreateGitHubIntegrationDto,
   CreateGitLabIntegrationDto,
   UpdateDiscordIntegrationDto,
-  UpdateGitCommitDto,
   UpdateGitHubIntegrationDto,
   UpdateGitLabIntegrationDto,
 } from './dto';
@@ -30,6 +29,9 @@ import {
   githubIntegrationResponse,
   gitlabIntegrationResponse,
 } from './mappers';
+
+/** 256 bits, hex: what a provider is given to sign or stamp its deliveries. */
+const newWebhookSecret = (): string => randomBytes(32).toString('hex');
 
 /** Shared project-scoped CRUD for the integration collections (scoped to the caller's project). */
 abstract class ProjectScopedService<TRow extends { projectId: string }, TResponse> {
@@ -60,10 +62,12 @@ abstract class ProjectScopedService<TRow extends { projectId: string }, TRespons
   async list(
     user: User,
     query: Record<string, string | string[] | undefined>,
+    /** A predicate the list-query grammar cannot express, ANDed with the rest. */
+    extraWhere?: Record<string, unknown>,
   ): Promise<PaginatedResponse<TResponse>> {
     const scope = await this.ia.scopeWhere(user);
     const parsed = parseListQuery(query, this.spec);
-    const where = { AND: [scope, parsed.where] };
+    const where = { AND: [scope, parsed.where, ...(extraWhere ? [extraWhere] : [])] };
     const [rows, total] = await Promise.all([
       this.delegate.findMany({ where, orderBy: parsed.orderBy, skip: parsed.skip, take: parsed.take }),
       this.delegate.count({ where }),
@@ -168,7 +172,8 @@ export class GitHubIntegrationsService extends ProjectScopedService<
       repoOwner: dto.repoOwner,
       repoName: dto.repoName,
       accessToken: this.cipher.encrypt(dto.accessToken), // never store plaintext
-      webhookSecret: dto.webhookSecret ?? '',
+      // Minted on request, by rotateWebhookSecret — see there.
+      webhookSecret: '',
       autoUpdateStatus: dto.autoUpdateStatus ?? false,
       enabledEvents: (dto.enabledEvents ?? []) as Prisma.InputJsonValue,
     });
@@ -178,10 +183,28 @@ export class GitHubIntegrationsService extends ProjectScopedService<
     if (dto.repoOwner !== undefined) data.repoOwner = dto.repoOwner;
     if (dto.repoName !== undefined) data.repoName = dto.repoName;
     if (dto.accessToken !== undefined) data.accessToken = this.cipher.encrypt(dto.accessToken);
-    if (dto.webhookSecret !== undefined) data.webhookSecret = dto.webhookSecret;
     if (dto.autoUpdateStatus !== undefined) data.autoUpdateStatus = dto.autoUpdateStatus;
     if (dto.enabledEvents !== undefined) data.enabledEvents = dto.enabledEvents as Prisma.InputJsonValue;
     return this.updateRow(user, id, data);
+  }
+
+  /**
+   * Mint the secret GitHub signs its deliveries with, and hand it over — once.
+   *
+   * The receiver has always verified a signature against `webhookSecret`, and
+   * refuses when that is empty. Nothing ever filled it: the form did not ask for
+   * one and no route generated one, so every integration that was "connected"
+   * turned away every push with a 401 and recorded nothing, for good.
+   *
+   * Generated here rather than typed in, so it is never guessable; stored
+   * encrypted, like the access token; and returned by THIS response alone —
+   * every read reports only `webhookConfigured`. Calling it again replaces the
+   * secret, which is how a leaked one is retired.
+   */
+  async rotateWebhookSecret(user: User, id: string) {
+    const secret = newWebhookSecret();
+    const row = await this.updateRow(user, id, { webhookSecret: this.cipher.encrypt(secret) });
+    return { ...row, webhookSecret: secret };
   }
 }
 
@@ -208,7 +231,7 @@ export class GitLabIntegrationsService extends ProjectScopedService<
       projectId: dto.projectId,
       projectPath: dto.projectPath,
       accessToken: this.cipher.encrypt(dto.accessToken),
-      webhookSecret: dto.webhookSecret ?? '',
+      webhookSecret: '',
       autoUpdateStatus: dto.autoUpdateStatus ?? false,
       enabledEvents: (dto.enabledEvents ?? []) as Prisma.InputJsonValue,
     });
@@ -217,10 +240,16 @@ export class GitLabIntegrationsService extends ProjectScopedService<
     const data: Record<string, unknown> = {};
     if (dto.projectPath !== undefined) data.projectPath = dto.projectPath;
     if (dto.accessToken !== undefined) data.accessToken = this.cipher.encrypt(dto.accessToken);
-    if (dto.webhookSecret !== undefined) data.webhookSecret = dto.webhookSecret;
     if (dto.autoUpdateStatus !== undefined) data.autoUpdateStatus = dto.autoUpdateStatus;
     if (dto.enabledEvents !== undefined) data.enabledEvents = dto.enabledEvents as Prisma.InputJsonValue;
     return this.updateRow(user, id, data);
+  }
+
+  /** The token GitLab sends with its deliveries. See the GitHub service. */
+  async rotateWebhookSecret(user: User, id: string) {
+    const secret = newWebhookSecret();
+    const row = await this.updateRow(user, id, { webhookSecret: this.cipher.encrypt(secret) });
+    return { ...row, webhookSecret: secret };
   }
 }
 
@@ -242,7 +271,20 @@ export class DiscordIntegrationsService extends ProjectScopedService<
   protected map(row: DiscordIntegration) {
     return discordIntegrationResponse(row);
   }
+  /**
+   * The server posts to this URL, so it is only ever stored if it is Discord's.
+   * Checking it at test time alone left the row in place, and the worker — which
+   * never ran the test — would post commit notices to wherever it pointed.
+   */
+  private assertDiscordUrl(webhookUrl: string): void {
+    if (!isDiscordWebhookUrl(webhookUrl)) {
+      throw new BadRequestException(
+        'That is not a Discord webhook URL. Copy it from the channel’s Integrations > Webhooks settings in Discord.',
+      );
+    }
+  }
   create(user: User, dto: CreateDiscordIntegrationDto) {
+    this.assertDiscordUrl(dto.webhookUrl);
     return this.createRow(user, dto.projectId, {
       projectId: dto.projectId,
       webhookUrl: dto.webhookUrl,
@@ -251,7 +293,10 @@ export class DiscordIntegrationsService extends ProjectScopedService<
   }
   patch(user: User, id: string, dto: UpdateDiscordIntegrationDto) {
     const data: Record<string, unknown> = {};
-    if (dto.webhookUrl !== undefined) data.webhookUrl = dto.webhookUrl;
+    if (dto.webhookUrl !== undefined) {
+      this.assertDiscordUrl(dto.webhookUrl);
+      data.webhookUrl = dto.webhookUrl;
+    }
     if (dto.enabledEvents !== undefined) data.enabledEvents = dto.enabledEvents as Prisma.InputJsonValue;
     return this.updateRow(user, id, data);
   }
@@ -278,23 +323,22 @@ export class GitCommitsService extends ProjectScopedService<
   protected map(row: GitCommit) {
     return gitCommitResponse(row);
   }
-  create(user: User, dto: CreateGitCommitDto) {
-    return this.createRow(user, dto.projectId, {
-      projectId: dto.projectId,
-      provider: dto.provider,
-      commitSha: dto.commitSha,
-      message: dto.message,
-      author: dto.author,
-      authorEmail: dto.authorEmail,
-      timestamp: new Date(dto.timestamp),
-      url: dto.url,
-      linkedTaskIds: (dto.linkedTaskIds ?? []) as Prisma.InputJsonValue,
-    });
-  }
-  patch(user: User, id: string, dto: UpdateGitCommitDto) {
-    const data: Record<string, unknown> = {};
-    if (dto.message !== undefined) data.message = dto.message;
-    if (dto.linkedTaskIds !== undefined) data.linkedTaskIds = dto.linkedTaskIds as Prisma.InputJsonValue;
-    return this.updateRow(user, id, data);
+  /**
+   * `?taskId=` narrows to the commits that reference one task.
+   *
+   * `linkedTaskIds` is a JSON array, which the list grammar has no operator for,
+   * so the only way to answer "which commits mention this task?" was to download
+   * a project's whole history and search it in the browser. Nothing did, and the
+   * commits the worker had so carefully linked were shown nowhere.
+   */
+  list(user: User, query: Record<string, string | string[] | undefined>) {
+    const { taskId, ...rest } = query;
+    return super.list(
+      user,
+      rest,
+      typeof taskId === 'string' && taskId
+        ? { linkedTaskIds: { array_contains: [taskId] } }
+        : undefined,
+    );
   }
 }

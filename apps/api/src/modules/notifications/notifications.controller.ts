@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Put, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import type { User } from '@prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -33,6 +33,5 @@ export class NotificationsController {
   @Delete() @HttpCode(200) removeAll(@CurrentUser() u: User) { return this.svc.removeAll(u); }
   @Get(':id') get(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.retrieve(u, id); }
   @Patch(':id') patch(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateNotificationDto) { return this.svc.patch(u, id, d); }
-  @Put(':id') put(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateNotificationDto) { return this.svc.patch(u, id, d); }
   @Delete(':id') @HttpCode(204) remove(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.remove(u, id); }
 }

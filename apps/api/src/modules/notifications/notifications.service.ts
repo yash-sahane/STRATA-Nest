@@ -1,10 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { generateId, type ListQuerySpec } from '@strata/common';
 import type { PaginatedResponse } from '@strata/shared';
 import { PrismaService } from '@strata/prisma';
 import type { Notification, User } from '@prisma/client';
 import { Permission, type PermissionKey } from '../authz/permissions';
-import { WorkspaceAccessService } from '../authz/workspace-access.service';
+import { DENY_MESSAGE, WorkspaceAccessService } from '../authz/workspace-access.service';
 import { ScopedCrudService } from '../workspaces/scoped-crud.base';
 import type { CreateNotificationDto, UpdateNotificationDto } from './dto';
 import { NotificationPreferencesService } from './notification-preferences.service';
@@ -69,6 +69,22 @@ export class NotificationsService extends ScopedCrudService<
     return super.list(user, { ...scoped, userId: user.id });
   }
 
+  /**
+   * A notification is its recipient's, wherever it came from.
+   *
+   * The base scope is "rows in workspaces you are an active member of". For an
+   * inbox that is the wrong question: the three things a person most needs
+   * telling — that they were removed from a workspace, that their access to it
+   * was switched off, that their request to join it was declined — are all
+   * filed under a workspace they cannot see into. They were written, and never
+   * once read. Every read and write below is by recipient instead; a platform
+   * admin keeps the wide read for support.
+   */
+  protected override async readScope(user: User): Promise<Record<string, unknown>> {
+    if (this.access.isPlatformAdmin(user)) return super.readScope(user);
+    return { userId: user.id };
+  }
+
   /** A notification is user-owned: another member's notification 404s exactly
    *  like an out-of-workspace id, so retrieve/update/remove are recipient-only. */
   protected override async findScoped(user: User, id: string): Promise<Notification> {
@@ -80,20 +96,29 @@ export class NotificationsService extends ScopedCrudService<
   }
 
   /**
-   * A notification is addressed to someone OTHER than the caller, so the
-   * recipient's opt-out can only be honoured here — the producer is the actor's
-   * browser and has no business reading another user's preferences. A muted
-   * type is dropped silently (`null` → empty body); the write permission is
-   * still asserted so an unauthorized caller keeps getting 403 rather than a
-   * misleading success.
+   * A caller may write a notification to THEMSELVES, and to nobody else.
+   *
+   * This endpoint used to be how every work notification was made: the acting
+   * user's browser POSTed one per recipient, so it had to accept `userId` for
+   * anybody — and with `notification:write` in every member's baseline, any
+   * member could put "Leave approved" (or anything else) in any colleague's
+   * inbox. Those notifications are written by the server now, from the events
+   * the services emit (WorkNotificationSubscriber), so nothing legitimate is
+   * left that needs to address somebody else, and nothing in the app writes here
+   * any more. Platform admins are exempt, for seeding and support.
+   *
+   * The recipient's opt-out is still honoured here: a muted type is dropped
+   * silently (`null` → empty body), with the write permission still asserted so
+   * an unauthorized caller gets 403 rather than a misleading success.
    */
   async create(user: User, dto: CreateNotificationDto) {
+    if (dto.userId !== user.id && !this.access.isPlatformAdmin(user)) {
+      throw new ForbiddenException(DENY_MESSAGE);
+    }
     if (!(await this.preferences.allows(dto.workspaceId, dto.userId, dto.type, 'inApp'))) {
       await this.access.assertPermission(user, dto.workspaceId, this.writePermission);
       return null;
     }
-    // Notification creation does not stamp user from the caller — the target
-    // userId comes from the payload (a notification is addressed to someone).
     return this.createIn(user, dto.workspaceId, {
       workspaceId: dto.workspaceId,
       userId: dto.userId,
@@ -107,7 +132,7 @@ export class NotificationsService extends ScopedCrudService<
     });
   }
 
-  patch(user: User, id: string, dto: UpdateNotificationDto) {
+  async patch(user: User, id: string, dto: UpdateNotificationDto) {
     const data: Record<string, unknown> = {};
     if (dto.title !== undefined) data.title = dto.title;
     if (dto.message !== undefined) data.message = dto.message;
@@ -116,7 +141,28 @@ export class NotificationsService extends ScopedCrudService<
     if (dto.relatedEntityId !== undefined) data.relatedEntityId = dto.relatedEntityId;
     if (dto.relatedEntityType !== undefined) data.relatedEntityType = dto.relatedEntityType;
     if (dto.isRead !== undefined) data.isRead = dto.isRead;
+    /**
+     * Marking a notice read is the recipient's to do, whatever has become of
+     * their place in the workspace it came from.
+     *
+     * `update` asks for `notification:write` in the notice's workspace. For
+     * somebody who has just been removed from that workspace — the subject of
+     * the notice — that is a permission they no longer hold: they could read
+     * "you were removed" and never get it out of their unread count.
+     * `findScoped` already limits this to the recipient.
+     */
+    const fields = Object.keys(data);
+    if (fields.length === 1 && fields[0] === 'isRead') {
+      const row = await this.findScoped(user, id);
+      return this.map(await this.prisma.notification.update({ where: { id: row.id }, data }));
+    }
     return this.update(user, id, data);
+  }
+
+  /** Discarding one is the recipient's to do as well, for the same reason. */
+  override async remove(user: User, id: string): Promise<void> {
+    const row = await this.findScoped(user, id);
+    await this.prisma.notification.delete({ where: { id: row.id } });
   }
 
   /** POST notifications/mark_all_read — mark all of the caller's unread as read. */
@@ -129,19 +175,19 @@ export class NotificationsService extends ScopedCrudService<
    * only ever clear the caller's own.
    */
   async removeAll(user: User): Promise<{ deleted: number }> {
-    const scope = await this.access.scopeWhere(user, 'workspaceId');
     const { count } = await this.prisma.notification.deleteMany({
-      where: { AND: [scope, { userId: user.id }] },
+      where: { userId: user.id },
     });
+    if (count) this.prisma.announceWrite?.('Notification', 'delete', { id: '*', userId: user.id });
     return { deleted: count };
   }
 
   async markAllRead(user: User): Promise<{ updated: number }> {
-    const scope = await this.access.scopeWhere(user, 'workspaceId');
     const { count } = await this.prisma.notification.updateMany({
-      where: { AND: [scope, { userId: user.id, isRead: false }] },
+      where: { userId: user.id, isRead: false },
       data: { isRead: true },
     });
+    if (count) this.prisma.announceWrite?.('Notification', 'update', { id: '*', userId: user.id });
     return { updated: count };
   }
 
@@ -156,7 +202,7 @@ export class NotificationsService extends ScopedCrudService<
     if (!(await this.preferences.allows(input.workspaceId, input.userId, input.type, 'inApp'))) {
       return;
     }
-    const notification = await this.prisma.notification.create({
+    await this.prisma.notification.create({
       data: {
         id: generateId(),
         workspaceId: input.workspaceId,
@@ -167,15 +213,6 @@ export class NotificationsService extends ScopedCrudService<
         projectId: input.projectId ?? '',
         relatedEntityId: input.relatedEntityId ?? '',
         relatedEntityType: input.relatedEntityType ?? '',
-      },
-    });
-    await this.prisma.notificationDelivery.create({
-      data: {
-        id: generateId(),
-        notificationId: notification.id,
-        channel: 'in_app',
-        status: 'delivered',
-        deliveredAt: new Date(),
       },
     });
   }

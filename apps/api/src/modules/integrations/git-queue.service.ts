@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { redisConnection } from '@strata/config';
 import { Queue } from 'bullmq';
 import { GIT_JOB, Queues, type GitJob } from '@strata/shared';
 
@@ -17,11 +18,7 @@ export class GitQueueService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit(): void {
     this.queue = new Queue(Queues.Git, {
-      connection: {
-        host: this.config.get<string>('REDIS_HOST', 'localhost'),
-        port: this.config.get<number>('REDIS_PORT', 6379),
-        db: this.config.get<number>('REDIS_QUEUE_DB', 1),
-      },
+      connection: redisConnection((key) => this.config.get(key), 'queue'),
     });
     this.queue.on('error', (err) => this.logger.warn(`git queue: ${err.message}`));
   }

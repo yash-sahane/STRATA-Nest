@@ -18,7 +18,6 @@ describe('TokenCipher (access-token encryption at rest, D4)', () => {
     const enc = c.encrypt(token);
     expect(enc).not.toContain(token);
     expect(enc.startsWith('enc:v1:')).toBe(true);
-    expect(c.isEncrypted(enc)).toBe(true);
   });
 
   it('produces a fresh IV each call (same input → different ciphertext)', () => {
@@ -26,7 +25,7 @@ describe('TokenCipher (access-token encryption at rest, D4)', () => {
     expect(c.encrypt('same')).not.toBe(c.encrypt('same'));
   });
 
-  it('tolerates a legacy plaintext value on decrypt (migration window)', () => {
-    expect(cipher().decrypt('plain-legacy-token')).toBe('plain-legacy-token');
+  it('refuses a value it did not write, rather than handing it back as the secret', () => {
+    expect(() => cipher().decrypt('plain-token')).toThrow('Not an encrypted secret.');
   });
 });

@@ -1,7 +1,15 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { redisConnection } from '@strata/config';
 import { Worker, type Job } from 'bullmq';
-import { Queues, type EmailJob } from '@strata/shared';
+import {
+  Queues,
+  type EmailJob,
+  EMAIL_HEALTH_KEY,
+  EMAIL_HEALTH_TTL_SECONDS,
+  isSenderRefusal,
+  senderCanDeliver,
+} from '@strata/shared';
 
 /**
  * Email CONSUMER. A BullMQ Worker on the `email` queue that renders
@@ -31,9 +39,7 @@ export class EmailProcessor implements OnModuleInit, OnModuleDestroy {
       (job) => this.handle(job),
       {
         connection: {
-          host: this.config.get<string>('REDIS_HOST', 'localhost'),
-          port: this.config.get<number>('REDIS_PORT', 6379),
-          db: this.config.get<number>('REDIS_QUEUE_DB', 1),
+          ...redisConnection((key) => this.config.get(key), 'queue'),
           maxRetriesPerRequest: null, // required for BullMQ workers
         },
       },
@@ -56,13 +62,25 @@ export class EmailProcessor implements OnModuleInit, OnModuleDestroy {
       this.logger.log(`[log-only] ${email.kind} → ${email.to}: ${email.subject}`);
       return { delivered: 'log' };
     }
+    const from = this.config.get<string>('EMAIL_FROM', 'noreply@example.com');
+    // A sender no provider could ever accept — the placeholder .env.example
+    // ships — is refused on every message, for good. Calling the provider
+    // anyway spent BullMQ's five retries on each mail and filled the log with
+    // the same refusal; the API already tells people such mail will not arrive
+    // (EmailService.undeliverableBecause reads the same rule).
+    if (!senderCanDeliver(from)) {
+      this.logger.log(
+        `[log-only] ${email.kind} → ${email.to}: ${email.subject} (EMAIL_FROM ${from} cannot send)`,
+      );
+      return { delivered: 'log' };
+    }
     const resend = await this.loadResend(apiKey);
     if (!resend) {
       this.logger.warn(`resend SDK unavailable; logged ${email.kind} → ${email.to}`);
       return { delivered: 'log' };
     }
     const result = await resend.emails.send({
-      from: this.config.get<string>('EMAIL_FROM', 'noreply@example.com'),
+      from,
       to: email.to,
       subject: email.subject,
       text: email.text,
@@ -77,9 +95,38 @@ export class EmailProcessor implements OnModuleInit, OnModuleDestroy {
      */
     if (result?.error) {
       const { message, name } = result.error;
+      // A refusal of US — the sender, the key — is said where the API can hear
+      // it, so it stops promising mail that is not arriving. A refusal of one
+      // message (a bad recipient) says nothing about the installation.
+      if (isSenderRefusal(result.error)) {
+        await this.recordHealth({ ok: false, reason: message ?? name ?? 'refused' });
+      }
       throw new Error(`resend refused the message: ${message ?? name ?? 'unknown error'}`);
     }
+    await this.recordHealth({ ok: true });
     return { delivered: 'resend' };
+  }
+
+  /**
+   * Leave the last word on delivery where the API reads it (EMAIL_HEALTH_KEY),
+   * for six hours (EMAIL_HEALTH_TTL_SECONDS).
+   * Best-effort: a mail that was sent has been sent whether or not this lands.
+   */
+  private async recordHealth(health: { ok: boolean; reason?: string }): Promise<void> {
+    try {
+      const client = await this.worker?.client;
+      if (!client) return;
+      // Expiring: a refusal recorded once, with no mail since to correct it,
+      // went on telling every screen that mail was not getting through — after
+      // the sender had long been fixed.
+      await client.set(
+        EMAIL_HEALTH_KEY,
+        JSON.stringify({ ...health, at: new Date().toISOString() }),
+        { EX: EMAIL_HEALTH_TTL_SECONDS },
+      );
+    } catch (err) {
+      this.logger.debug(`email health not recorded: ${(err as Error).message}`);
+    }
   }
 
   /** Lazy-load the optional Resend SDK; null if it is not installed. The

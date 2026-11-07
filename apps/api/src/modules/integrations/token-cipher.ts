@@ -43,8 +43,13 @@ export class TokenCipher {
     return PREFIX + Buffer.concat([iv, tag, ct]).toString('base64');
   }
 
+  /**
+   * The secret, in the clear. A value not in this format is not one this app
+   * wrote: it is refused like one that cannot be decrypted — never handed back
+   * as if it were the secret.
+   */
   decrypt(value: string): string {
-    if (!value.startsWith(PREFIX)) return value; // not prefixed → treat as plaintext and return as-is
+    if (!value.startsWith(PREFIX)) throw new Error('Not an encrypted secret.');
     const raw = Buffer.from(value.slice(PREFIX.length), 'base64');
     const iv = raw.subarray(0, 12);
     const tag = raw.subarray(12, 28);
@@ -52,10 +57,5 @@ export class TokenCipher {
     const decipher = createDecipheriv(ALGO, this.key, iv);
     decipher.setAuthTag(tag);
     return Buffer.concat([decipher.update(ct), decipher.final()]).toString('utf8');
-  }
-
-  /** True if a value is already an app-encrypted ciphertext. */
-  isEncrypted(value: string): boolean {
-    return value.startsWith(PREFIX);
   }
 }

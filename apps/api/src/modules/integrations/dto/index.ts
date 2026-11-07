@@ -1,36 +1,38 @@
-import { IsArray, IsBoolean, IsOptional, IsString } from 'class-validator';
-import { IsStrictBoolean } from '@strata/common';
+import { IsArray, IsBoolean, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsStrictBoolean, TrimmedText } from '@strata/common';
 
+/*
+ * No `webhookSecret` on any of these. The secret a provider signs its webhooks
+ * with is minted by the server (POST :id/webhook-secret) and shown once: a
+ * caller-chosen one could be 'secret', and nothing in the product ever sent one
+ * at all — so the column stayed empty and every webhook was refused.
+ */
 export class CreateGitHubIntegrationDto {
   @IsString() projectId!: string;
-  @IsString() repoOwner!: string;
-  @IsString() repoName!: string;
-  @IsString() accessToken!: string;
-  @IsOptional() @IsString() webhookSecret?: string;
+  @TrimmedText() @IsString() @IsNotEmpty() @MaxLength(100) repoOwner!: string;
+  @TrimmedText() @IsString() @IsNotEmpty() @MaxLength(100) repoName!: string;
+  @IsString() @IsNotEmpty() accessToken!: string;
   @IsOptional() @IsStrictBoolean() @IsBoolean() autoUpdateStatus?: boolean;
   @IsOptional() @IsArray() enabledEvents?: unknown[];
 }
 export class UpdateGitHubIntegrationDto {
-  @IsOptional() @IsString() repoOwner?: string;
-  @IsOptional() @IsString() repoName?: string;
-  @IsOptional() @IsString() accessToken?: string;
-  @IsOptional() @IsString() webhookSecret?: string;
+  @TrimmedText() @IsOptional() @IsString() @IsNotEmpty() @MaxLength(100) repoOwner?: string;
+  @TrimmedText() @IsOptional() @IsString() @IsNotEmpty() @MaxLength(100) repoName?: string;
+  @IsOptional() @IsString() @IsNotEmpty() accessToken?: string;
   @IsOptional() @IsStrictBoolean() @IsBoolean() autoUpdateStatus?: boolean;
   @IsOptional() @IsArray() enabledEvents?: unknown[];
 }
 
 export class CreateGitLabIntegrationDto {
   @IsString() projectId!: string;
-  @IsString() projectPath!: string;
-  @IsString() accessToken!: string;
-  @IsOptional() @IsString() webhookSecret?: string;
+  @TrimmedText() @IsString() @IsNotEmpty() @MaxLength(255) projectPath!: string;
+  @IsString() @IsNotEmpty() accessToken!: string;
   @IsOptional() @IsStrictBoolean() @IsBoolean() autoUpdateStatus?: boolean;
   @IsOptional() @IsArray() enabledEvents?: unknown[];
 }
 export class UpdateGitLabIntegrationDto {
-  @IsOptional() @IsString() projectPath?: string;
-  @IsOptional() @IsString() accessToken?: string;
-  @IsOptional() @IsString() webhookSecret?: string;
+  @TrimmedText() @IsOptional() @IsString() @IsNotEmpty() @MaxLength(255) projectPath?: string;
+  @IsOptional() @IsString() @IsNotEmpty() accessToken?: string;
   @IsOptional() @IsStrictBoolean() @IsBoolean() autoUpdateStatus?: boolean;
   @IsOptional() @IsArray() enabledEvents?: unknown[];
 }
@@ -45,18 +47,3 @@ export class UpdateDiscordIntegrationDto {
   @IsOptional() @IsArray() enabledEvents?: unknown[];
 }
 
-export class CreateGitCommitDto {
-  @IsString() projectId!: string;
-  @IsString() provider!: string;
-  @IsString() commitSha!: string;
-  @IsString() message!: string;
-  @IsString() author!: string;
-  @IsString() authorEmail!: string;
-  @IsString() timestamp!: string;
-  @IsString() url!: string;
-  @IsOptional() @IsArray() linkedTaskIds?: unknown[];
-}
-export class UpdateGitCommitDto {
-  @IsOptional() @IsString() message?: string;
-  @IsOptional() @IsArray() linkedTaskIds?: unknown[];
-}

@@ -1,7 +1,7 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '@strata/prisma';
 import type { User } from '@prisma/client';
-import { Permission, type PermissionKey } from '../authz/permissions';
+import type { PermissionKey } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 
 /**
@@ -57,23 +57,5 @@ export class IntegrationAccess {
       }
     }
     await this.access.assertPermission(user, project.workspaceId, permission);
-  }
-
-  /** Resolve a project's workspace, or throw 403 if the caller can't access it. */
-  async workspaceOfProject(user: User, projectId: string): Promise<string> {
-    const project = await this.prisma.project.findUnique({
-      where: { id: projectId },
-      select: { workspaceId: true },
-    });
-    if (!project) throw new NotFoundException('Project not found.');
-    if (!(await this.access.can(user, project.workspaceId, Permission.ProjectRead))) {
-      // membership floor still applies when RBAC is off
-      await this.access.assertMember(user, project.workspaceId);
-    }
-    return project.workspaceId;
-  }
-
-  denied(): never {
-    throw new ForbiddenException('You do not have permission to perform this action.');
   }
 }

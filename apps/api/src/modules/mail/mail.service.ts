@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import { ConfigService } from '@nestjs/config';
 import { EmailKind } from '@strata/shared';
 import { EmailService } from '../email/email.service';
@@ -19,6 +20,21 @@ export class MailService {
     return this.config.get<string>('FRONTEND_URL', 'http://localhost:3000');
   }
 
+  /** Whether these mails can reach an inbox — see EmailService.delivers. */
+  get delivers(): boolean {
+    return this.email.delivers;
+  }
+
+  /** Whether mail is set up to be sent at all — see EmailService.configured. */
+  get configured(): boolean {
+    return this.email.configured;
+  }
+
+  /** Why mail will not arrive, or null — see EmailService.undeliverableBecause. */
+  get undeliverableBecause(): string | null {
+    return this.email.undeliverableBecause;
+  }
+
   async sendPasswordReset(email: string, link: string): Promise<void> {
     await this.email.enqueue({
       kind: EmailKind.PasswordReset,
@@ -26,7 +42,50 @@ export class MailService {
       subject: 'Reset your password',
       text: `Reset your password using this link: ${link}`,
       context: { link },
-      idempotencyKey: `reset:${email}:${link}`,
+      // A digest of the link, never the link: this key becomes the queue's
+      // job id, which the worker prints in its logs and Redis keeps for a
+      // failed job — and the link carries a live reset token.
+      idempotencyKey: `reset:${email}:${createHash('sha256').update(link).digest('hex').slice(0, 24)}`,
+    });
+  }
+
+  /**
+   * A replacement temporary password. Not `sendWelcome`: that one is keyed by
+   * address so a retried create cannot mail two welcomes, which would also
+   * swallow this — the second password would be set and never sent. Keyed by a
+   * digest of the password instead, never the password itself: the key becomes
+   * the queue's job id, which the worker logs.
+   */
+  /**
+   * "Your password was changed", sent whenever it is and however it was done —
+   * so the owner hears of a change made with somebody else's copy of their
+   * session as well as of their own.
+   */
+  async sendPasswordChanged(email: string, name: string, via: 'change' | 'reset'): Promise<void> {
+    const how = via === 'reset' ? 'with a password reset link' : 'from a signed-in session';
+    await this.email.enqueue({
+      kind: EmailKind.Notification,
+      to: email,
+      subject: 'Your STRATA password was changed',
+      text: `Hi ${name || email}, the password for your STRATA account (${email}) was just changed ${how}, and every other session was signed out. If this was you, there is nothing more to do. If it was not, reset your password now at ${this.frontend}/forgot-password and tell your workspace administrator.`,
+      context: { via },
+    });
+  }
+
+  async sendTemporaryPassword(
+    email: string,
+    name: string,
+    tempPassword: string,
+    issuedBy: string,
+  ): Promise<void> {
+    const login = `${this.frontend}/login`;
+    await this.email.enqueue({
+      kind: EmailKind.Welcome,
+      to: email,
+      subject: 'Your new temporary password',
+      text: `Hi ${name}, ${issuedBy} issued you a new temporary password: ${tempPassword}. Sign in at ${login} — you will be asked to choose your own. Your earlier password no longer works.`,
+      context: { name, hasTempPassword: true },
+      idempotencyKey: `temp-password:${email}:${createHash('sha256').update(tempPassword).digest('hex').slice(0, 24)}`,
     });
   }
 
@@ -35,7 +94,7 @@ export class MailService {
     await this.email.enqueue({
       kind: EmailKind.Welcome,
       to: email,
-      subject: 'Welcome to L-T Connect',
+      subject: 'Welcome to STRATA',
       text: tempPassword
         ? `Hi ${name}, your account is ready. Temporary password: ${tempPassword}. Sign in at ${login}.`
         : `Hi ${name}, your account is ready. Sign in at ${login}.`,
@@ -44,19 +103,44 @@ export class MailService {
     });
   }
 
+  /**
+   * Tell somebody who ALREADY has an account that a manager added them to a
+   * workspace.
+   *
+   * It used to say "use invite code X", quoting `Workspace.inviteCode` — a
+   * column nothing redeems — to a person who by then was already a member. So
+   * the one instruction in the mail was both unnecessary and guaranteed to fail.
+   */
   async sendWorkspaceInvitation(
     email: string,
     workspaceName: string,
     inviterName: string,
-    inviteCode: string,
+    workspaceId: string,
   ): Promise<void> {
     await this.email.enqueue({
       kind: EmailKind.WorkspaceInvitation,
       to: email,
-      subject: `You're invited to ${workspaceName}`,
-      text: `${inviterName} invited you to join "${workspaceName}". Use invite code ${inviteCode} at ${this.frontend}.`,
-      context: { workspaceName, inviterName, inviteCode },
-      idempotencyKey: `invite:${email}:${inviteCode}`,
+      subject: `You've been added to ${workspaceName}`,
+      text: `${inviterName} added you to "${workspaceName}". Sign in at ${this.frontend}/login to open it.`,
+      context: { workspaceName, inviterName, workspaceId },
+      idempotencyKey: `invite:${email}:${workspaceId}`,
+    });
+  }
+
+  /** The mail copy of an in-app notification. Title and body are rendered by
+   *  the caller, so the two channels can never say different things. */
+  async sendNotification(input: {
+    to: string;
+    name: string;
+    title: string;
+    message: string;
+  }): Promise<void> {
+    await this.email.enqueue({
+      kind: EmailKind.Notification,
+      to: input.to,
+      subject: input.title,
+      text: `Hi ${input.name}, ${input.message}`,
+      context: { name: input.name, title: input.title },
     });
   }
 
@@ -81,6 +165,11 @@ export class MailService {
       text: `Hi ${input.name}, ${input.message}`,
       context: { name: input.name, title: input.title },
       idempotencyKey: input.idempotencyKey,
+      // One reminder per task, person and day. The key already says so, but a
+      // finished job used to be forgotten at once, so the hourly scan mailed
+      // the same reminder again an hour later to anyone whose in-app copy was
+      // switched off (the only other record of it having gone out).
+      dedupeForSeconds: 36 * 60 * 60,
     });
   }
 }

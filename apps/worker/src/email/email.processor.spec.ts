@@ -30,6 +30,14 @@ describe('EmailProcessor.handle', () => {
     await expect(proc.handle({ data: job })).resolves.toEqual({ delivered: 'log' });
   });
 
+  it('logs without calling the provider when EMAIL_FROM is a placeholder no provider accepts', async () => {
+    const send = jest.fn();
+    const proc = new EmailProcessor(cfg({ RESEND_API_KEY: 're_test', EMAIL_FROM: 'noreply@example.com' }));
+    (proc as unknown as { loadResend: () => Promise<unknown> }).loadResend = async () => ({ emails: { send } });
+    await expect(proc.handle({ data: job })).resolves.toEqual({ delivered: 'log' });
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('reports delivered=resend when the transport accepts the message', async () => {
     const send = jest.fn().mockResolvedValue({ data: { id: 'e1' }, error: null });
     const proc = withTransport(send);
@@ -46,5 +54,45 @@ describe('EmailProcessor.handle', () => {
     });
     const proc = withTransport(send);
     await expect(proc.handle({ data: job })).rejects.toThrow(/not verified/);
+  });
+
+  /** A processor whose worker connection is a Redis double. */
+  const withRedis = (send: jest.Mock) => {
+    const proc = withTransport(send);
+    const set = jest.fn().mockResolvedValue('OK');
+    (proc as unknown as { worker: unknown }).worker = { client: Promise.resolve({ set }) };
+    const recorded = () =>
+      set.mock.calls.map(([key, value]) => [key, JSON.parse(String(value))] as const);
+    return { proc, recorded };
+  };
+
+  // The API answers "email sent" from what it knows, and all it knew was that
+  // a key was set. A refusal of the SENDER has to reach it.
+  it('records it when the provider refuses the sender, so the API stops promising mail', async () => {
+    const send = jest.fn().mockResolvedValue({
+      data: null,
+      error: { name: 'validation_error', statusCode: 403, message: 'The acme.io domain is not verified.' },
+    });
+    const { proc, recorded } = withRedis(send);
+    await expect(proc.handle({ data: job })).rejects.toThrow(/not verified/);
+    const [[key, health]] = recorded();
+    expect(key).toBe('strata:email:health');
+    expect(health).toMatchObject({ ok: false, reason: 'The acme.io domain is not verified.' });
+  });
+
+  it('does not read one bad recipient as "this installation cannot send"', async () => {
+    const send = jest.fn().mockResolvedValue({
+      data: null,
+      error: { name: 'validation_error', statusCode: 422, message: 'Invalid `to` field.' },
+    });
+    const { proc, recorded } = withRedis(send);
+    await expect(proc.handle({ data: job })).rejects.toThrow(/Invalid/);
+    expect(recorded()).toEqual([]);
+  });
+
+  it('records a delivery, which is what clears an earlier refusal', async () => {
+    const { proc, recorded } = withRedis(jest.fn().mockResolvedValue({ data: { id: 'e1' }, error: null }));
+    await proc.handle({ data: job });
+    expect(recorded()[0][1]).toMatchObject({ ok: true });
   });
 });

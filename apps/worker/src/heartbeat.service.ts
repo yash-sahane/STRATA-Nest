@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { redisConnection } from '@strata/config';
 import Redis from 'ioredis';
 
 /**
@@ -17,9 +18,7 @@ export class HeartbeatService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit(): Promise<void> {
     this.redis = new Redis({
-      host: this.config.get<string>('REDIS_HOST', 'localhost'),
-      port: this.config.get<number>('REDIS_PORT', 6379),
-      db: this.config.get<number>('REDIS_QUEUE_DB', 1),
+      ...redisConnection((key) => this.config.get(key), 'queue'),
       maxRetriesPerRequest: 2,
       lazyConnect: true,
     });
