@@ -64,6 +64,22 @@ console.log(`   business timezone: ${BUSINESS_TZ} — today there is ${todayInBu
 console.log(`   this host's UTC date: ${serverDate()}`);
 console.log(`   this host's local date: ${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`);
 
+// The Saturdays this workspace works, by the app's own rule (workspace-settings.ts): the
+// latest period of its working-week history that has begun, else the default — the 1st
+// and 3rd. A fresh workspace has no history, so the default.
+const DEFAULT_WORKING_SATURDAYS = [1, 3];
+const workingWeek = (await api(mgr, 'GET', `/workspaces/${p.ws}`)).j?.settings?.workingWeek;
+const workingSaturdaysOn = (day) => (Array.isArray(workingWeek) ? workingWeek : [])
+  .filter((period) => period.from <= day)
+  .sort((a, b) => a.from.localeCompare(b.from))
+  .pop()?.saturdays ?? DEFAULT_WORKING_SATURDAYS;
+/** Sunday, or a Saturday the workspace does not work. A Saturday's week of the month is which Saturday it is. */
+const isDayOff = (day) => {
+  const weekday = new Date(`${day}T12:00:00Z`).getUTCDay();
+  if (weekday === 0) return true;
+  return weekday === 6 && !workingSaturdaysOn(day).includes(Math.ceil(Number(day.slice(8, 10)) / 7));
+};
+
 for (const zone of ZONES) {
   console.log(`\n===== a member whose browser is in ${zone.label}`);
 
@@ -90,20 +106,23 @@ for (const zone of ZONES) {
   });
   console.log(`   browser zone=${browserToday.zone} offset=${browserToday.offsetMinutes}min  today=${browserToday.date}`);
 
-  // The widget withholds Check In at the WEEKEND — correctly; the office is shut. Whose
-  // weekend: the BUSINESS day's, which is the app's "today" whatever the browser's clock
+  // The widget withholds Check In on a day off — correctly; the office is shut. Whose
+  // day off: the BUSINESS day's, which is the app's "today" whatever the browser's clock
   // says (lib/utils/working-days.ts). This read the browser's calendar instead, so on a
   // Sunday the +14 browser — already on Monday — expected a Check In the app rightly
-  // withheld.
+  // withheld. A day off is a Sunday or a Saturday the workspace does not work: this used
+  // to read EVERY Saturday as off, so on 2026-11-07 — the 1st Saturday, a working day the
+  // app was offering Check In on — all three zones were skipped and nothing was measured.
   //
   // Skipped loudly rather than asserted away: a check that cannot run today has to say
   // so — one that quietly passes instead is worse than one that is red.
-  const businessDay = new Date(`${todayInBusinessZone()}T12:00:00Z`).getUTCDay();
-  if (businessDay === 0 || businessDay === 6) {
+  const businessToday = todayInBusinessZone();
+  if (isDayOff(businessToday)) {
+    const sunday = new Date(`${businessToday}T12:00:00Z`).getUTCDay() === 0;
     skip(
       `${zone.label}: a check-in files under the business day`,
-      `the business day (${todayInBusinessZone()}, ${BUSINESS_TZ}) is a ` +
-        `${businessDay === 0 ? 'Sunday' : 'Saturday'}, and no Check In is offered at the weekend — ` +
+      `the business day (${businessToday}, ${BUSINESS_TZ}) is ` +
+        `${sunday ? 'a Sunday' : 'a Saturday this workspace does not work'}, and no Check In is offered on a day off — ` +
         'there is no check-in to file, so nothing here can be measured today',
     );
     await ctx.close();
@@ -131,7 +150,6 @@ for (const zone of ZONES) {
 
   if (filedDates.length >= 1) {
     const filed = filedDates[0];
-    const businessToday = todayInBusinessZone();
     const differsFromBrowser = businessToday !== browserToday.date;
     console.log(`   browser clock says ${browserToday.date}; business day is ${businessToday}; row filed under ${filed}`
       + `${differsFromBrowser ? '   <- the interesting case: browser and business day differ' : ''}`);

@@ -1,0 +1,122 @@
+name: Nightly browser suite
+
+# The browser regression suite (e2e/, about 80 scripts) drives the real API and a
+# real browser, and takes over an hour — most of it waiting out the sign-in rate
+# limit. That is too slow for the PR gate in ci.yml, whose e2e step is switched off,
+# so without this job nothing ran it at all. It runs once a night against a
+# production build, and on demand from the Actions tab.
+#
+# The schedule only fires on the default branch; workflow_dispatch works on any.
+on:
+  schedule:
+    - cron: '30 20 * * *' # 02:00 IST
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-e2e
+  cancel-in-progress: false
+
+jobs:
+  e2e:
+    name: Browser regression suite (production build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: strata
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d strata"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      # Job variables win over the copied .env.example: dotenv and Nest's ConfigModule
+      # never overwrite a variable that is already set, even to an empty string.
+      NODE_ENV: development # the seed refuses to create the suite's accounts in production
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/strata?schema=public
+      REDIS_HOST: localhost
+      REDIS_PORT: '6379'
+      # Empty on purpose (see e2e/README.md): the suite invites a few hundred made-up
+      # addresses, and the AI checks stub the model's answer.
+      RESEND_API_KEY: ''
+      GEMINI_API_KEY: ''
+      HF_API_KEY: ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      # Fresh keys per run, so no signing or encryption key lives in the repository.
+      - name: Environment
+        run: |
+          cp .env.example .env
+          echo "JWT_ACCESS_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "JWT_REFRESH_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "INTEGRATION_TOKEN_ENC_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+
+      - name: Migrate and seed
+        run: |
+          pnpm db:migrate
+          pnpm db:seed
+
+      # e2e/README.md: the frontend must be a production build — several checks read
+      # computed CSS and compiled class names, which a dev build resolves differently.
+      - name: Build
+        run: pnpm run build
+
+      - name: Start the stack
+        run: |
+          mkdir -p logs
+          nohup node apps/api/dist/main.js > logs/api.log 2>&1 &
+          nohup node apps/worker/dist/main.js > logs/worker.log 2>&1 &
+          nohup pnpm --filter @strata/frontend start > logs/frontend.log 2>&1 &
+          for url in http://localhost:8000/api/v1/health http://localhost:3000/login; do
+            for i in $(seq 1 90); do
+              if curl -sf -o /dev/null "$url"; then echo "up: $url"; break; fi
+              if [ "$i" = 90 ]; then echo "never came up: $url"; tail -50 logs/*.log; exit 1; fi
+              sleep 2
+            done
+          done
+
+      - name: Browsers
+        run: pnpm --filter @strata/e2e exec playwright install --with-deps chromium
+
+      - name: Regression suite
+        run: pnpm test:e2e 2>&1 | tee logs/e2e.log; exit "${PIPESTATUS[0]}"
+
+      # A check can pass while the server answered 500 to something it did not look
+      # at: a burst-save stall once showed up only as 189 HTTP 500s in the log.
+      - name: Server errors during the run
+        if: always()
+        run: |
+          grep -ao 'statusCode":[0-9]*' logs/api.log | sort | uniq -c || true
+          if grep -aq 'statusCode":500' logs/api.log; then
+            echo "::error::The API answered HTTP 500 during the run (see logs/api.log)"
+            exit 1
+          fi
+
+      - name: Keep the logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-e2e-logs
+          path: logs/
+          retention-days: 14

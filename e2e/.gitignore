@@ -12,4 +12,5 @@
 
 # Sweep output. Findings from a run, not source.
 sweep-findings.json
+sweep-browsers-findings.json
 *shots/

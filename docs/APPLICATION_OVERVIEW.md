@@ -171,6 +171,9 @@ raw-SQL migration `20260101000001_fk_index_parity`.
 See the [auth module](../apps/api/src/modules/auth) and [ADR-0009](adr/0009-cookie-jwt-revocable-refresh.md).
 
 - Passwords are hashed with PBKDF2-SHA256. Failed logins are tracked in Redis by `login-attempt.store`.
+- A wrong email or password is answered **401** (`type: 'AuthenticationFailed'`), the same
+  for an unknown address, a wrong password and a switched-off account. Too many wrong
+  guesses at one account answer 429 until the lockout window passes.
 - Login sets two **httpOnly cookies**: `strata_access` (15 minutes) and `strata_refresh` (7 days).
 - Refresh tokens are **tracked on the server in Redis** (`refresh-token.store`), so they
   can be revoked individually or all at once.
@@ -213,14 +216,24 @@ See the [realtime module](../apps/api/src/modules/realtime) and
    arrive before authentication finishes are buffered rather than dropped.
 2. The client sends `{action:'subscribe', channels:['tasks','tasks.<id>']}`.
 3. Frames are produced from two sources:
-   - **Prisma write hook:** every write to a row produces a frame on `collection` and `collection.id`.
+   - **Prisma write hook:** every write to a row produces a frame on `collection` and
+     `collection.id`. A write made inside a `$transaction` is announced only **after the
+     commit**, and not at all if the transaction rolls back (`WriteAnnouncer` in
+     `packages/prisma`), so nobody refetches before the change exists.
    - **Domain events:** `RealtimeSubscriber` bridges business events onto those same channels.
-4. Each frame is sent to local sockets and also **published to Redis**, so sockets
+4. A frame says **what changed, not what it now holds**: the record's id and the workspace
+   (and, for project data, the project) it belongs to. Only collections on the explicit
+   allow list (`FULL_ROW_COLLECTIONS`: today, `notifications`, which reach their recipient
+   alone) carry the row. Anything else, including a collection added later, carries no row.
+5. Each frame is sent to local sockets and also **published to Redis**, so sockets
    connected to other API instances receive it too.
-5. **Security happens when a frame is sent, not when a client subscribes.** A frame only
+6. **Security happens when a frame is sent, not when a client subscribes.** A frame only
    reaches sockets whose user belongs to that workspace, and user-scoped collections only
    reach the addressed user. Subscribing to a channel therefore never leaks data.
-6. When a frame arrives, the frontend refetches that query through TanStack Query.
+7. When a frame arrives, the frontend refetches the queries it can touch through TanStack
+   Query, through the REST route that applies the real rules. Frames are batched
+   (`lib/api/realtime-invalidation.ts`): those within 200 ms share one refetch, and a
+   steady stream still refetches at least once a second.
 
 ### Async work
 
@@ -230,16 +243,20 @@ Queue names and job shapes are defined once in
 - **`email` queue.** Covers password reset, welcome, workspace invitation and
   notification emails. The worker sends them through Resend, or only logs them when no
   key is set. An idempotency key is used as the job ID, so a duplicate enqueue does
-  nothing.
+  nothing. A notification's mail ends with a link to the screen where it is acted on
+  (`notice-links.ts`, the same table the in-app bell uses).
 - **`git` queue:**
   1. The API's webhook endpoint checks the provider's HMAC signature over the raw request body.
   2. It normalises the commits and enqueues a job, using the delivery ID to drop provider re-deliveries.
   3. The worker records each commit once and links it to tasks mentioned in the message.
   4. If the integration has auto-update turned on and the message says it closes the
      task, the worker moves the task from `BACKLOG`, `TODO` or `IN_PROGRESS` to
-     **`REVIEW`** (deliberately not `DONE`).
+     **`REVIEW`** (deliberately not `DONE`). Tasks in an archived project are never moved.
   5. It then publishes on `strata:worker-events`. `WorkerEventsBridge` in the API turns
-     that into real-time frames, because the worker has no sockets of its own.
+     that into real-time frames, because the worker has no sockets of its own, and writes
+     one `task.moved_by_commit` audit row per moved task. The row is credited to the member
+     whose email matches the commit's author; with no match it names the author from the
+     commit and no user.
 - **Scheduled job.** An interval-based deadline-reminder scheduler runs inside the API.
 
 ### Deletion
@@ -259,7 +276,11 @@ See the [deletion module](../apps/api/src/modules/deletion).
   (`GEMINI_API_KEY`, or `HF_API_KEY` for the fallback) lives only in the frontend's server
   environment and never reaches the browser.
 - The API never calls a model. Its [generation module](../apps/api/src/modules/generation)
-  only persists what the user accepted, through `POST /api/v1/bulk-save`.
+  only persists what the user accepted, through `POST /api/v1/bulk-save`. What it saves is
+  in the audit trail like a manual create, marked `metadata.source: 'ai_generation'`.
+- An uploaded PDF is read by [`/api/parse-pdf`](../apps/frontend/src/app/api/parse-pdf/route.ts)
+  into its own lines and paragraphs ([pdf-text.ts](../apps/frontend/src/lib/pdf-text.ts)),
+  so a numbered requirements list reaches the model as a list.
 
 ---
 
@@ -294,7 +315,10 @@ Forgot password follows `/forgot-password`, then an email from the worker, then 
 
 ### b) Project setup, manual or AI
 
-1. The user creates a project on `/projects`, or **clones** an existing one.
+1. The user creates a project on `/projects`, or **clones** an existing one. A copy starts
+   on its own day — today in the workspace's timezone, or a chosen date — and every copied
+   date (sprints, epics, due dates) moves by the same number of days; copied sprints start
+   in Planning.
 2. **AI path:**
    1. The user uploads a PDF, which `/api/parse-pdf` converts to text.
    2. `/api/ai-generate` calls Gemini with the operator's key.
@@ -308,6 +332,11 @@ Forgot password follows `/forgot-password`, then an email from the worker, then 
 3. A project's own details (name, client, status, dates) are edited at
    `/projects/[id]/settings`. GitHub, GitLab and Discord integrations are connected per
    project under **Settings → Integrations** (pick the project there).
+4. A project whose status is **Archived** is read-only, enforced by the server
+   (`assertProjectWritable`): nothing in it — tasks, sprints, requirements, epics,
+   comments, files, time — can be created, changed or deleted until its status is changed
+   back. Its pages say so with a banner, and its open tasks leave the dashboard's lists,
+   the Team page's workload and the deadline reminders.
 
 ### c) Delivery loop (Scrum)
 
@@ -339,11 +368,18 @@ Forgot password follows `/forgot-password`, then an email from the worker, then 
   4. Leave balances update.
 - **`/time-tracking`:** live timers (`ActiveTimer`) and time entries. Managers approve
   entries (`time:approve`).
+- **The working week** is a workspace setting (Settings → Workspace → Saturdays worked; by
+  default the 1st and 3rd). It is kept as a dated history, so a change re-counts leave and
+  attendance from today on and past days keep the rule they had.
+- **Holidays.** Declaring, moving or removing one re-counts the leave and attendance it
+  covers in the same transaction, under a workspace calendar lock that leave requests and
+  approvals also take.
 
 ### e) Awareness
 
 - **`/dashboard`:** figures are computed in the browser from the full task list; the read
-  models [ADR-0011](adr/0011-cqrs-scoped-to-dashboards.md) describes are not built.
+  models [ADR-0011](adr/0011-cqrs-scoped-to-dashboards.md) describes are not built. Its
+  "today" is the workspace's business day, like every due-date label in the app.
 - **`/analytics`, `/team`, `/calendar`:** reporting and team views.
 - **`/activity`:** the workspace audit trail.
 - **Notifications:** an in-app bell with per-user preferences, plus email.

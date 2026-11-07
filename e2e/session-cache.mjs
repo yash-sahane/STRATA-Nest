@@ -147,10 +147,45 @@ export async function renewJar(jar) {
   return true;
 }
 
+/**
+ * How much access-token life a browser context is handed, at least.
+ *
+ * `stillValid` proves the access token works NOW, not for how long. On 2026-11-07 the full
+ * suite gave /team a manager session with six seconds left. When it expired the server
+ * closed the realtime socket, the page renewed, and the refresh cookie it sent had already
+ * been spent by an earlier context (rotation revokes it) — so the page was signed out
+ * between loading every figure correctly and the check reading them, and twelve workload
+ * checks failed on an app that had done nothing wrong. A context that never outlives its
+ * access token never renews, so it never spends — or meets a spent — refresh cookie.
+ * Tests that drive the refresh path on purpose still take `fresh: true`.
+ */
+const BROWSER_MIN_LIFE_S = 8 * 60;
+
+/** Seconds left on a jar's access token, from the JWT's own `exp`; null when unreadable. */
+export function accessSecondsLeft(jar) {
+  const token = Object.entries(jar).find(([name]) => /access/i.test(name))?.[1];
+  const payload = typeof token === 'string' ? token.split('.')[1] : undefined;
+  if (!payload) return null;
+  try {
+    const { exp } = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    return typeof exp === 'number' ? exp - Date.now() / 1000 : null;
+  } catch { return null; }
+}
+
+let warnedUnreadable = false;
+
 /** Cookies in Playwright's addCookies() shape, so a browser context can be
  *  authenticated without driving the login form (and burning the quota). */
 export async function getBrowserCookies(email, password) {
-  const jar = await getSession(email, password);
+  let jar = await getSession(email, password);
+  const left = accessSecondsLeft(jar);
+  if (left === null && !warnedUnreadable) {
+    // Not fatal — the context still gets the cached session, as before — but say so, so a
+    // renamed cookie cannot quietly bring back sessions that expire under a running page.
+    warnedUnreadable = true;
+    console.log('   [kit] could not read the access token expiry; browser sessions are not topped up');
+  }
+  if (left !== null && left < BROWSER_MIN_LIFE_S) jar = await freshSession(email, password);
   return Object.entries(jar).map(([name, value]) => ({
     name, value, domain: 'localhost', path: '/', httpOnly: true, secure: false, sameSite: 'Lax',
   }));
