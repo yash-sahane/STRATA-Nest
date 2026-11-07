@@ -26,6 +26,7 @@ import {
 } from '../workspaces/scoped-crud.base';
 import type { CreateProjectDto, UpdateProjectDto } from './dto';
 import { projectResponse } from './mappers';
+import { freeProjectCode, isShortCodeConflict } from './project-clone.service';
 
 /**
  * A project that ends before it starts makes every timeline, burndown and
@@ -44,12 +45,11 @@ const SPEC: ListQuerySpec = {
   filterable: {
     workspaceId: { field: 'workspaceId' },
     status: { field: 'status' },
-    archived: { field: 'archived', type: 'boolean' },
     ownerId: { field: 'ownerId' },
-    methodology: { field: 'methodology' },
     shortCode: { field: 'shortCode' },
   },
   sortable: { createdAt: 'createdAt', name: 'name', status: 'status' },
+  search: ['name', 'shortCode', 'clientName', 'description'],
   defaultOrderBy: { createdAt: 'desc' },
 };
 
@@ -122,34 +122,48 @@ export class ProjectsService {
 
   async create(user: User, dto: CreateProjectDto) {
     await this.access.assertPermission(user, dto.workspaceId, Permission.ProjectCreate);
-    await this.assertShortCodeFree(dto.workspaceId, dto.shortCode);
+    if (dto.shortCode) await this.assertShortCodeFree(dto.workspaceId, dto.shortCode);
     const startDate = toDate(dto.startDate, 'Start date');
     const endDate = toDate(dto.endDate, 'End date');
     assertRangeOrdered(startDate, endDate);
-    const project = await this.prisma.project.create({
-      data: {
+    const project = await this.createWithCode(dto, (shortCode) => ({
         id: generateId(),
         workspaceId: dto.workspaceId,
         name: dto.name,
-        shortCode: dto.shortCode,
+        shortCode,
         description: dto.description ?? '',
         clientName: dto.clientName ?? '',
-        logo: dto.logo ?? '',
-        color: dto.color ?? '',
-        methodology: dto.methodology ?? 'SCRUM',
         status: dto.status ?? 'PLANNING',
-        archived: dto.archived ?? false,
         startDate,
         endDate,
         ownerId: user.id, // owner + createdBy stamped from the caller
         createdById: user.id,
         createdByName: user.name ?? '',
-        memberIds: (dto.memberIds ?? []) as Prisma.InputJsonValue,
-        projectSettings: (dto.settings ?? {}) as Prisma.InputJsonValue,
-      },
-    });
+    }));
     await this.audit(user, project.workspaceId, 'created', project.id, project);
     return projectResponse(project);
+  }
+
+  /**
+   * Create with the code the caller named, or one minted from the name. The
+   * browser used to download every project in the workspace to find a free
+   * code itself, and two people creating "Mobile App" at once picked the same
+   * one; a minted code that loses that race at the unique key is minted again.
+   */
+  private async createWithCode(
+    dto: CreateProjectDto,
+    row: (shortCode: string) => Prisma.ProjectUncheckedCreateInput,
+  ): Promise<Project> {
+    for (let attempt = 0; ; attempt += 1) {
+      const shortCode =
+        dto.shortCode || (await freeProjectCode(this.prisma, dto.workspaceId, dto.name));
+      try {
+        return await this.prisma.project.create({ data: row(shortCode) });
+      } catch (error) {
+        if (!dto.shortCode && isShortCodeConflict(error) && attempt < 2) continue;
+        throw error;
+      }
+    }
   }
 
   async update(user: User, id: string, dto: UpdateProjectDto) {
@@ -163,11 +177,7 @@ export class ProjectsService {
     if (dto.shortCode !== undefined) data.shortCode = dto.shortCode;
     if (dto.description !== undefined) data.description = dto.description;
     if (dto.clientName !== undefined) data.clientName = dto.clientName;
-    if (dto.logo !== undefined) data.logo = dto.logo;
-    if (dto.color !== undefined) data.color = dto.color;
-    if (dto.methodology !== undefined) data.methodology = dto.methodology;
     if (dto.status !== undefined) data.status = dto.status;
-    if (dto.archived !== undefined) data.archived = dto.archived;
     // Resolve against the STORED row, and read "cleared" (null) apart from
     // "untouched" (absent) — `?? existing` would quietly restore a date the
     // caller just removed, and validating the DTO alone lets a one-sided patch
@@ -178,18 +188,9 @@ export class ProjectsService {
     assertRangeOrdered(startDate, endDate);
     if (dto.startDate !== undefined) data.startDate = startDate;
     if (dto.endDate !== undefined) data.endDate = endDate;
-    if (dto.memberIds !== undefined) data.memberIds = dto.memberIds as Prisma.InputJsonValue;
-    if (dto.settings !== undefined) data.projectSettings = dto.settings as Prisma.InputJsonValue;
     const updated = await this.writeUpdate(existing, id, data, dto.basedOn);
     await this.audit(user, updated.workspaceId, 'updated', id, updated, Object.keys(data));
     return projectResponse(updated);
-  }
-
-  async remove(user: User, id: string): Promise<void> {
-    const existing = await this.findScoped(user, id);
-    await this.access.assertPermission(user, existing.workspaceId, Permission.ProjectDelete);
-    await this.prisma.project.delete({ where: { id } });
-    await this.audit(user, existing.workspaceId, 'deleted', id, existing);
   }
 
   /**
@@ -203,8 +204,7 @@ export class ProjectsService {
    * is the one it cannot see.
    *
    * `basedOn` is compared against the RESPONSE shape, which is where the client got those
-   * values — `startDate` is `yyyy-MM-dd` there and a full instant in the row, and
-   * `settings` is stored as `projectSettings`.
+   * values — `startDate` is `yyyy-MM-dd` there and a full instant in the row.
    */
   private async writeUpdate(
     existing: Project,
@@ -218,9 +218,7 @@ export class ProjectsService {
     }
     // Only the fields this save is actually writing, so an edit to the name is never
     // refused because somebody changed the status.
-    const written = new Set(Object.keys(data));
-    const writtenAs: Record<string, string> = { projectSettings: 'settings' };
-    const submitted = new Set([...written].map((k) => writtenAs[k] ?? k));
+    const submitted = new Set(Object.keys(data));
 
     let current: Project | null = existing;
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -249,7 +247,11 @@ export class ProjectsService {
         data: withBump as Prisma.ProjectUpdateManyMutationInput,
       });
       current = await this.prisma.project.findUnique({ where: { id } });
-      if (count === 1) return current as Project;
+      if (count === 1) {
+        // Same reason as ScopedCrudService: this write was an `updateMany`.
+        this.prisma.announceWrite?.('Project', 'update', current);
+        return current as Project;
+      }
     }
     throw new ConflictException({
       message:

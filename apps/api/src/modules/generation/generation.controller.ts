@@ -8,9 +8,10 @@ import { BulkSaveDto } from './dto';
 import { GenerationService } from './generation.service';
 
 /**
- * POST /bulk-save — atomic creation of the CR→Epic→FR→Task tree. Gated on the
- * same RequirementWrite permission as the individual create routes. The
- * optional `Idempotency-Key` header makes retries safe (same key → same tree).
+ * POST /bulk-save — atomic creation of the CR→Epic→FR→Task tree. Gated here on
+ * requirement:write; the service adds planning:write when the tree holds epics
+ * and task:create when it holds tasks — what creating each of them by hand asks.
+ * The optional `Idempotency-Key` header makes retries safe (same key → same tree).
  */
 @ApiTags('generation')
 @Controller('bulk-save')

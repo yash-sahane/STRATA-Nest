@@ -23,21 +23,19 @@ describe('clientRequirementResponse', () => {
       clientName: 'Acme',
       priority: 'HIGH',
       status: 'DRAFT',
-      attachments: [{ n: 1 }],
       ...base,
     } as ClientRequirement);
     expect(r.createdBy).toBe('u1');
-    expect(r.attachments).toEqual([{ n: 1 }]);
     expect(r.createdAt).toBe('2026-06-30T12:34:56.789000Z');
     expect(Object.keys(r)).toEqual([
       'id', 'workspaceId', 'projectId', 'title', 'description', 'clientName', 'priority',
-      'status', 'attachments', 'createdBy', 'createdByName', 'createdAt', 'updatedAt',
+      'status', 'createdBy', 'createdByName', 'createdAt', 'updatedAt',
     ]);
   });
 });
 
 describe('functionalRequirementResponse', () => {
-  it('keeps tags/linkedProjectIds as strings and preserves field order', () => {
+  it('carries the assignee list with its names, and preserves field order', () => {
     const r = functionalRequirementResponse({
       id: 'fr1',
       hierarchyId: 'PRJ-CR-EP-FR-01',
@@ -52,21 +50,18 @@ describe('functionalRequirementResponse', () => {
       priority: '',
       status: 'DRAFT',
       progress: 0,
-      reusable: false,
-      assignedTo: ['u1'],
-      assignedToNames: ['U'],
-      tags: 'a,b,c',
-      linkedProjectIds: 'p2,p3',
+      assigneeIds: ['u1'],
+      assigneeNames: ['U'],
       ...base,
     } as FunctionalRequirement);
-    expect(r.tags).toBe('a,b,c'); // string, not array (fixed wire contract)
-    expect(r.linkedProjectIds).toBe('p2,p3');
+    expect(r.assigneeIds).toEqual(['u1']);
+    expect(r.assigneeNames).toEqual(['U']);
     expect(r.createdBy).toBe('u1');
     expect(Object.keys(r)).toEqual([
       'id', 'workspaceId', 'projectId', 'hierarchyId', 'epicId', 'sprintId',
       'clientRequirementId', 'parentRequirementId', 'title', 'description', 'type',
       'complexity', 'priority', 'status',
-      'progress', 'reusable', 'assignedTo', 'assignedToNames', 'tags', 'linkedProjectIds',
+      'progress', 'assigneeIds', 'assigneeNames',
       'createdBy', 'createdByName', 'createdAt', 'updatedAt',
     ]);
   });

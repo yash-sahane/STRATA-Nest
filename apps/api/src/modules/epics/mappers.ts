@@ -18,7 +18,6 @@ export function epicResponse(e: Epic) {
     endDate: dateOnly(e.endDate),
     status: e.status,
     progress: e.progress,
-    assignedTeam: e.assignedTeam,
     createdBy: e.createdById,
     createdByName: e.createdByName,
     createdAt: formatApiTimestamp(e.createdAt),

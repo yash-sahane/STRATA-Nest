@@ -6,16 +6,27 @@ import type { BulkSaveDto } from './dto';
 
 const user = { id: 'u1', name: 'Dev' } as User;
 
-/** Delegate whose create echoes the row (so the service reads back doc.id). */
+/** A table inside the save's transaction: the whole tree arrives in one createMany each. */
 function delegate(extra: Record<string, jest.Mock> = {}) {
   return {
-    create: jest.fn(({ data }: { data: Record<string, unknown> }) => Promise.resolve({ ...data })),
+    createMany: jest.fn(({ data }: { data: unknown[] }) => Promise.resolve({ count: data.length })),
     count: jest.fn().mockResolvedValue(0),
     findFirst: jest.fn().mockResolvedValue(null),
     findUnique: jest.fn().mockResolvedValue(null),
     ...extra,
   };
 }
+
+/** The rows a save inserted into one table, in order (typed as loosely as `mock.calls`). */
+const inserted = (table: { createMany: jest.Mock }) =>
+  table.createMany.mock.calls.flatMap(([args]) => args.data);
+
+/** A table as read after the commit: the rows asked for, by id. */
+const committed = () => ({
+  findMany: jest.fn(({ where }: { where: { id: { in: string[] } } }) =>
+    Promise.resolve(where.id.in.map((id) => ({ id, workspaceId: 'w1' }))),
+  ),
+});
 
 function buildPrisma(prior: unknown = null, project: Record<string, unknown> = {}) {
   const tx = {
@@ -34,6 +45,11 @@ function buildPrisma(prior: unknown = null, project: Record<string, unknown> = {
       findUnique: jest.fn().mockResolvedValue({ clientName: 'Acme', workspaceId: 'w1', ...project }),
     },
     workspace: { findUnique: jest.fn().mockResolvedValue({ id: 'w1' }) },
+    clientRequirement: committed(),
+    epic: committed(),
+    functionalRequirement: committed(),
+    task: committed(),
+    announceWrite: jest.fn(),
     $transaction: jest.fn((cb: (t: typeof tx) => unknown) => cb(tx)),
   } as unknown as PrismaService;
   return { prisma, tx };
@@ -87,7 +103,65 @@ describe('GenerationService.bulkSave', () => {
     const { prisma, tx } = buildPrisma();
     const svc = new GenerationService(prisma, access as never, new HierarchyIdService());
     await svc.bulkSave(user, dto);
-    expect((tx.task.create as jest.Mock).mock.calls[0][0].data.priority).toBe('HIGH');
+    expect(inserted(tx.task)[0].priority).toBe('HIGH');
+  });
+
+  // Created one row at a time, every insert was announced by the realtime write
+  // hook inside the transaction — before the commit — so open screens refetched
+  // a tree that was not there yet (or, after a rollback, never would be).
+  it('inserts each table in one createMany and announces the tree only once it has committed', async () => {
+    const { prisma, tx } = buildPrisma();
+    const announceWrite = (prisma as unknown as { announceWrite: jest.Mock }).announceWrite;
+    let announcedInside = -1;
+    $transactionOf(prisma).mockImplementation(async (cb: (t: typeof tx) => unknown) => {
+      const out = await cb(tx);
+      announcedInside = announceWrite.mock.calls.length;
+      return out;
+    });
+    const svc = new GenerationService(prisma, access as never, new HierarchyIdService());
+
+    const res = (await svc.bulkSave(user, dto)) as {
+      clientRequirements: { id: string }[];
+      tasks: { id: string }[];
+    };
+
+    for (const table of [tx.clientRequirement, tx.epic, tx.functionalRequirement, tx.task]) {
+      expect(table.createMany).toHaveBeenCalledTimes(1);
+    }
+    expect(announcedInside).toBe(0);
+    expect(announceWrite.mock.calls.map(([model, action]) => `${model}.${action}`)).toEqual([
+      'ClientRequirement.create',
+      'Epic.create',
+      'FunctionalRequirement.create',
+      'Task.create',
+    ]);
+    expect(announceWrite).toHaveBeenCalledWith('Task', 'create', expect.objectContaining({ id: res.tasks[0].id }));
+  });
+
+  it('gives the transaction longer than Prisma’s 5-second default', async () => {
+    const { prisma } = buildPrisma();
+    const svc = new GenerationService(prisma, access as never, new HierarchyIdService());
+    await svc.bulkSave(user, dto);
+    expect($transactionOf(prisma).mock.calls[0][1]).toEqual({ timeout: 60_000 });
+  });
+
+  // Nothing of the batch is in the table until the end, so the free-id probe
+  // has to remember what the batch itself has numbered.
+  it('never gives two rows of one save the same hierarchy id', async () => {
+    const { prisma, tx } = buildPrisma();
+    // The natural id of the first task is taken in the table: it moves to -02,
+    // which is the natural id of the second task.
+    (tx.task.findFirst as jest.Mock).mockImplementation((args: { where: { hierarchyId: string } }) =>
+      Promise.resolve(args.where.hierarchyId === 'PROJ-WRI-01' ? { id: 'existing' } : null),
+    );
+    const svc = new GenerationService(prisma, access as never, new HierarchyIdService());
+
+    await svc.bulkSave(user, {
+      ...dto,
+      generated: { ...dto.generated, tasks: [{ title: 'Write tests' }, { title: 'Write docs' }] },
+    });
+
+    expect(inserted(tx.task).map((row) => row.hierarchyId)).toEqual(['PROJ-WRI-02', 'PROJ-WRI-03']);
   });
 
   it('is retry-safe: a known Idempotency-Key returns the stored response', async () => {
@@ -122,7 +196,7 @@ describe('GenerationService.bulkSave', () => {
 
     await svc.bulkSave(user, { ...dto, userId: 'someone-else' } as BulkSaveDto);
 
-    expect((tx.clientRequirement.create as jest.Mock).mock.calls[0][0].data.createdById).toBe('u1');
+    expect(inserted(tx.clientRequirement)[0].createdById).toBe('u1');
   });
 
   it('takes the next free hierarchy id instead of dropping a colliding FR', async () => {
@@ -197,11 +271,47 @@ describe('GenerationService.bulkSave', () => {
     // used to be baked into the human-facing id too.
     expect(res.functionalRequirements[1].hierarchyId).toBe('PROJ-USE-ALP-SEC-02');
 
-    const taskRows = (tx.task.create as jest.Mock).mock.calls.map((c) => c[0].data);
+    const taskRows = inserted(tx.task);
     expect(taskRows[0].epicId).toBe(beta.id);
     expect(taskRows[0].functionalRequirementId).toBe(res.functionalRequirements[0].id);
     expect(taskRows[1].epicId).toBe(alpha.id);
     expect(taskRows[1].functionalRequirementId).toBe(res.functionalRequirements[1].id);
+  });
+
+  it('puts an epic under the client requirement it names, and a task under its named requirement', async () => {
+    const { prisma, tx } = buildPrisma();
+    const svc = new GenerationService(prisma, access as never, new HierarchyIdService());
+
+    const res = (await svc.bulkSave(user, {
+      ...dto,
+      generated: {
+        clientRequirements: [{ title: 'User Auth' }, { title: 'Payments' }],
+        // By position the first epic would go under "User Auth"; it says Payments.
+        epics: [
+          { name: 'Checkout', clientRequirementId: '1', functionalRequirementIds: ['0', '1'] },
+          { name: 'Login', clientRequirementId: 'User Auth', functionalRequirementIds: [] },
+        ],
+        functionalRequirements: [{ title: 'Card form' }, { title: 'Receipt' }],
+        // Two tasks on the same epic: the cursor would give the first to the
+        // first requirement; each names its own.
+        tasks: [
+          { title: 'Send the receipt', epicId: 0, functionalRequirementId: '1' },
+          { title: 'Build the form', epicId: 0, functionalRequirementId: 'Card form' },
+        ],
+      },
+    })) as {
+      clientRequirements: { id: string }[];
+      epics: { id: string; requirementId: string }[];
+      functionalRequirements: { id: string; epicId: string }[];
+    };
+
+    const [auth, payments] = res.clientRequirements;
+    expect(res.epics[0].requirementId).toBe(payments.id);
+    expect(res.epics[1].requirementId).toBe(auth.id);
+    const taskRows = inserted(tx.task);
+    expect(taskRows[0].functionalRequirementId).toBe(res.functionalRequirements[1].id);
+    expect(taskRows[1].functionalRequirementId).toBe(res.functionalRequirements[0].id);
+    expect(taskRows.every((row) => row.epicId === res.epics[0].id)).toBe(true);
   });
 
   it('files an FR no epic claimed under the emptiest epic, not the next in rotation', async () => {
@@ -248,7 +358,7 @@ describe('GenerationService.bulkSave', () => {
     const [alpha, beta] = res.epics;
     expect(res.functionalRequirements[0].epicId).toBe(alpha.id);
 
-    const taskRow = (tx.task.create as jest.Mock).mock.calls[0][0].data;
+    const taskRow = inserted(tx.task)[0];
     expect(taskRow.epicId).toBe(beta.id);
     expect(taskRow.functionalRequirementId).toBe('');
   });
@@ -280,7 +390,7 @@ describe('GenerationService.bulkSave', () => {
     })) as { epics: { id: string }[]; functionalRequirements: { id: string; epicId: string }[] };
 
     const [alpha, beta] = res.epics;
-    const rows = (tx.task.create as jest.Mock).mock.calls.map((c) => c[0].data);
+    const rows = inserted(tx.task);
     expect(rows.map((row) => row.epicId)).toEqual([beta.id, beta.id, alpha.id]);
     // ...and each one gets an FR from the epic it actually named.
     const epicOfFr = new Map(res.functionalRequirements.map((fr) => [fr.id, fr.epicId]));
@@ -306,7 +416,7 @@ describe('GenerationService.bulkSave', () => {
 
     // "Beta" fits both epics. A coin-flip parent is worse than none, and the
     // old rotation fallback would have asserted one AND lent it that epic's FR.
-    const row = (tx.task.create as jest.Mock).mock.calls[0][0].data;
+    const row = inserted(tx.task)[0];
     expect(row.epicId).toBe('');
     expect(row.functionalRequirementId).toBe('');
   });
@@ -327,7 +437,7 @@ describe('GenerationService.bulkSave', () => {
       },
     })) as { epics: { id: string }[]; functionalRequirements: { id: string }[] };
 
-    const rows = (tx.task.create as jest.Mock).mock.calls.map((c) => c[0].data);
+    const rows = inserted(tx.task);
     expect(rows.map((row) => row.functionalRequirementId)).toEqual([
       res.functionalRequirements[0].id,
       res.functionalRequirements[1].id,
@@ -351,28 +461,34 @@ describe('GenerationService.bulkSave', () => {
       },
     })) as { epics: { id: string }[]; functionalRequirements: { id: string }[] };
 
-    const row = (tx.task.create as jest.Mock).mock.calls[0][0].data;
+    const row = inserted(tx.task)[0];
     expect(row.epicId).toBe(res.epics[0].id);
     expect(row.functionalRequirementId).toBe(res.functionalRequirements[0].id);
   });
 
   it('links generated child FRs to their parent with parentRequirementId', async () => {
     const { prisma, tx } = buildPrisma();
-    (tx.functionalRequirement.findUnique as jest.Mock).mockResolvedValue({
-      id: 'parent-db-id', hierarchyId: 'PROJ-USE-LOG-API-01', epicId: 'e1', clientRequirementId: 'cr1',
-    });
     const svc = new GenerationService(prisma, access as never, new HierarchyIdService());
 
     await svc.bulkSave(user, {
       ...dto,
       generated: {
         ...dto.generated,
-        functionalRequirements: [{ title: 'API Endpoint' }, { title: 'Child', parentId: 'fr-0' }],
+        functionalRequirements: [
+          { title: 'API Endpoint' },
+          { title: 'Child', parentId: 'fr-0' },
+          { title: 'Second child', parentId: 'fr-0' },
+        ],
       },
     });
 
-    const calls = (tx.functionalRequirement.create as jest.Mock).mock.calls;
-    expect(calls.at(-1)[0].data.parentRequirementId).toBe(calls[0][0].data.id);
-    expect(calls.at(-1)[0].data.hierarchyId).toBe('PROJ-USE-LOG-API-01.01');
+    const [parent, child, second] = inserted(tx.functionalRequirement);
+    expect(child.parentRequirementId).toBe(parent.id);
+    // Under its parent's epic and client requirement, read off the batch.
+    expect(child.epicId).toBe(parent.epicId);
+    expect(child.clientRequirementId).toBe(parent.clientRequirementId);
+    expect(child.hierarchyId).toBe('PROJ-USE-LOG-API-01.01');
+    // Numbered after the sibling this same save made.
+    expect(second.hierarchyId).toBe('PROJ-USE-LOG-API-01.02');
   });
 });

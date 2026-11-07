@@ -1,5 +1,5 @@
-import type { Retrospective, Sprint } from '@prisma/client';
-import { retrospectiveResponse, sprintResponse } from './mappers';
+import type { Sprint } from '@prisma/client';
+import { sprintResponse } from './mappers';
 
 const ts = {
   createdAt: new Date('2026-06-30T12:34:56.789Z'),
@@ -27,21 +27,6 @@ function sprint(over: Partial<Sprint> = {}): Sprint {
     createdByName: 'U',
     ...over,
   } as Sprint;
-}
-
-function retro(over: Partial<Retrospective> = {}): Retrospective {
-  return {
-    id: 'r1',
-    ...ts,
-    sprintId: 's1',
-    workspaceId: 'w1',
-    projectId: 'p1',
-    wentWell: ['good'],
-    needsImprovement: [],
-    actionItems: [],
-    createdById: 'u1',
-    ...over,
-  } as Retrospective;
 }
 
 describe('sprintResponse', () => {
@@ -85,17 +70,5 @@ describe('sprintResponse', () => {
     expect(r.completedTaskCount).toBeNull();
     expect(r.totalTaskCount).toBeNull();
     expect(r.rolledOverTaskCount).toBeNull();
-  });
-});
-
-describe('retrospectiveResponse', () => {
-  it('has no createdByName and preserves field order', () => {
-    const r = retrospectiveResponse(retro());
-    expect(r).not.toHaveProperty('createdByName');
-    expect(r.createdBy).toBe('u1');
-    expect(Object.keys(r)).toEqual([
-      'id', 'workspaceId', 'projectId', 'sprintId', 'wentWell', 'needsImprovement',
-      'actionItems', 'createdBy', 'createdAt', 'updatedAt',
-    ]);
   });
 });

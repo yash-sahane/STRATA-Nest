@@ -11,18 +11,12 @@ function project(over: Partial<Project> = {}): Project {
     shortCode: 'PRJ',
     description: '',
     clientName: '',
-    logo: '',
-    color: '',
-    methodology: 'SCRUM',
     status: 'PLANNING',
-    archived: false,
     startDate: new Date('2026-01-15T00:00:00.000Z'),
     endDate: null,
     ownerId: 'u1',
     createdById: 'u1',
     createdByName: 'U',
-    memberIds: ['u1'],
-    projectSettings: { a: 1 },
     ...over,
   } as Project;
 }
@@ -35,14 +29,12 @@ describe('projectResponse', () => {
     expect(r.createdAt).toBe('2026-06-30T12:34:56.789000Z');
   });
 
-  it('maps createdBy/settings and preserves the fixed field order', () => {
+  it('maps createdBy and preserves the fixed field order', () => {
     const r = projectResponse(project());
     expect(r.createdBy).toBe('u1');
-    expect(r.settings).toEqual({ a: 1 });
     expect(Object.keys(r)).toEqual([
-      'id', 'workspaceId', 'name', 'shortCode', 'description', 'clientName', 'logo', 'color',
-      'methodology', 'status', 'archived', 'startDate', 'endDate', 'ownerId', 'createdBy',
-      'createdByName', 'memberIds', 'settings', 'createdAt', 'updatedAt',
+      'id', 'workspaceId', 'name', 'shortCode', 'description', 'clientName', 'status',
+      'startDate', 'endDate', 'ownerId', 'createdBy', 'createdByName', 'createdAt', 'updatedAt',
     ]);
   });
 });

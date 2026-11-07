@@ -49,7 +49,17 @@ function buildPrisma(rows: Record<string, unknown> = {}) {
     epic: row(rows.epic),
     sprint: row(rows.sprint),
     clientRequirement: row(rows.clientRequirement),
+    // What RequirementTasks reads and writes when a requirement moves. One
+    // existing task by default, so a move re-points rather than creates.
+    task: {
+      count: jest.fn().mockResolvedValue(rows.taskCount ?? 1),
+      findMany: jest.fn().mockResolvedValue(rows.tasks ?? []),
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
+    announceWrite: jest.fn(),
     functionalRequirement: {
+      // An epic's roll-up also counts its requirements that have no task yet.
+      findMany: jest.fn().mockResolvedValue([]),
       findUnique: jest.fn().mockResolvedValue(rows.parent ?? null),
       findFirst: jest.fn((args: { where?: { hierarchyId?: unknown } }) => {
         // The hierarchy-id probe asks for one exact id; everything else is findScoped.
@@ -73,7 +83,9 @@ function buildPrisma(rows: Record<string, unknown> = {}) {
   } as unknown as PrismaService;
 }
 
-const svcWith = (prisma: PrismaService) => new FunctionalRequirementsService(prisma, access);
+const emit = jest.fn();
+const svcWith = (prisma: PrismaService) =>
+  new FunctionalRequirementsService(prisma, access, { emit } as never);
 
 describe('FunctionalRequirementsService.create — scope guards', () => {
   beforeEach(() => jest.clearAllMocks());
@@ -166,5 +178,50 @@ describe('FunctionalRequirementsService.patch — cycle guard', () => {
   it('leaves a plain field update untouched', async () => {
     const prisma = buildPrisma();
     await expect(patch({ title: 'Renamed' }, prisma)).resolves.toMatchObject({ title: 'Renamed' });
+  });
+});
+
+describe('FunctionalRequirementsService.patch — a completed sprint is a record', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  const closed = { projectId: 'p1', status: 'COMPLETED', name: 'Sprint 1' };
+  const open = { projectId: 'p1', status: 'ACTIVE', name: 'Sprint 2' };
+
+  it('refuses to plan a requirement into a sprint that has closed', async () => {
+    const prisma = buildPrisma({ sprint: closed });
+    await expect(svcWith(prisma).patch(user, 'fr1', { sprintId: 's1' })).rejects.toThrow(
+      /"Sprint 1" is completed/,
+    );
+    expect(prisma.functionalRequirement.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses to take a requirement out of a sprint that has closed', async () => {
+    const prisma = buildPrisma({
+      sprint: closed,
+      self: { id: 'fr1', workspaceId: 'w1', projectId: 'p1', sprintId: 's1' },
+    });
+    await expect(svcWith(prisma).patch(user, 'fr1', { sprintId: '' })).rejects.toThrow(
+      /cannot be re-planned/,
+    );
+    expect(prisma.functionalRequirement.update).not.toHaveBeenCalled();
+  });
+
+  it('plans a requirement into a sprint that is still open', async () => {
+    const prisma = buildPrisma({ sprint: open });
+    await expect(svcWith(prisma).patch(user, 'fr1', { sprintId: 's2' })).resolves.toMatchObject({
+      sprintId: 's2',
+    });
+  });
+
+  // Everything else about a requirement in a closed sprint stays editable: the
+  // rule is about what the sprint contained, not about freezing the row.
+  it('still lets a requirement in a closed sprint be renamed', async () => {
+    const prisma = buildPrisma({
+      sprint: closed,
+      self: { id: 'fr1', workspaceId: 'w1', projectId: 'p1', sprintId: 's1' },
+    });
+    await expect(
+      svcWith(prisma).patch(user, 'fr1', { title: 'Renamed', sprintId: 's1' }),
+    ).resolves.toMatchObject({ title: 'Renamed' });
   });
 });

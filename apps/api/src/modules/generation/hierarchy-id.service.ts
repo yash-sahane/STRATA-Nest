@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 
 /**
  * Hierarchy-id + FR-classification rules — a frozen, byte-exact contract the
@@ -49,14 +49,42 @@ export function isHierarchyIdConflict(error: unknown): boolean {
   return columns.includes('hierarchy_id') || columns.includes('hierarchyId');
 }
 
-// _TECHNICAL_KEYWORDS (exact set + order-independent).
-const TECHNICAL_KEYWORDS = new Set([
-  'api', 'database', 'code', 'implementation', 'backend', 'frontend', 'server',
-  'endpoint', 'query', 'schema', 'migration', 'deploy', 'infrastructure',
-  'architecture', 'integration', 'service', 'microservice', 'rest', 'graphql',
-  'websocket', 'authentication', 'authorization', 'encryption', 'security',
-  'cache', 'performance', 'optimization',
-]);
+/**
+ * Create a row under the id the caller asked for, or under the next free one.
+ *
+ * The id a client proposes is `count + 1`, so it repeats as soon as anything is
+ * deleted and two people creating at once propose the same one. Refusing the
+ * duplicate would trade a silent collision for a dead end, so the next free id
+ * is taken instead: `taken` covers the common case of an id already in use, and
+ * the retry on the unique violation covers a create that lost the race between
+ * the probe and the insert.
+ *
+ * Functional requirements have allocated this way since they got their unique
+ * index. Tasks and epics carry the same index and did not: a second task
+ * proposed under a taken id was simply refused.
+ */
+export async function createWithFreeHierarchyId<T>(
+  requested: string,
+  taken: (hierarchyId: string) => Promise<boolean>,
+  create: (hierarchyId: string) => Promise<T>,
+): Promise<T> {
+  let hierarchyId = requested;
+  for (let attempt = 0; attempt < MAX_HIERARCHY_ID_ATTEMPTS; attempt += 1) {
+    if (await taken(hierarchyId)) {
+      hierarchyId = bumpHierarchyId(hierarchyId);
+      continue;
+    }
+    try {
+      return await create(hierarchyId);
+    } catch (error) {
+      if (!isHierarchyIdConflict(error)) throw error;
+      hierarchyId = bumpHierarchyId(hierarchyId);
+    }
+  }
+  throw new ConflictException(
+    `Could not allocate a free hierarchy id for this project (tried ${MAX_HIERARCHY_ID_ATTEMPTS} ids from "${requested}").`,
+  );
+}
 
 @Injectable()
 export class HierarchyIdService {
@@ -74,20 +102,5 @@ export class HierarchyIdService {
   /** See `bumpHierarchyId` — exposed on the service so injected callers get it too. */
   bump(hierarchyId: string): string {
     return bumpHierarchyId(hierarchyId);
-  }
-
-  /**
-   * FR-type classification: explicit TECHNICAL wins; else keyword scan of
-   * title+description. NOTE: bulk-save intentionally does NOT call this — new
-   * FRs take the schema's default type. Kept for completeness and future
-   * server-side use.
-   */
-  classifyFrType(fr: { type?: string; title?: string; description?: string }): 'TECHNICAL' | 'FUNCTIONAL' {
-    if ((fr.type ?? '').toUpperCase() === 'TECHNICAL') return 'TECHNICAL';
-    const blob = `${(fr.title ?? '').toLowerCase()} ${(fr.description ?? '').toLowerCase()}`;
-    for (const k of TECHNICAL_KEYWORDS) {
-      if (blob.includes(k)) return 'TECHNICAL';
-    }
-    return 'FUNCTIONAL';
   }
 }

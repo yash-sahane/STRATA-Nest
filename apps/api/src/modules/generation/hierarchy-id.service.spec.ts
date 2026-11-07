@@ -44,11 +44,4 @@ describe('HierarchyIdService', () => {
     expect(isHierarchyIdConflict(undefined)).toBe(false);
   });
 
-  it('classifyFrType: explicit TECHNICAL wins, else keyword scan', () => {
-    expect(H.classifyFrType({ type: 'technical' })).toBe('TECHNICAL');
-    expect(H.classifyFrType({ title: 'Build the API endpoint' })).toBe('TECHNICAL');
-    expect(H.classifyFrType({ description: 'needs database migration' })).toBe('TECHNICAL');
-    expect(H.classifyFrType({ title: 'Update the welcome banner' })).toBe('FUNCTIONAL');
-    expect(H.classifyFrType({})).toBe('FUNCTIONAL');
-  });
 });

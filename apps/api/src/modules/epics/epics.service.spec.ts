@@ -1,124 +1,169 @@
-import { EpicsService } from './epics.service';
-import type { PrismaService } from '@strata/prisma';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { refreshClientRequirementRollup, type PrismaService } from '@strata/prisma';
+import type { Epic, User } from '@prisma/client';
 import type { WorkspaceAccessService } from '../authz/workspace-access.service';
-import type { User } from '@prisma/client';
+import { EpicsService } from './epics.service';
 
-/**
- * The epic rollup derives `status` from a COUNT, never from the rounded
- * percentage.
- *
- * `Math.round(done / total * 100)` reaches 100 while work is still open — at
- * 200 of 201, and at 999 of 1000 — so a client that read DONE off that number
- * sent `{progress: 100, status: 'DONE'}` for an epic every other surface called
- * IN_PROGRESS. The client no longer derives from the percentage, but the
- * invariant is enforced here too: this is the only place that can count the
- * tasks authoritatively.
- *
- * The boundary is impractical to reach through the API (201 task creates is
- * over the write throttle), so it is pinned here.
- */
-describe('EpicsService rollup — status is a count, not a rounded percentage', () => {
-  const user = { id: 'u1', name: 'U', isAdmin: false } as unknown as User;
-  const row = {
-    id: 'e1',
-    workspaceId: 'w1',
-    projectId: 'p1',
-    hierarchyId: 'E-1',
-    name: 'Epic',
-    description: '',
-    color: '',
-    requirementId: '',
-    startDate: null,
-    endDate: null,
-    status: 'IN_PROGRESS',
-    progress: 0,
-    assignedTeam: '',
-    createdById: 'u1',
-    createdByName: 'U',
-    createdAt: new Date('2026-01-01'),
-    updatedAt: new Date('2026-01-01'),
+jest.mock('@strata/prisma', () => ({
+  ...jest.requireActual('@strata/prisma'),
+  refreshClientRequirementRollup: jest.fn().mockResolvedValue(true),
+}));
+const refreshClient = refreshClientRequirementRollup as jest.Mock;
+
+const user = { id: 'u1', name: 'U' } as User;
+
+const stored = {
+  id: 'e1',
+  workspaceId: 'w1',
+  projectId: 'p1',
+  requirementId: 'cr-old',
+  hierarchyId: 'P-CR-EPI-01',
+  name: 'Checkout',
+  description: '',
+  color: '',
+  startDate: new Date('2026-06-01T00:00:00.000Z'),
+  endDate: new Date('2026-09-01T00:00:00.000Z'),
+  status: 'TODO',
+  progress: 0,
+  version: 1,
+  createdById: 'u1',
+  createdByName: 'U',
+  createdAt: new Date('2026-05-01T00:00:00.000Z'),
+  updatedAt: new Date('2026-05-01T00:00:00.000Z'),
+} as unknown as Epic;
+
+function build(
+  opts: {
+    /** The functional requirements under the epic that are not yet under the target. */
+    requirements?: Array<{ id: string; clientRequirementId: string }>;
+  } = {},
+) {
+  const requirements = opts.requirements ?? [];
+  const tx = {
+    functionalRequirement: {
+      findMany: jest.fn().mockResolvedValue(requirements),
+      updateMany: jest.fn().mockResolvedValue({ count: requirements.length }),
+    },
   };
+  const prisma = {
+    epic: {
+      findFirst: jest.fn().mockResolvedValue(stored),
+      update: jest.fn(({ data }: { data: Record<string, unknown> }) =>
+        Promise.resolve({ ...stored, ...data, version: 2 }),
+      ),
+    },
+    // The target client requirement is in the epic's project.
+    clientRequirement: { findUnique: jest.fn().mockResolvedValue({ projectId: 'p1' }) },
+    functionalRequirement: {
+      // The moved rows, re-read for the announcement after the commit.
+      findMany: jest.fn().mockResolvedValue(requirements.map((r) => ({ ...r, epicId: 'e1' }))),
+    },
+    activityLog: { create: jest.fn().mockResolvedValue({}) },
+    $transaction: jest.fn((cb: (t: typeof tx) => unknown) => cb(tx)),
+    announceWrite: jest.fn(),
+  };
+  const access = {
+    scopeWhere: jest.fn().mockResolvedValue({}),
+    assertPermission: jest.fn().mockResolvedValue(undefined),
+    isPlatformAdmin: jest.fn().mockReturnValue(false),
+    can: jest.fn().mockResolvedValue(true),
+  } as unknown as WorkspaceAccessService;
+  const svc = new EpicsService(prisma as unknown as PrismaService, access, new EventEmitter2());
+  return { svc, prisma, tx };
+}
 
-  /** An epic carrying `total` tasks, `done` of them DONE. */
-  function build(total: number, done: number, privileged: boolean) {
-    const update = jest.fn().mockImplementation(({ data }) => Promise.resolve({ ...row, ...data }));
-    const count = jest.fn().mockImplementation((args: { where: Record<string, unknown> }) =>
-      Promise.resolve(args.where.status === 'DONE' ? done : total),
+beforeEach(() => refreshClient.mockClear());
+
+describe('EpicsService.patch — moving an epic to another client requirement', () => {
+  it('takes the requirements under it along, and refreshes every client requirement they touch', async () => {
+    const { svc, prisma, tx } = build({
+      requirements: [
+        { id: 'fr1', clientRequirementId: 'cr-old' },
+        // Filed somewhere else by hand; it is under this epic, so it follows too.
+        { id: 'fr2', clientRequirementId: 'cr-stray' },
+      ],
+    });
+
+    await svc.patch(user, 'e1', { requirementId: 'cr-new' });
+
+    expect(prisma.epic.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ requirementId: 'cr-new' }) }),
     );
-    const prisma = {
-      epic: { update, findFirst: jest.fn().mockResolvedValue(row) },
-      task: { count },
-    } as unknown as PrismaService;
-    const access = {
-      scopeWhere: jest.fn().mockResolvedValue({}),
-      assertPermission: jest.fn().mockResolvedValue(undefined),
-      isPlatformAdmin: jest.fn().mockReturnValue(false),
-      // `can(PlanningWrite)` is what separates a manager from a delivery role.
-      can: jest.fn().mockResolvedValue(privileged),
-    } as unknown as WorkspaceAccessService;
-    return { svc: new EpicsService(prisma, access), update };
-  }
-
-  async function written(total: number, done: number, privileged: boolean, submitted = { progress: 0, status: 'TODO' }) {
-    const { svc, update } = build(total, done, privileged);
-    await svc.patch(user, 'e1', submitted);
-    expect(update).toHaveBeenCalled();
-    return (update.mock.calls[0][0] as { data: { progress: number; status: string } }).data;
-  }
-
-  describe('a delivery role (task:update, no planning:write) — both halves derived', () => {
-    it('200 of 201 rounds to 100% and is still IN_PROGRESS', async () => {
-      const data = await written(201, 200, false);
-      expect(data.progress).toBe(100); // the rounding really does reach 100
-      expect(data.status).toBe('IN_PROGRESS'); // ...and the status does not follow it
+    // Only the epic's own requirements, in its own project, that are not there yet.
+    expect(tx.functionalRequirement.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { epicId: 'e1', projectId: 'p1', clientRequirementId: { not: 'cr-new' } },
+      }),
+    );
+    expect(tx.functionalRequirement.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['fr1', 'fr2'] } },
+      data: { clientRequirementId: 'cr-new', version: { increment: 1 } },
     });
-
-    it('999 of 1000 rounds to 100% and is still IN_PROGRESS', async () => {
-      expect(await written(1000, 999, false)).toMatchObject({ progress: 100, status: 'IN_PROGRESS' });
+    // On the transaction's client: the statuses commit with the move.
+    const refreshed = refreshClient.mock.calls.map(([client, id]) => {
+      expect(client).toBe(tx);
+      return id;
     });
-
-    it('every task done IS done', async () => {
-      expect(await written(201, 201, false)).toMatchObject({ progress: 100, status: 'DONE' });
-    });
-
-    it('an epic with no tasks is TODO at 0%, not DONE', async () => {
-      // 0 === 0 must not read as "all of them are finished".
-      expect(await written(0, 0, false)).toMatchObject({ progress: 0, status: 'TODO' });
-    });
-
-    it('nothing started is TODO; partly done is IN_PROGRESS', async () => {
-      expect(await written(5, 0, false)).toMatchObject({ progress: 0, status: 'TODO' });
-      expect(await written(4, 1, false)).toMatchObject({ progress: 25, status: 'IN_PROGRESS' });
-    });
-
-    it('ignores the numbers the caller submitted', async () => {
-      // task:update must not be a way to declare an epic finished.
-      const data = await written(4, 1, false, { progress: 100, status: 'DONE' });
-      expect(data).toMatchObject({ progress: 25, status: 'IN_PROGRESS' });
-    });
+    expect(refreshed.sort()).toEqual(['cr-new', 'cr-old', 'cr-stray']);
+    // updateMany is invisible to the realtime hook: the moved rows are announced.
+    expect(prisma.announceWrite).toHaveBeenCalledTimes(2);
+    expect(prisma.announceWrite).toHaveBeenCalledWith(
+      'FunctionalRequirement',
+      'update',
+      expect.objectContaining({ id: 'fr1' }),
+    );
   });
 
-  describe('a manager (planning:write) — keeps the progress, never the status', () => {
-    it('a submitted 100% with a task still open is stored IN_PROGRESS', async () => {
-      // This is the exact payload the old client sent for 240 of 241.
-      const data = await written(201, 200, true, { progress: 100, status: 'DONE' });
-      expect(data.progress).toBe(100); // the measured half is the caller's
-      expect(data.status).toBe('IN_PROGRESS'); // the derived half is not
-    });
+  it('takes them out of every client requirement when the epic is detached', async () => {
+    const { svc, tx } = build({ requirements: [{ id: 'fr1', clientRequirementId: 'cr-old' }] });
 
-    it('a submitted 100% with every task done stays DONE', async () => {
-      expect(await written(9, 9, true, { progress: 100, status: 'DONE' })).toMatchObject({
-        progress: 100,
-        status: 'DONE',
-      });
-    });
+    await svc.patch(user, 'e1', { requirementId: '' });
 
-    it('a status sent ALONE is a human decision and is stored verbatim', async () => {
-      // Nothing about a task set means "a person decided this", so a bare
-      // status is not treated as a rollup.
-      const { svc, update } = build(4, 1, true);
-      await svc.patch(user, 'e1', { status: 'DONE' });
-      expect((update.mock.calls[0][0] as { data: Record<string, unknown> }).data).toEqual({ status: 'DONE' });
+    expect(tx.functionalRequirement.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['fr1'] } },
+      data: { clientRequirementId: '', version: { increment: 1 } },
     });
+    expect(refreshClient.mock.calls.map(([, id]) => id)).toEqual(['cr-old']);
+  });
+
+  it('touches no requirement when the client requirement does not change', async () => {
+    const { svc, prisma } = build({ requirements: [{ id: 'fr1', clientRequirementId: 'cr-old' }] });
+
+    await svc.patch(user, 'e1', { requirementId: 'cr-old', name: 'Checkout v2' });
+
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(refreshClient).not.toHaveBeenCalled();
+  });
+
+  it('touches no requirement for an edit that does not name a client requirement', async () => {
+    const { svc, prisma } = build();
+
+    await svc.patch(user, 'e1', { name: 'Checkout v2' });
+
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+});
+
+// The stored epic runs 2026-06-01 → 2026-09-01.
+describe('EpicsService.patch — dates', () => {
+  it('reads a cleared start date as cleared, not as the date being removed', async () => {
+    const { svc, prisma } = build();
+
+    // Ending before the OLD start is fine once there is no start at all.
+    await expect(
+      svc.patch(user, 'e1', { startDate: '', endDate: '2026-05-01' }),
+    ).resolves.toBeDefined();
+    expect(prisma.epic.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ startDate: null }) }),
+    );
+  });
+
+  it('still refuses an end-only edit that lands before the stored start', async () => {
+    const { svc, prisma } = build();
+
+    await expect(svc.patch(user, 'e1', { endDate: '2026-05-01' })).rejects.toThrow(
+      'Target end date must be on or after the start date.',
+    );
+    expect(prisma.epic.update).not.toHaveBeenCalled();
   });
 });

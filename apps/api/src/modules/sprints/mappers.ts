@@ -1,5 +1,5 @@
 import { formatApiTimestamp } from '@strata/common';
-import type { Retrospective, Sprint } from '@prisma/client';
+import type { Sprint } from '@prisma/client';
 
 const dateOnly = (d: Date | null): string | null => (d ? d.toISOString().slice(0, 10) : null);
 
@@ -26,21 +26,5 @@ export function sprintResponse(s: Sprint) {
     createdByName: s.createdByName,
     createdAt: formatApiTimestamp(s.createdAt),
     updatedAt: formatApiTimestamp(s.updatedAt),
-  };
-}
-
-/** RetrospectiveSerializer has no createdByName (model has no such field). */
-export function retrospectiveResponse(r: Retrospective) {
-  return {
-    id: String(r.id),
-    workspaceId: r.workspaceId,
-    projectId: r.projectId,
-    sprintId: r.sprintId,
-    wentWell: r.wentWell,
-    needsImprovement: r.needsImprovement,
-    actionItems: r.actionItems,
-    createdBy: r.createdById,
-    createdAt: formatApiTimestamp(r.createdAt),
-    updatedAt: formatApiTimestamp(r.updatedAt),
   };
 }

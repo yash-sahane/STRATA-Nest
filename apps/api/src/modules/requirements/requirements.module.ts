@@ -8,10 +8,11 @@ import {
   ClientRequirementsService,
   FunctionalRequirementsService,
 } from './requirements.services';
+import { RollupReconcileService } from './rollup-reconcile.service';
 
 @Module({
   imports: [DeletionModule],
   controllers: [ClientRequirementsController, FunctionalRequirementsController],
-  providers: [ClientRequirementsService, FunctionalRequirementsService],
+  providers: [ClientRequirementsService, FunctionalRequirementsService, RollupReconcileService],
 })
 export class RequirementsModule {}

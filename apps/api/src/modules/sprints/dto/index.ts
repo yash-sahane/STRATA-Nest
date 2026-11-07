@@ -1,5 +1,4 @@
 import {
-  IsArray,
   IsDateString,
   IsIn,
   IsNotEmpty,
@@ -34,19 +33,4 @@ export class UpdateSprintDto {
   @IsOptional() @IsString() goal?: string;
   @IsOptional() @IsIn(SPRINT_STATUSES) status?: string;
   @IsOptional() @IsString() retrospectiveNotes?: string;
-}
-
-// --- Retrospective ---
-export class CreateRetrospectiveDto {
-  @IsString() workspaceId!: string;
-  @IsString() projectId!: string;
-  @IsString() sprintId!: string;
-  @IsOptional() @IsArray() wentWell?: unknown[];
-  @IsOptional() @IsArray() needsImprovement?: unknown[];
-  @IsOptional() @IsArray() actionItems?: unknown[];
-}
-export class UpdateRetrospectiveDto {
-  @IsOptional() @IsArray() wentWell?: unknown[];
-  @IsOptional() @IsArray() needsImprovement?: unknown[];
-  @IsOptional() @IsArray() actionItems?: unknown[];
 }

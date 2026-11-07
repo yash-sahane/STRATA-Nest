@@ -17,7 +17,6 @@ function epic(over: Partial<Epic> = {}): Epic {
     endDate: null,
     status: 'TODO',
     progress: 0,
-    assignedTeam: '',
     createdById: 'u1',
     createdByName: 'U',
     ...over,
@@ -32,7 +31,7 @@ describe('epicResponse', () => {
     expect(r.createdBy).toBe('u1');
     expect(Object.keys(r)).toEqual([
       'id', 'workspaceId', 'projectId', 'requirementId', 'hierarchyId', 'name', 'description',
-      'color', 'startDate', 'endDate', 'status', 'progress', 'assignedTeam', 'createdBy',
+      'color', 'startDate', 'endDate', 'status', 'progress', 'createdBy',
       'createdByName', 'createdAt', 'updatedAt',
     ]);
   });

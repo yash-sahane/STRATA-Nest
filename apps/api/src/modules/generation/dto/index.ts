@@ -21,6 +21,10 @@ export interface GeneratedNode {
    */
   functionalRequirementIds?: unknown;
   epicId?: unknown;
+  /** An epic's client requirement. */
+  clientRequirementId?: unknown;
+  /** A task's functional requirement. */
+  functionalRequirementId?: unknown;
 }
 
 export interface GeneratedTree {

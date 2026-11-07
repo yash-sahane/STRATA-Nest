@@ -1,20 +1,15 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { type ListQuerySpec } from '@strata/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PlanningEvents } from '@strata/shared';
 import { PrismaService } from '@strata/prisma';
-import type { Retrospective, Sprint, User } from '@prisma/client';
+import type { Sprint, User } from '@prisma/client';
 import { Permission, type PermissionKey } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { ScopedCrudService } from '../workspaces/scoped-crud.base';
-import { assertLinkInProject, assertProjectInWorkspace } from '../workspaces/workspace-refs';
-import type {
-  CreateRetrospectiveDto,
-  CreateSprintDto,
-  UpdateRetrospectiveDto,
-  UpdateSprintDto,
-} from './dto';
-import { retrospectiveResponse, sprintResponse } from './mappers';
+import { assertProjectInWorkspace } from '../workspaces/workspace-refs';
+import type { CreateSprintDto, UpdateSprintDto } from './dto';
+import { sprintResponse } from './mappers';
 
 @Injectable()
 export class SprintsService extends ScopedCrudService<Sprint, ReturnType<typeof sprintResponse>> {
@@ -30,6 +25,7 @@ export class SprintsService extends ScopedCrudService<Sprint, ReturnType<typeof 
       status: { field: 'status' },
     },
     sortable: { createdAt: 'createdAt', name: 'name', startDate: 'startDate' },
+    search: ['name', 'goal'],
     defaultOrderBy: { createdAt: 'desc' },
   };
   constructor(
@@ -41,6 +37,18 @@ export class SprintsService extends ScopedCrudService<Sprint, ReturnType<typeof 
   }
   protected map(row: Sprint) {
     return sprintResponse(row);
+  }
+
+  private readonly logger = new Logger('Sprints');
+
+  /** Run an event's subscribers to completion. The sprint is already saved, so
+   *  a subscriber that fails is logged rather than turned into a failed request. */
+  private async settle(name: string, event: object): Promise<void> {
+    try {
+      await this.events.emitAsync(name, event);
+    } catch (err) {
+      this.logger.warn(`${name} subscriber failed: ${(err as Error).message}`);
+    }
   }
 
   /** See the note above assertRangeOrdered. `excludeId` is the sprint being edited. */
@@ -64,12 +72,76 @@ export class SprintsService extends ScopedCrudService<Sprint, ReturnType<typeof 
       );
     }
   }
+  /**
+   * The status changes a PATCH may make.
+   *
+   * Starting a sprint IS a patch, and the one-active-sprint rule above was only
+   * ever applied on create — where the UI always sends PLANNING — so a second
+   * sprint could be started beside a running one and "the current sprint"
+   * stopped having an answer.
+   *
+   * Closing a sprint is NOT a patch: POST /sprints/:id/complete records what
+   * was finished, returns the unfinished work to the backlog and announces it.
+   * Setting COMPLETED here skipped all three, leaving a "completed" sprint with
+   * no results and its open tasks stuck inside it. And a completed sprint stays
+   * completed: its recorded figures describe the moment it closed, which
+   * reopening would quietly turn into fiction.
+   */
+  private async assertTransition(sprint: Sprint, next: string): Promise<void> {
+    if (sprint.status === 'COMPLETED') {
+      throw new BadRequestException('A completed sprint cannot be reopened.');
+    }
+    if (next === 'COMPLETED') {
+      throw new BadRequestException(
+        'Use "Complete Sprint" to close a sprint, so its results are recorded and unfinished work goes back to the backlog.',
+      );
+    }
+    await this.assertNoOtherActiveSprint(sprint.projectId, next, sprint.id);
+  }
+
+  /**
+   * Start a sprint — one start per project at a time.
+   *
+   * The one-active check reads and the write lands afterwards, so two starts at
+   * once (two sprints of a project, or two managers) each read "nothing is
+   * running" and BOTH went ACTIVE. A transaction-scoped advisory lock per
+   * project makes them queue, the way leave requests do: the check runs again
+   * inside it, and the write is awaited inside it, so it has committed before
+   * the next start in the queue looks. That one is refused — or, when it was
+   * the same sprint, finds it already running and does not announce the start a
+   * second time.
+   */
+  private async startUnderLock(
+    user: User,
+    sprint: Sprint,
+    data: Record<string, unknown>,
+    basedOn?: Record<string, unknown>,
+  ): Promise<{ result: ReturnType<typeof sprintResponse>; started: boolean }> {
+    const lockKey = `sprint-start:${sprint.projectId}`;
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey})::bigint)`;
+      const current = await this.findScoped(user, sprint.id);
+      const started = current.status !== 'ACTIVE';
+      if (started) await this.assertTransition(current, 'ACTIVE');
+      return { result: await this.update(user, sprint.id, data, basedOn), started };
+    });
+  }
+
   async create(user: User, dto: CreateSprintDto) {
+    // A sprint is created in Planning and started by a PATCH. Created ACTIVE it
+    // skipped everything a start does — the one-active check under the start's
+    // lock (so two could race into existence), its Backlog tasks moving onto the
+    // board, the project turning Active, the "started" announcement — and
+    // created COMPLETED it was the record of a sprint that never ran.
+    if (dto.status !== undefined && dto.status !== 'PLANNING') {
+      throw new BadRequestException(
+        'A sprint is created in Planning. Create it, then start it from the sprint page.',
+      );
+    }
     const startDate = parseSprintDate(dto.startDate, 'startDate');
     const endDate = parseSprintDate(dto.endDate, 'endDate');
     assertRangeOrdered(startDate, endDate);
     await assertProjectInWorkspace(this.prisma, dto.projectId, dto.workspaceId);
-    await this.assertNoOtherActiveSprint(dto.projectId, dto.status);
     return this.createIn(user, dto.workspaceId, {
       workspaceId: dto.workspaceId,
       projectId: dto.projectId,
@@ -77,7 +149,7 @@ export class SprintsService extends ScopedCrudService<Sprint, ReturnType<typeof 
       goal: dto.goal ?? '',
       startDate,
       endDate,
-      status: dto.status ?? 'PLANNING',
+      status: 'PLANNING',
       retrospectiveNotes: dto.retrospectiveNotes ?? '',
       createdById: user.id,
       createdByName: user.name ?? '',
@@ -100,19 +172,38 @@ export class SprintsService extends ScopedCrudService<Sprint, ReturnType<typeof 
         (data.endDate as Date | undefined) ?? row.endDate,
       );
     }
+    // The sprint as it stands, read only for a patch that names a status.
+    const before = dto.status !== undefined ? await this.findScoped(user, id) : null;
+    const closed = (before ?? (await this.findScoped(user, id))).status === 'COMPLETED';
+    if (closed) {
+      const fixed = Object.keys(data).filter((field) => field !== 'name' && field !== 'retrospectiveNotes');
+      if (fixed.length > 0 && !(fixed.length === 1 && fixed[0] === 'status' && data.status === 'COMPLETED')) {
+        throw new BadRequestException(
+          "A completed sprint's goal and dates are its record, and it stays completed. Only its name and retrospective can change.",
+        );
+      }
+    }
+    if (before && dto.status !== undefined && dto.status !== before.status) {
+      await this.assertTransition(before, dto.status);
+    }
     if (dto.status !== undefined) data.status = dto.status;
     if (dto.retrospectiveNotes !== undefined) data.retrospectiveNotes = dto.retrospectiveNotes;
 
     // `sprint.started` existed in the shared event contract but nothing ever
     // emitted it — starting a sprint is an ordinary PATCH, so the milestone was
     // invisible to the audit trail and to realtime while `sprint.completed`
-    // (which has its own service) was not. Read the previous status first so the
-    // event fires on the PLANNING -> ACTIVE transition only, never on a repeat
-    // PATCH of an already-active sprint.
-    const before = dto.status === 'ACTIVE' ? await this.findScoped(user, id) : null;
-    const result = await this.update(user, id, data, dto.basedOn);
-    if (before && before.status !== 'ACTIVE') {
-      this.events.emit(PlanningEvents.SprintStarted, {
+    // (which has its own service) was not. It fires on the PLANNING -> ACTIVE
+    // transition only, never on a repeat PATCH of an already-active sprint.
+    const { result, started } =
+      before && dto.status === 'ACTIVE' && before.status !== 'ACTIVE'
+        ? await this.startUnderLock(user, before, data, dto.basedOn)
+        : { result: await this.update(user, id, data, dto.basedOn), started: false };
+    if (before && started) {
+      // AWAITED: starting a sprint also moves its Backlog tasks to To Do (a
+      // subscriber to this event), and the caller refetches the board the moment
+      // this returns. Fired and forgotten, that refetch could land first and
+      // show a started sprint whose tasks had not moved.
+      await this.settle(PlanningEvents.SprintStarted, {
         name: PlanningEvents.SprintStarted,
         workspaceId: before.workspaceId,
         payload: {
@@ -123,6 +214,17 @@ export class SprintsService extends ScopedCrudService<Sprint, ReturnType<typeof 
         },
         occurredAt: new Date().toISOString(),
       });
+      // Work has started: a project still in Planning is Active from now on.
+      // Conditional, so a project somebody put On Hold or Completed by hand
+      // keeps what they said.
+      const moved = await this.prisma.project.updateMany({
+        where: { id: before.projectId, status: 'PLANNING' },
+        data: { status: 'ACTIVE', version: { increment: 1 } },
+      });
+      if (moved.count > 0) {
+        const project = await this.prisma.project.findUnique({ where: { id: before.projectId } });
+        if (project) this.prisma.announceWrite?.('Project', 'update', project);
+      }
     }
     return result;
   }
@@ -145,56 +247,10 @@ function parseSprintDate(value: string, field: string): Date {
  * Two ACTIVE sprints in one project made "the current sprint" ambiguous, and
  * every screen that resolves it picks the first row it happens to read — so the
  * board, the backlog and the analytics could each be describing a different
- * sprint at the same moment. `useActiveSprint` literally queries
- * `status=ACTIVE` with `limit(1)`.
+ * sprint at the same moment.
  */
 function assertRangeOrdered(startDate: Date, endDate: Date): void {
   if (endDate.getTime() < startDate.getTime()) {
     throw new BadRequestException('endDate must be on or after startDate');
-  }
-}
-
-@Injectable()
-export class RetrospectivesService extends ScopedCrudService<
-  Retrospective,
-  ReturnType<typeof retrospectiveResponse>
-> {
-  protected readonly model = 'retrospective';
-  protected readonly auditEntity = 'retrospective';
-  protected readonly writePermission: PermissionKey = Permission.PlanningWrite;
-  protected readonly spec: ListQuerySpec = {
-    filterable: {
-      workspaceId: { field: 'workspaceId' },
-      projectId: { field: 'projectId' },
-      sprintId: { field: 'sprintId' },
-    },
-    sortable: { createdAt: 'createdAt' },
-    defaultOrderBy: { createdAt: 'desc' },
-  };
-  constructor(prisma: PrismaService, access: WorkspaceAccessService) {
-    super(prisma, access);
-  }
-  protected map(row: Retrospective) {
-    return retrospectiveResponse(row);
-  }
-  async create(user: User, dto: CreateRetrospectiveDto) {
-    await assertProjectInWorkspace(this.prisma, dto.projectId, dto.workspaceId);
-    await assertLinkInProject(this.prisma, 'sprint', 'Sprint', dto.sprintId, dto.projectId);
-    return this.createIn(user, dto.workspaceId, {
-      workspaceId: dto.workspaceId,
-      projectId: dto.projectId,
-      sprintId: dto.sprintId,
-      wentWell: dto.wentWell ?? [],
-      needsImprovement: dto.needsImprovement ?? [],
-      actionItems: dto.actionItems ?? [],
-      createdById: user.id,
-    });
-  }
-  patch(user: User, id: string, dto: UpdateRetrospectiveDto) {
-    const data: Record<string, unknown> = {};
-    if (dto.wentWell !== undefined) data.wentWell = dto.wentWell;
-    if (dto.needsImprovement !== undefined) data.needsImprovement = dto.needsImprovement;
-    if (dto.actionItems !== undefined) data.actionItems = dto.actionItems;
-    return this.update(user, id, data);
   }
 }

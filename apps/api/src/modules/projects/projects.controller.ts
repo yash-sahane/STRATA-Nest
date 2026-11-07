@@ -1,11 +1,12 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Put, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import type { User } from '@prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Permission } from '../authz/permissions';
 import { RequirePermission } from '../authz/require-permission.decorator';
 import { ProjectDeletionService } from '../deletion/project-deletion.service';
-import { CreateProjectDto, UpdateProjectDto } from './dto';
+import { CloneProjectDto, CreateProjectDto, UpdateProjectDto } from './dto';
+import { ProjectCloneService } from './project-clone.service';
 import { ProjectsService } from './projects.service';
 
 @ApiTags('projects')
@@ -14,6 +15,7 @@ export class ProjectsController {
   constructor(
     private readonly projects: ProjectsService,
     private readonly deletion: ProjectDeletionService,
+    private readonly cloning: ProjectCloneService,
   ) {}
 
   @Get()
@@ -27,6 +29,16 @@ export class ProjectsController {
     return this.projects.create(user, dto);
   }
 
+  /**
+   * A copy of the project in the same workspace, made in one transaction. The
+   * permissions are checked by the service: which ones depends on the parts
+   * asked for, and the workspace is the source project's.
+   */
+  @Post(':id/clone')
+  clone(@CurrentUser() user: User, @Param('id') id: string, @Body() dto: CloneProjectDto) {
+    return this.cloning.clone(user, id, dto);
+  }
+
   @Get(':id')
   retrieve(@CurrentUser() user: User, @Param('id') id: string) {
     return this.projects.retrieve(user, id);
@@ -34,11 +46,6 @@ export class ProjectsController {
 
   @Patch(':id')
   update(@CurrentUser() user: User, @Param('id') id: string, @Body() dto: UpdateProjectDto) {
-    return this.projects.update(user, id, dto);
-  }
-
-  @Put(':id')
-  replace(@CurrentUser() user: User, @Param('id') id: string, @Body() dto: UpdateProjectDto) {
     return this.projects.update(user, id, dto);
   }
 

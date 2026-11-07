@@ -4,9 +4,9 @@ import { GenerationService } from './generation.service';
 import { HierarchyIdService } from './hierarchy-id.service';
 
 /**
- * Generation persistence (business). `bulk-save` builds the project tree
- * transactionally with the exact hierarchy-id rules. Model/prompt infra is the
- * separate AiModule.
+ * Generation persistence. `bulk-save` builds the project tree transactionally
+ * with the hierarchy-id rules. The model itself is called by the web app's
+ * server route (apps/frontend/src/app/api/ai-generate), with keys held there.
  */
 @Module({
   controllers: [GenerationController],
