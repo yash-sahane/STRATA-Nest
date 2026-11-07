@@ -438,19 +438,6 @@ abstract class SelfServiceRequestService<
   }
 }
 
-/**
- * The states a join request may be moved to BY A PATCH — anything else wedges
- * it, because approve/reject refuse a request whose status is no longer PENDING.
- *
- * APPROVED is deliberately absent: this path never touches `workspaceMember`, so
- * marking a request approved here showed the requester an approved request that
- * granted no access AND permanently 400'd the real
- * `POST /join_requests/:id/approve`. Approval belongs to
- * JoinRequestApprovalService, which creates the membership in the same
- * transaction.
- */
-const JOIN_REQUEST_STATUSES = new Set(['PENDING', 'REJECTED']);
-
 @Injectable()
 export class JoinRequestsService extends SelfServiceRequestService<
   JoinRequest,
@@ -580,16 +567,26 @@ export class JoinRequestsService extends SelfServiceRequestService<
     }
     return joinRequestResponse(row, user);
   }
+  /**
+   * Nothing about a request is a PATCH's to set. Rejecting arrives here only
+   * with a `handledBy` alongside (the controller routes a plain rejection
+   * through JoinRequestApprovalService.reject); reopening is its author asking
+   * again (POST /join_requests); and who handled it is recorded by the server.
+   * The request is still looked up first, so a stranger's id answers 404
+   * rather than this explanation.
+   */
   async patch(user: User, id: string, dto: UpdateJoinRequestDto) {
-    const data: Record<string, unknown> = {};
-    if (dto.status !== undefined) {
-      if (!JOIN_REQUEST_STATUSES.has(dto.status)) {
-        throw new BadRequestException(`Unknown join request status "${dto.status}".`);
-      }
-      data.status = dto.status;
+    await this.findScoped(user, id);
+    if (dto.handledBy !== undefined) {
+      throw new BadRequestException(
+        'Who handled a join request is recorded when it is approved or rejected; it cannot be set.',
+      );
     }
-    if (dto.handledBy !== undefined) data.handledById = dto.handledBy;
-    const [row] = await this.hydrate([await this.update(user, id, data)]);
-    return row;
+    if (dto.status !== undefined) {
+      throw new BadRequestException(
+        'A join request is decided with POST /join_requests/:id/approve or /reject, and reopened by its author asking again.',
+      );
+    }
+    return this.retrieve(user, id);
   }
 }

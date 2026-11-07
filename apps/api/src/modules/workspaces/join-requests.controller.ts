@@ -43,8 +43,20 @@ export class JoinRequestsController {
     return this.svc.retrieve(u, id);
   }
 
+  /**
+   * A request is decided by approving or rejecting it — which claim it, settle
+   * the membership and tell the requester. A PATCH wrote `status` and
+   * `handledBy` straight onto the row instead: a "rejected" nobody was told
+   * about, recorded as handled by whoever the caller named. A PATCH that
+   * rejects now goes through the same reject; anything else it carries is
+   * refused (see JoinRequestsService.patch).
+   */
   @Patch(':id')
-  patch(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateJoinRequestDto) {
+  async patch(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateJoinRequestDto) {
+    if (d?.status === 'REJECTED' && d.handledBy === undefined) {
+      await this.approvals.reject(u, id);
+      return this.svc.retrieve(u, id);
+    }
     return this.svc.patch(u, id, d);
   }
 

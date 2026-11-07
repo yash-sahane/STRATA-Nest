@@ -359,24 +359,24 @@ describe('Join requests — the author is not a member', () => {
     expect(remove).not.toHaveBeenCalled();
   });
 
-  it('rejects a status the approval workflow cannot act on', async () => {
-    const { prisma, access } = buildRequests();
-    const svc = new JoinRequestsService(prisma, access, noEvents);
-    await expect(svc.patch(user, 'j1', { status: 'MAYBE' })).rejects.toThrow(
-      'Unknown join request status "MAYBE".',
-    );
-  });
-
-  it('rejects APPROVED, which this path cannot honour and would wedge the request', async () => {
-    // PATCH never touches workspaceMember, so an "approved" request granted no
-    // access — and JoinRequestApprovalService.approve then refused it forever
-    // ("Join request already handled"). Approval goes through that service.
-    const { prisma, access, update } = buildRequests();
-    const svc = new JoinRequestsService(prisma, access, noEvents);
-    await expect(svc.patch(user, 'j1', { status: 'APPROVED' })).rejects.toThrow(
-      'Unknown join request status "APPROVED".',
-    );
-    expect(update).not.toHaveBeenCalled();
+  // A PATCH wrote status and handledBy straight onto the row: an "approved"
+  // request that granted nothing (and wedged the real approve forever), a
+  // "rejected" one nobody was told about, a reopened decision, and any name at
+  // all as the person who handled it. Deciding is approve/reject's; a plain
+  // rejection is routed there by the controller.
+  it('sets no status — approving, rejecting or reopening — and no handler', async () => {
+    for (const body of [
+      { status: 'APPROVED' },
+      { status: 'PENDING' },
+      { status: 'MAYBE' },
+      { status: 'REJECTED', handledBy: 'somebody' },
+      { handledBy: 'somebody' },
+    ]) {
+      const { prisma, access, update } = buildRequests();
+      const svc = new JoinRequestsService(prisma, access, noEvents);
+      await expect(svc.patch(user, 'j1', body)).rejects.toThrow(/approve or \/reject|cannot be set/);
+      expect(update).not.toHaveBeenCalled();
+    }
   });
 });
 
