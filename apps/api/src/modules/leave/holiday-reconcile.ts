@@ -143,9 +143,15 @@ export async function reconcileHolidayChange(
       const days = request.type === 'HALF_DAY' ? (workingDays > 0 ? 0.5 : 0) : workingDays;
       if (days === request.daysCount) continue;
 
+      // The change in what this leave is charged, as applied.
+      let moved = 0;
       if (request.status === 'APPROVED') {
-        const owed = unitsFor(request.type, request.daysCount) - unitsFor(request.type, days);
-        if (owed !== 0) {
+        // From what was actually CHARGED towards what the leave now costs — not
+        // from the old day count. The two part whenever a re-count can only
+        // partly be charged (below), and working from the day count then gave
+        // back, on a later re-count or a cancellation, days nobody had paid for.
+        const wanted = unitsFor(request.type, days) - request.chargedUnits;
+        if (wanted !== 0) {
           // Charged to the year the leave is taken in, as approval charges it.
           const balance = await ensureLeaveBalance(
             tx,
@@ -154,16 +160,29 @@ export async function reconcileHolidayChange(
             request.startDate.getUTCFullYear(),
           );
           const field = LEAVE_TYPE_TO_BALANCE_FIELD[request.type] ?? 'paidLeave';
-          // `unpaidLeave` counts days TAKEN, so it moves the other way.
-          const delta =
-            request.type === 'UNPAID'
-              ? Math.max(-owed, -balance.unpaidLeave)
-              : Math.max(owed, -balance[field]);
-          await tx.leaveBalance.update({
-            where: { id: balance.id },
-            data: { [field]: { increment: delta } } as Prisma.LeaveBalanceUpdateInput,
-          });
-          result.daysReturned += request.type === 'UNPAID' ? -delta : delta;
+          if (request.type === 'UNPAID') {
+            // `unpaidLeave` counts days TAKEN: it rises with the charge, and a
+            // refund cannot take it below zero.
+            moved = wanted > 0 ? wanted : -Math.min(-wanted, balance.unpaidLeave);
+            if (moved !== 0) {
+              await tx.leaveBalance.update({
+                where: { id: balance.id },
+                data: { unpaidLeave: { increment: moved } },
+              });
+            }
+          } else {
+            // A refund goes back in full. A further charge only as far as the
+            // balance still covers it: the leave was agreed, and the calendar
+            // changing afterwards is no reason to overdraw anybody.
+            moved = wanted < 0 ? wanted : Math.min(wanted, Math.max(0, balance[field]));
+            if (moved !== 0) {
+              await tx.leaveBalance.update({
+                where: { id: balance.id },
+                data: { [field]: { increment: -moved } } as Prisma.LeaveBalanceUpdateInput,
+              });
+            }
+          }
+          result.daysReturned -= moved;
           result.peopleCharged = [...new Set([...(result.peopleCharged ?? []), request.userId])];
         }
         // The day is a leave day again: put back the marker approval would
@@ -187,7 +206,13 @@ export async function reconcileHolidayChange(
           });
         }
       }
-      await tx.leaveRequest.update({ where: { id: request.id }, data: { daysCount: days } });
+      await tx.leaveRequest.update({
+        where: { id: request.id },
+        data: {
+          daysCount: days,
+          ...(request.status === 'APPROVED' ? { chargedUnits: request.chargedUnits + moved } : {}),
+        },
+      });
       result.leaveRequests += 1;
     }
     return result;

@@ -87,6 +87,8 @@ export class LeaveApprovalService {
       }
     }
 
+    // What approving it costs, from the very figures the claim below matches.
+    const units = requiredUnits(req.type, req.daysCount);
     const updated = await this.prisma.$transaction(async (tx) => {
       // Claim the request FIRST, conditionally on it still being pending.
       //
@@ -112,7 +114,11 @@ export class LeaveApprovalService {
           endDate: req.endDate,
           daysCount: req.daysCount,
         },
-        data: { status: 'APPROVED', approvedBy: user.id, approvedAt: new Date() },
+        // What it was charged is kept with it: every refund gives back exactly
+        // this, never a figure worked out again from the day count (see the
+        // leave_charged_units migration). The debit below rolls it back if the
+        // balance no longer covers it.
+        data: { status: 'APPROVED', approvedBy: user.id, approvedAt: new Date(), chargedUnits: units },
       });
       if (claimed.count === 0) throw await this.notClaimed(tx, id);
       // Everything below reads the row as CLAIMED, never the copy load() made.
@@ -121,7 +127,6 @@ export class LeaveApprovalService {
       // decided in, so a December booking for January debits the January row.
       const year = approved.startDate.getUTCFullYear();
       const field = LEAVE_TYPE_TO_BALANCE_FIELD[approved.type] ?? 'paidLeave';
-      const units = requiredUnits(approved.type, approved.daysCount);
       const balance = await ensureLeaveBalance(tx, approved.workspaceId, approved.userId, year);
       if (approved.type === 'UNPAID') {
         // UNPAID has no allowance → unpaidLeave counts the days taken.
@@ -322,15 +327,25 @@ export class LeaveApprovalService {
       new Set(holidays.map((holiday) => dateOnlyKey(holiday.date))),
     );
     if (taken === 0) return this.withdraw(user, req);
-    const refund = requiredUnits(req.type, req.daysCount) - requiredUnits(req.type, taken);
+    // What was charged, less what the days taken cost — never more than was
+    // charged: a re-count that could only partly be charged left the day count
+    // above the charge, and refunding the difference of day counts gave back a
+    // day nobody had paid for.
+    const refund = Math.max(0, req.chargedUnits - requiredUnits(req.type, taken));
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      // Claimed on the end and the days it was decided against: two people
-      // ending it at once cannot both give the days back, and the refund is
-      // worked out from exactly the figures the claim matched.
+      // Claimed on the end, the days and the charge it was decided against: two
+      // people ending it at once cannot both give the days back, and the refund
+      // is worked out from exactly the figures the claim matched.
       const claimed = await tx.leaveRequest.updateMany({
-        where: { id: req.id, status: 'APPROVED', endDate: req.endDate, daysCount: req.daysCount },
-        data: { endDate: lastDay, daysCount: taken },
+        where: {
+          id: req.id,
+          status: 'APPROVED',
+          endDate: req.endDate,
+          daysCount: req.daysCount,
+          chargedUnits: req.chargedUnits,
+        },
+        data: { endDate: lastDay, daysCount: taken, chargedUnits: req.chargedUnits - refund },
       });
       if (claimed.count === 0) {
         throw new BadRequestException(
@@ -372,17 +387,25 @@ export class LeaveApprovalService {
   private async withdraw(user: User, req: LeaveRequest) {
     const id = req.id;
     const wasApproved = req.status === 'APPROVED';
-    const units = requiredUnits(req.type, req.daysCount);
+    // Exactly what approving it took — see the leave_charged_units migration.
+    const units = wasApproved ? req.chargedUnits : 0;
 
     const updated = await this.prisma.$transaction(async (tx) => {
       // Claim on the status this cancellation was decided against, so two
       // simultaneous cancellations cannot both refund the allowance and a
       // cancellation cannot race an approval into refunding a debit that the
-      // approval had not yet made — and on the end and days the refund below is
-      // worked out from, so an early end landing first cannot be refunded twice.
+      // approval had not yet made — and on the end, days and charge the refund
+      // below is worked out from, so an early end landing first cannot be
+      // refunded twice.
       const claimed = await tx.leaveRequest.updateMany({
-        where: { id, status: req.status, endDate: req.endDate, daysCount: req.daysCount },
-        data: { status: 'CANCELLED' },
+        where: {
+          id,
+          status: req.status,
+          endDate: req.endDate,
+          daysCount: req.daysCount,
+          chargedUnits: req.chargedUnits,
+        },
+        data: { status: 'CANCELLED', chargedUnits: 0 },
       });
       if (claimed.count === 0) {
         throw new BadRequestException(

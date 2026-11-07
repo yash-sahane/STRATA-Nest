@@ -55,6 +55,11 @@ model LeaveRequest {
   approvedAt      DateTime? @map("approved_at")
   rejectionReason String    @default("") @map("rejection_reason")
   daysCount       Float     @default(0) @map("days_count")
+  /// What approving it actually took from the balance (for unpaid leave: added
+  /// to the days taken). Refunds give back this, never a figure worked out
+  /// again from daysCount — the two part when a re-count can only partly be
+  /// charged. 0 until approved, and after cancellation.
+  chargedUnits    Float     @default(0) @map("charged_units")
 
   @@map("leave_leaverequest")
 }

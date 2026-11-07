@@ -53,6 +53,12 @@ function build(
     rejectionReason: '',
     createdById: 'u2',
     createdByName: '',
+    // What approving it charged, as the leave_charged_units backfill sets it
+    // for an approved request: the rule every refund used to work from.
+    chargedUnits:
+      partial.status === 'APPROVED'
+        ? requiredUnits(String(partial.type), Number(partial.daysCount))
+        : 0,
     ...partial,
   };
   // A row that actually carries a mutable status, so the compare-and-swap the
@@ -307,15 +313,40 @@ describe('LeaveApprovalService.cancel', () => {
     expect(leaveRequest.updateMany).toHaveBeenCalledWith({
       // Conditional on the status the cancellation was decided against, so two
       // simultaneous cancellations cannot both refund the allowance — and on the
-      // end and days the refund is worked out from.
+      // end, days and charge the refund is worked out from.
       where: {
         id: 'lr6',
         status: 'APPROVED',
         endDate: new Date('2099-03-01'),
         daysCount: 3,
+        chargedUnits: 3,
       },
-      data: { status: 'CANCELLED' },
+      data: { status: 'CANCELLED', chargedUnits: 0 },
     });
+  });
+
+  // A holiday removed after approval made the leave a day longer, but the
+  // extra day was charged only as far as the balance covered it — none, here.
+  // Refunding from the day count then gave back a day nobody had paid for.
+  it('gives back what was charged, not what the day count now works out to', async () => {
+    const { svc, leaveBalance } = build({
+      id: 'lr60', workspaceId: 'w1', userId: 'u2', type: 'CASUAL', daysCount: 4,
+      chargedUnits: 3, startDate: new Date('2099-03-01'), status: 'APPROVED',
+    });
+    await svc.cancel(owner, 'lr60');
+    expect(leaveBalance.update).toHaveBeenCalledWith({
+      where: { id: 'b1' },
+      data: { paidLeave: { increment: 3 } },
+    });
+  });
+
+  it('records what approving it charged', async () => {
+    const { svc, row } = build({
+      id: 'lr61', workspaceId: 'w1', userId: 'u2', type: 'CASUAL', daysCount: 2.5,
+      startDate: new Date('2099-03-01'), endDate: new Date('2099-03-03'), status: 'PENDING',
+    });
+    await svc.approve(mgr, 'lr61');
+    expect(row.chargedUnits).toBe(3);
   });
 
   it('does not touch the balance when a pending request is withdrawn', async () => {
