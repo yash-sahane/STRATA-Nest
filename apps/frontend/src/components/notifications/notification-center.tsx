@@ -6,6 +6,7 @@ import { useAuth } from '@/components/providers/auth-provider';
 import { useCurrentWorkspace } from '@/hooks/use-current-workspace';
 import { useQueryClient } from '@tanstack/react-query';
 import { subscribeToCollection, getRealtimeEventType } from '@/lib/api/realtime';
+import { queueInvalidation } from '@/lib/api/realtime-invalidation';
 import { COLLECTIONS } from '@/lib/api/config';
 import type { ApiModels } from '@/lib/api/client';
 import {
@@ -404,7 +405,13 @@ export function NotificationCenter() {
           // Prefix match: covers both ['notifications', userId] and
           // ['notifications', 'unread', userId] — the unread badge is keyed with
           // 'unread' at index 1, so ['notifications', userId] never matched it.
-          queryClient.invalidateQueries({ queryKey: ['notifications'] });
+          //
+          // Queued with the app's other realtime refetches rather than run per
+          // frame: one change can tell the reader ten things at once, and each
+          // frame used to restart the list and badge fetches. Unscoped on
+          // purpose: these queries are keyed by the user, not by a workspace,
+          // so no frame can be ruled out by the workspace it names.
+          queueInvalidation(queryClient, ['notifications'], {});
 
           // Show toast for new notifications — once per burst. Each notice
           // used to raise its own toast, so a change that told the reader ten

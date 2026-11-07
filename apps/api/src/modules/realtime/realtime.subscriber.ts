@@ -30,14 +30,16 @@ export class RealtimeSubscriber {
 
   /**
    * Join requests are read by `join:manage` holders and their author only, so
-   * the frame carries the id and nothing else (ID_ONLY_COLLECTIONS) — it used
-   * to name the requester to every member subscribed to the channel.
+   * the frame carries the id and its workspace, nothing else — like every
+   * collection off FULL_ROW_COLLECTIONS. It used to name the requester to every
+   * member subscribed to the channel.
    */
   @OnEvent(WorkspaceEvents.JoinRequestApproved)
   @OnEvent(WorkspaceEvents.JoinRequestRejected)
   onJoinHandled(e: DomainEvent<JoinRequestHandledPayload>): void {
     this.realtime.emitEvent('join_requests', e.name, e.payload.requestId, e.payload.workspaceId, {
       id: e.payload.requestId,
+      workspaceId: e.payload.workspaceId,
     });
   }
 

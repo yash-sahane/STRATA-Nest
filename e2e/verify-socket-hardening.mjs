@@ -12,7 +12,12 @@
 //    subscribing is not authorised per channel. A read-only member could lift the
 //    webhook URL from devtools. Audit rows did the same with the HR details the
 //    REST read narrows to the people concerned.
-import { api, provision, addRole, API } from './kit.mjs';
+//
+// 3. Since 2026-11-07 that is the rule for every collection, not an exclusion
+//    list somebody has to remember to extend: a frame names the record and
+//    where it lives (workspace, and project for project-scoped collections),
+//    and only notifications, addressed to their recipient alone, carry a row.
+import { api, provision, addRole, whoami, API } from './kit.mjs';
 import WebSocket from 'ws';
 
 const out = [];
@@ -95,17 +100,45 @@ try {
     'no discord_integrations frame at all — the fix must strip the payload, not drop the frame');
   rec(!JSON.stringify(frames).includes(secret), 'the webhook URL never reaches the member',
     JSON.stringify(integrationFrames.slice(0, 2)).slice(0, 240));
+  // What a frame may carry besides the id: where the record lives, which every
+  // receiver (a member of that workspace) can read anyway.
+  const SCOPE_KEYS = ['id', 'workspaceId', 'projectId'];
   const extraKeys = (list) =>
-    list.flatMap((f) => Object.keys(f.payload ?? {})).filter((k) => k !== 'id');
-  rec(extraKeys(integrationFrames).length === 0, 'an integration frame carries the id alone',
+    list.flatMap((f) => Object.keys(f.payload ?? {})).filter((k) => !SCOPE_KEYS.includes(k));
+  rec(extraKeys(integrationFrames).length === 0, 'an integration frame carries the id and its workspace alone',
     JSON.stringify(extraKeys(integrationFrames)));
-  rec(extraKeys(auditFrames).length === 0, 'an audit frame carries the id alone',
+  rec(extraKeys(auditFrames).length === 0, 'an audit frame carries the id and its workspace alone',
     JSON.stringify(extraKeys(auditFrames)));
 
   // The REST read is still the way to see what changed, for those allowed to.
   const listed = await api(mgr, 'GET', `/discord_integrations?projectId=${p.project}`);
   rec(listed.s === 200 && !listed.t.includes(secret), 'the REST read never echoes the webhook URL either',
     `${listed.s} ${listed.t.slice(0, 200)}`);
+
+  // ---- 3. a collection off the allow list sends no row, tasks included ------
+  console.log('\n===== a task frame says which task and where it lives, never what it says');
+  ws.send(JSON.stringify({ action: 'subscribe', channels: ['tasks'] }));
+  await wait(1000);
+  const mgrId = await whoami(mgr);
+  const marker = `TITLE${Date.now()}`;
+  const task = await api(mgr, 'POST', '/tasks', {
+    workspaceId: p.ws, projectId: p.project, hierarchyId: 'SH-1',
+    title: marker, status: 'TODO', priority: 'MEDIUM', assigneeIds: [mgrId],
+  });
+  rec(task.s === 201 || task.s === 200, 'the manager creates a task', `${task.s} ${task.t.slice(0, 160)}`);
+  const renamed = await api(mgr, 'PATCH', `/tasks/${task.j?.id}`, { title: `${marker} renamed` });
+  rec(renamed.s === 200, '...and renames it', `${renamed.s} ${renamed.t.slice(0, 160)}`);
+  await wait(3500);
+
+  const taskFrames = frames.filter((f) => String(f.event || '').startsWith('tasks.'));
+  console.log(`   member received ${taskFrames.length} task frames`);
+  rec(taskFrames.length >= 2, 'the member is told about the create and the rename', `${taskFrames.length} frames`);
+  rec(!JSON.stringify(taskFrames).includes(marker), 'the title never travels on the socket',
+    JSON.stringify(taskFrames.slice(0, 2)).slice(0, 240));
+  rec(taskFrames.length > 0 && taskFrames.every((f) => f.payload?.workspaceId === p.ws && f.payload?.projectId === p.project),
+    'every task frame names the workspace and the project the task is in',
+    JSON.stringify(taskFrames.map((f) => f.payload)).slice(0, 240));
+  rec(extraKeys(taskFrames).length === 0, 'and carries nothing else', JSON.stringify(extraKeys(taskFrames)));
 
   ws.close();
 } finally {

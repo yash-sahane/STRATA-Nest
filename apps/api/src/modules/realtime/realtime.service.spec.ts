@@ -158,14 +158,47 @@ describe('RealtimeService write hook', () => {
     return { write: hook as Hook, connect };
   }
 
-  it('sends the id alone for a collection the REST API restricts', () => {
+  it('sends the id and its workspace, never the row, for a collection the REST API restricts', () => {
     const { write, connect } = wired();
     const member = connect('u1', ['w1'], ['leave_requests', 'invite_codes']);
 
     write('LeaveRequest', 'create', { id: 'l1', workspaceId: 'w1', userId: 'u2', reason: 'surgery' });
     write('InviteCode', 'create', { id: 'c1', workspaceId: 'w1', code: 'SECRETCODE', role: 'MANAGER' });
 
-    expect(member.frames().map((f) => f.payload)).toEqual([{ id: 'l1' }, { id: 'c1' }]);
+    expect(member.frames().map((f) => f.payload)).toEqual([
+      { id: 'l1', workspaceId: 'w1' },
+      { id: 'c1', workspaceId: 'w1' },
+    ]);
+  });
+
+  it('sends no row for any collection off the allow list — including ones added later', () => {
+    const { write, connect } = wired();
+    const collections = Object.values(MODEL_COLLECTION);
+    const member = connect('u1', ['w1'], collections);
+
+    // Every mapped model, written with a field nobody may see. A model added to
+    // MODEL_COLLECTION tomorrow is covered by this loop without anybody
+    // remembering to list it: the default is the id.
+    for (const model of Object.keys(MODEL_COLLECTION)) {
+      if (model === 'Notification') continue; // the one collection allowed its row
+      write(model, 'update', {
+        id: `${model}-1`,
+        workspaceId: 'w1',
+        projectId: 'p1',
+        userId: 'u1',
+        status: 'ACTIVE',
+        secret: 'LEAKED-FIELD',
+      });
+    }
+
+    const frames = member.frames();
+    expect(frames.length).toBe(Object.keys(MODEL_COLLECTION).length - 1);
+    expect(JSON.stringify(frames)).not.toContain('LEAKED-FIELD');
+    for (const frame of frames) {
+      for (const key of Object.keys(frame.payload as object)) {
+        expect(['id', 'workspaceId', 'projectId', 'userId']).toContain(key);
+      }
+    }
   });
 
   it('never puts an integration credential or a narrowed audit row on the wire', () => {
@@ -195,17 +228,50 @@ describe('RealtimeService write hook', () => {
     });
 
     const payloads = member.frames().map((f) => f.payload);
-    expect(payloads).toEqual([{ id: 'd1' }, { id: 'g1' }, { id: 'l1' }, { id: 'a1' }]);
+    expect(payloads).toEqual([
+      { id: 'd1', workspaceId: 'w1' },
+      { id: 'g1', workspaceId: 'w1' },
+      { id: 'l1', workspaceId: 'w1' },
+      { id: 'a1', workspaceId: 'w1' },
+    ]);
     expect(JSON.stringify(payloads)).not.toMatch(/SECRET|enc:|release week/);
   });
 
-  it('still sends the row where every member may read it', () => {
+  it('a task frame names the record and its project, not the row', () => {
     const { write, connect } = wired();
     const member = connect('u1', ['w1'], ['tasks']);
 
-    write('Task', 'update', { id: 't1', workspaceId: 'w1', title: 'Ship it' });
+    write('Task', 'update', { id: 't1', workspaceId: 'w1', projectId: 'p1', title: 'Ship it' });
 
-    expect(member.frames()[0].payload).toEqual({ id: 't1', workspaceId: 'w1', title: 'Ship it' });
+    expect(member.frames()[0].payload).toEqual({ id: 't1', workspaceId: 'w1', projectId: 'p1' });
+  });
+
+  it('a project frame names the project it is', () => {
+    const { write, connect } = wired();
+    const member = connect('u1', ['w1'], ['projects']);
+
+    write('Project', 'update', { id: 'p1', workspaceId: 'w1', name: 'Checkout' });
+    write('Project', 'delete', { id: 'p1', workspaceId: 'w1', name: 'Checkout' });
+
+    expect(member.frames().map((f) => f.payload)).toEqual([
+      { id: 'p1', workspaceId: 'w1', projectId: 'p1' },
+      { id: 'p1', workspaceId: 'w1', projectId: 'p1' },
+    ]);
+  });
+
+  it('a notification still carries its row to its recipient, whose toast shows the title', () => {
+    const { write, connect } = wired();
+    const recipient = connect('u1', ['w1'], ['notifications']);
+    const row = { id: 'n1', workspaceId: 'w1', userId: 'u1', title: 'Leave approved', message: 'Enjoy' };
+
+    write('Notification', 'create', row);
+    write('Notification', 'delete', row);
+
+    expect(recipient.frames().map((f) => f.payload)).toEqual([
+      row,
+      // A delete needs no row, only the recipient to route on.
+      { id: 'n1', workspaceId: 'w1', userId: 'u1' },
+    ]);
   });
 
   it.each([

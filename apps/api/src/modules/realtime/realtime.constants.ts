@@ -49,45 +49,59 @@ export const USER_SCOPED_COLLECTIONS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Collections whose REST reads are NARROWER than workspace membership: gated on
- * a permission (`invite:manage`, `join:manage`) or on owning the row (your own
- * attendance, leave, balance and time entries unless you hold the approve
- * permission).
+ * The only collections whose frames may carry the row itself. Every other
+ * collection — including any added to MODEL_COLLECTION later — sends the id and
+ * where the record lives (`RealtimeService.announce`), and nothing else.
  *
- * A frame reaches every member of the workspace subscribed to the channel, and
- * subscription is not authorised per channel. Carrying the row therefore handed
- * a read-only member exactly what the REST route refuses them: a colleague's
- * leave reason, check-in times and billable rate, and an invite code — the whole
- * secret, usable by any account — the moment a manager minted it.
+ * Every client treats a frame as "something changed, refetch", and the refetch
+ * goes through the REST route, which applies the real read rule. The row on the
+ * wire was therefore only ever a liability, and each time a collection was left
+ * off an exclusion list it leaked:
+ *  - Reads NARROWER than workspace membership. A frame reaches every member
+ *    subscribed to the channel, and subscribing is not authorised per channel.
+ *    Invite codes and join requests are gated on `invite:manage` and
+ *    `join:manage`; attendance, leave, balances and time entries on owning the
+ *    row or holding the approve permission. Their rows handed a read-only member
+ *    a colleague's leave reason, check-in times and billable rate, and an invite
+ *    code — the whole secret, usable by any account — the moment a manager
+ *    minted it.
+ *  - Credentials. The raw integration row holds the Discord webhook URL in
+ *    plaintext and the GitHub/GitLab token and webhook secret as ciphertext,
+ *    fields the REST mappers never return. Every create, edit and "Test
+ *    connection" broadcast them, and a read-only member could lift the webhook
+ *    URL from devtools and post into the team's Discord.
+ *  - Audit rows. The REST read narrows leave and time entries in the log to
+ *    their subject and the approvers (ActivityLogsService.readScope); the frame
+ *    carried "leave rejected", whose and by whom to everybody with /activity open.
+ *  - Rows JSON cannot carry. A file's `size` is a BigInt: serialising the row
+ *    threw inside the write hook and the frame was never sent at all.
  *
- * For these the frame carries the row id and nothing else. Every client already
- * treats a frame as "something changed, refetch", and the refetch goes through
- * the route that applies the real rule.
+ * A collection belongs here only when a client reads row data off its frames
+ * AND the row is no wider than what every receiver may read over REST.
  */
-export const ID_ONLY_COLLECTIONS: ReadonlySet<string> = new Set([
-  'invite_codes',
-  'join_requests',
-  'attendance',
-  'leave_requests',
-  'leave_balances',
-  'time_entries',
-  'active_timers',
-  // `size` is a BigInt, which JSON cannot carry: serialising the full row threw
-  // inside the write hook and the frame was never sent at all.
+export const FULL_ROW_COLLECTIONS: ReadonlySet<string> = new Set([
+  // The toast for an inbound notification shows its title — the one place the
+  // app reads a row off a frame. Its frames reach the recipient alone
+  // (USER_SCOPED_COLLECTIONS), and the row has exactly the fields the
+  // recipient's own REST read returns.
+  'notifications',
+]);
+
+/**
+ * Collections whose records each belong to one project, and that every member
+ * of the workspace may read. Their frames name the project, so a client
+ * refetches that project's lists only: the realtime channel is per collection,
+ * and a write anywhere in the workspace otherwise refetched every open board of
+ * every project. A record never moves between projects (no update DTO accepts
+ * `projectId`), so the project a frame names is the only one it can change.
+ */
+export const PROJECT_SCOPED_COLLECTIONS: ReadonlySet<string> = new Set([
+  'tasks',
+  'sprints',
+  'epics',
+  'functional_requirements',
+  'client_requirements',
   'files',
-  // Credentials. The raw integration row holds the Discord webhook URL in
-  // plaintext and the GitHub/GitLab token and webhook secret as ciphertext —
-  // fields the REST mappers never return. Every create, edit and "Test
-  // connection" (a row update) broadcast them to any member subscribed to the
-  // channel, and subscribing is not authorised per channel: a read-only member
-  // could lift the webhook URL from devtools and post into the team's Discord.
-  'github_integrations',
-  'gitlab_integrations',
-  'discord_integrations',
-  // The REST read narrows leave and time audit rows to their subject and the
-  // approvers (ActivityLogsService.readScope); the frame carried the row —
-  // "leave rejected", whose, by whom — to every member with /activity open.
-  'activity_logs',
 ]);
 
 /**

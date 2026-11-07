@@ -5,8 +5,9 @@ import type { RealtimeFrame } from '@strata/shared';
 import { PrismaService, type WriteAction } from '@strata/prisma';
 import { REDIS_CLIENT } from '../../redis/redis.constants';
 import {
-  ID_ONLY_COLLECTIONS,
+  FULL_ROW_COLLECTIONS,
   MODEL_COLLECTION,
+  PROJECT_SCOPED_COLLECTIONS,
   USER_SCOPED_COLLECTIONS,
   WORKSPACE_VIA,
 } from './realtime.constants';
@@ -14,6 +15,15 @@ import { SocketRegistry, type SocketInfo } from './socket-registry';
 
 const REDIS_CHANNEL = 'realtime:broadcast';
 const nowIso = (): string => new Date().toISOString();
+
+/** The fields of a written row the broadcast routes on. */
+interface WrittenRow {
+  id?: string;
+  workspaceId?: string;
+  projectId?: string;
+  userId?: string;
+  status?: string;
+}
 
 /** A change to who belongs to a workspace, applied to the socket registry of
  *  every instance alongside the frame that announces it. */
@@ -35,7 +45,8 @@ interface BroadcastMessage {
 
 /**
  * Delivers resource/domain events to authorized WebSocket rooms.
- * - CRUD events come from the Prisma write hook, which fires after every persisted change.
+ * - CRUD events come from the Prisma write hook, which fires once a change is
+ *   committed (a transaction's writes wait for its commit — see WriteAnnouncer).
  * - broadcastLocal filters every socket by workspace membership, so subscribing
  *   to a collection channel never leaks other workspaces' data.
  * - Cross-instance fan-out via Redis pub/sub.
@@ -85,12 +96,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
   private onWrite(model: string, action: WriteAction, result: unknown): void {
     const collection = MODEL_COLLECTION[model];
     if (!collection) return;
-    const row = (result ?? {}) as {
-      id?: string;
-      workspaceId?: string;
-      userId?: string;
-      status?: string;
-    };
+    const row = (result ?? {}) as WrittenRow;
     if (!row.id) return;
     const via = WORKSPACE_VIA[model];
     if (via && row.workspaceId === undefined) {
@@ -121,12 +127,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
     return parent?.workspaceId || undefined;
   }
 
-  private announce(
-    model: string,
-    collection: string,
-    action: WriteAction,
-    row: { id?: string; workspaceId?: string; userId?: string; status?: string },
-  ): void {
+  private announce(model: string, collection: string, action: WriteAction, row: WrittenRow): void {
     if (!row.id) return;
 
     /**
@@ -142,19 +143,34 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
      */
     const unfilterable = row.workspaceId === undefined;
     const minimal: Record<string, unknown> = { id: String(row.id) };
+    // Where the record lives, so a client refetches only the lists it can have
+    // changed (PROJECT_SCOPED_COLLECTIONS). The frame reaches members of this
+    // workspace alone, and each of them can list its projects: naming the
+    // workspace and the project tells a receiver nothing it could not read.
+    if (typeof row.workspaceId === 'string' && row.workspaceId) {
+      minimal.workspaceId = row.workspaceId;
+    }
+    const projectId =
+      collection === 'projects'
+        ? row.id
+        : PROJECT_SCOPED_COLLECTIONS.has(collection)
+          ? row.projectId
+          : undefined;
+    if (typeof projectId === 'string' && projectId) minimal.projectId = projectId;
     // The recipient travels with every user-scoped frame, the delete included:
     // without it `isAddressedTo` fails closed, so a notification deleted in one
     // tab stayed in every other tab of the same person.
     if (USER_SCOPED_COLLECTIONS.has(collection) && row.userId !== undefined) {
       minimal.userId = row.userId;
     }
-    // The row itself only where every member of the workspace may read it over
-    // REST anyway — see ID_ONLY_COLLECTIONS for the ones that may not.
-    const idOnly = action === 'delete' || unfilterable || ID_ONLY_COLLECTIONS.has(collection);
+    // The row itself only for the collections that are allowed it — see
+    // FULL_ROW_COLLECTIONS for why that is the exception. A delete never needs it.
+    const withRow = action !== 'delete' && !unfilterable && FULL_ROW_COLLECTIONS.has(collection);
     const frame: RealtimeFrame = {
       event: `${collection}.${action}`,
-      // Minimal/best-effort payload (frontend refetches on the channel).
-      payload: idOnly ? minimal : row,
+      // Everything else is "this changed, refetch" — the REST read decides what
+      // the receiver may see.
+      payload: withRow ? row : minimal,
       channels: [collection, `${collection}.${row.id}`],
       timestamp: nowIso(),
     };

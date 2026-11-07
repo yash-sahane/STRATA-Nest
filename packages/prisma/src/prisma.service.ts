@@ -2,10 +2,9 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 // NOTE: `@prisma/client` types/values exist only after `pnpm prisma:generate`.
 // In a fresh checkout run `pnpm prisma:pull && pnpm prisma:generate` first.
 import { PrismaClient } from '@prisma/client';
+import { WriteAnnouncer, type WriteAction, type WriteHook } from './write-announcer';
 
-export type WriteAction = 'create' | 'update' | 'delete';
-/** Invoked after every single-row write (used by RealtimeModule to broadcast). */
-export type WriteHook = (model: string, action: WriteAction, result: unknown) => void;
+type AnyTransaction = (...args: unknown[]) => Promise<unknown>;
 
 /**
  * Thin Nest wrapper over PrismaClient — the single DB access point.
@@ -15,12 +14,25 @@ export type WriteHook = (model: string, action: WriteAction, result: unknown) =>
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PrismaService.name);
-  private writeHook?: WriteHook;
+  /** Holds what a transaction writes until it commits — see WriteAnnouncer. */
+  private readonly announcer = new WriteAnnouncer((message) => this.logger.warn(message));
+
+  static {
+    // `$transaction` is a method of the generated client's prototype. Wrapping it
+    // here, rather than redeclaring it, keeps its overloads — the callback's `tx`
+    // stays typed at every call site — while every transaction, interactive or
+    // array, runs inside the announcer's scope. The client's own method is looked
+    // up at call time, so nothing is captured before Prisma is ready.
+    PrismaService.prototype.$transaction = function (this: PrismaService, ...args: unknown[]) {
+      const begin = PrismaClient.prototype.$transaction as unknown as AnyTransaction;
+      return this.announcer.around(() => begin.apply(this, args));
+    } as unknown as PrismaClient['$transaction'];
+  }
 
   /** Register a post-write hook (RealtimeModule wires this to broadcast realtime
    *  events via an explicit, decoupled callback). */
   setWriteHook(hook: WriteHook): void {
-    this.writeHook = hook;
+    this.announcer.setHook(hook);
   }
 
   /**
@@ -33,30 +45,21 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
    * decision. Those changed the row and told nobody: a colleague's open board
    * kept the old card until they navigated away. The caller re-reads the row
    * and hands it over here.
+   *
+   * Called inside a transaction's callback, the announcement waits for that
+   * transaction to settle, like the writes the middleware sees.
    */
   announceWrite(model: string, action: WriteAction, row: unknown): void {
-    if (!this.writeHook) return;
-    try {
-      this.writeHook(model, action, row);
-    } catch (err) {
-      this.logger.warn(`writeHook failed: ${(err as Error).message}`);
-    }
+    this.announcer.announced(model, action, row);
   }
 
   async onModuleInit(): Promise<void> {
     this.$use(async (params, next) => {
       const result = await next(params);
       const action = params.action;
-      if (
-        this.writeHook &&
-        params.model &&
-        (action === 'create' || action === 'update' || action === 'delete')
-      ) {
-        try {
-          this.writeHook(params.model, action, result);
-        } catch (err) {
-          this.logger.warn(`writeHook failed: ${(err as Error).message}`);
-        }
+      if (params.model && (action === 'create' || action === 'update' || action === 'delete')) {
+        // On a transaction, this is before its commit: the announcer holds it.
+        this.announcer.written(params.model, action, result, params.runInTransaction === true);
       }
       return result;
     });

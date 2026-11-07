@@ -1,6 +1,11 @@
 import { useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { subscribeToCollection, getRealtimeEventType } from '@/lib/api/realtime';
+import {
+  flushInvalidations,
+  frameScope,
+  queueInvalidation,
+} from '@/lib/api/realtime-invalidation';
 import { COLLECTIONS } from '@/lib/api/config';
 import type { ApiModels } from '@/lib/api/client';
 import { logger } from '@/lib/logger';
@@ -25,7 +30,10 @@ export function useCollectionSubscription(
   // therefore be spelled exactly as the owning useQuery spells element 0.
   // Parameterised variants such as `tasks-${projectId}` match NOTHING: TanStack
   // compares keys element-by-element, and the id lives at index 1 of
-  // ['tasks', projectId] — it is never fused into the root string.
+  // ['tasks', projectId] — it is never fused into the root string. Within a
+  // root, the workspace and project the frame names narrow it further (see
+  // lib/api/realtime-invalidation): an edit in one project no longer refetches
+  // every other project's open board.
   const queryClient = useQueryClient();
   const subscriptionRef = useRef<{ unsubscribe: () => void } | null>(null);
 
@@ -43,22 +51,6 @@ export function useCollectionSubscription(
   });
   const queryKeysId = queryKeys.join('|');
 
-  /**
-   * Events arriving inside this window share one refetch.
-   *
-   * Measured before this: five remote writes in quick succession produced five
-   * ws frames and five full list refetches — 1.00 GETs per event, which is
-   * minimal per event and wasteful per ACTION, because bursts are the normal
-   * case. A teammate reordering a board emits one event per card moved.
-   *
-   * 120ms is chosen to absorb a drag or a bulk update while staying well under
-   * the threshold at which a single change stops feeling immediate. Invalidation
-   * is idempotent, so coalescing changes what is fetched not at all — only how
-   * many times.
-   */
-  const COALESCE_MS = 120;
-  const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   useEffect(() => {
     if (!enabled || typeof window === 'undefined') return;
 
@@ -74,28 +66,21 @@ export function useCollectionSubscription(
           documentId: response.payload.id,
         });
 
-        // Invalidate all related queries — once per burst, not once per event.
-        // The keys are read at FLUSH time from the ref, so a burst spanning a
-        // re-render still invalidates the current set.
-        if (flushTimer.current !== null) clearTimeout(flushTimer.current);
-        flushTimer.current = setTimeout(() => {
-          flushTimer.current = null;
-          queryKeysRef.current.forEach((key) => {
-            queryClient.invalidateQueries({ queryKey: [key] });
-          });
-        }, COALESCE_MS);
+        // Queued, not invalidated at once: a burst of events shares one refetch
+        // per query root, across every subscription on the page. The keys are
+        // read from the ref, so an event after a re-render uses the current set.
+        queueInvalidation(queryClient, queryKeysRef.current, frameScope(response.payload));
       }
     );
 
     return () => {
       logger.debug(`Unsubscribing from collection: ${collectionId}`);
       subscriptionRef.current?.unsubscribe();
-      // A pending flush after unmount would invalidate on behalf of a component
-      // that is gone, refetching for nobody.
-      if (flushTimer.current !== null) {
-        clearTimeout(flushTimer.current);
-        flushTimer.current = null;
-      }
+      // Not dropped: an event heard just before navigating away still changed
+      // those lists. Flushing marks the ones nobody watches as stale (no
+      // request), so the next screen to read them refetches rather than
+      // showing the copy cached before the change.
+      flushInvalidations(queryClient);
     };
   }, [collectionId, enabled, queryClient, queryKeysId]);
 }
@@ -104,9 +89,10 @@ export function useCollectionSubscription(
  * Hook to subscribe to real-time task updates.
  * Roots: use-task.ts keys on ['tasks', projectId], ['workspace-tasks', wsId],
  * ['task', taskId] and ['tasks','functional-requirement',frId] (covered by the
- * 'tasks' prefix). `projectId` still gates the subscription, but it cannot
- * narrow the invalidation — the realtime channel is per-collection, not
- * per-project, so an event carries no project scope to filter on.
+ * 'tasks' prefix). `projectId` gates the subscription; the narrowing comes from
+ * the event, which names the task's project, so ['tasks', otherProjectId] is
+ * left alone while every key that is not one project's (by FR, by id, the
+ * workspace-wide lists) is still refetched.
  */
 export function useTasksRealtime(projectId?: string) {
   // 'member-task-counts' too: the assignee picker on this board ranks people

@@ -25,7 +25,7 @@ const mgrId = await whoami(mgr);
  * Put something on screen, change it from outside, and wait for the page to catch
  * up on its own.
  *
- * `settleMs` is generous: the invalidation is coalesced over 120ms and then has to
+ * `settleMs` is generous: the invalidation is coalesced over 200ms (1s at most) and then has to
  * round-trip a refetch.
  */
 /**
