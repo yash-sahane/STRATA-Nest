@@ -1,5 +1,6 @@
-// Time tracking. ActiveTimer has no workspace column; it is tied to a single
-// user (user_id is unique) and every read/write is scoped to that user.
+// Time tracking. An ActiveTimer is tied to a single user (user_id is unique) and
+// every read/write is scoped to that user; its workspace is recorded so a
+// workspace's deletion takes its timers with it.
 
 model TimeEntry {
   id              String    @id
@@ -21,8 +22,6 @@ model TimeEntry {
   endTime         DateTime  @map("end_time")
   duration        Int       @default(0)
   isBillable      Boolean   @default(false) @map("is_billable")
-  billableRate    Float?    @map("billable_rate")
-  type            String    @default("MANUAL")
   status          String    @default("PENDING")
   approvedBy      String    @default("") @map("approved_by")
   approvedAt      DateTime? @map("approved_at")
@@ -39,6 +38,8 @@ model ActiveTimer {
   createdAt        DateTime  @default(now()) @map("created_at")
   updatedAt        DateTime  @updatedAt @map("updated_at")
   userId           String    @unique @map("user_id")
+  /// The workspace the timer is for; '' only for one started before this was recorded.
+  workspaceId      String    @default("") @map("workspace_id")
   taskId           String    @default("") @map("task_id")
   taskTitle        String    @default("") @map("task_title")
   taskHierarchyId  String    @default("") @map("task_hierarchy_id")
@@ -48,8 +49,6 @@ model ActiveTimer {
   isPaused         Boolean   @default(false) @map("is_paused")
   pausedAt         DateTime? @map("paused_at")
   totalPausedTime  Int       @default(0) @map("total_paused_time")
-  type             String    @default("TIMER")
-  pomodoroSettings Json?     @map("pomodoro_settings")
 
   @@map("time_tracking_activetimer")
 }

@@ -41,6 +41,42 @@ describe('parseListQuery (allowlisted field filter)', () => {
     expect(where).toEqual({ progress: { gte: 20, lte: 80 } });
   });
 
+  describe('two predicates on one field', () => {
+    it('ANDs a suffixed key onto an equality instead of replacing it (scope bypass)', () => {
+      const { where } = parseListQuery({ workspaceId: 'A', workspaceId__ne: 'x' }, spec);
+      expect(where).toEqual({ workspaceId: 'A', AND: [{ workspaceId: { not: 'x' } }] });
+    });
+
+    it('keeps the equality whichever key arrives first', () => {
+      const { where } = parseListQuery({ workspaceId__in: 'B', workspaceId: 'A' }, spec);
+      expect(where).toEqual({ workspaceId: { in: ['B'] }, AND: [{ workspaceId: 'A' }] });
+    });
+
+    it('ANDs operator objects that share a key (a repeated equality vs __in)', () => {
+      const { where } = parseListQuery({ workspaceId: ['A', 'A'], workspaceId__in: 'B' }, spec);
+      expect(where).toEqual({
+        workspaceId: { in: ['A', 'A'] },
+        AND: [{ workspaceId: { in: ['B'] } }],
+      });
+    });
+
+    it('does not lose a falsy equality', () => {
+      const { where } = parseListQuery({ archived: 'false', archived__ne: 'true' }, spec);
+      expect(where).toEqual({ archived: false, AND: [{ archived: { not: true } }] });
+    });
+
+    it('does not spread a date equality into an empty object', () => {
+      const { where } = parseListQuery(
+        { createdAt: '2026-01-01T00:00:00.000Z', createdAt__gte: '2025-01-01T00:00:00.000Z' },
+        spec,
+      );
+      expect(where).toEqual({
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        AND: [{ createdAt: { gte: new Date('2025-01-01T00:00:00.000Z') } }],
+      });
+    });
+  });
+
   it('handles icontains (case-insensitive)', () => {
     expect(parseListQuery({ status__icontains: 'act' }, spec).where).toEqual({
       status: { contains: 'act', mode: 'insensitive' },
@@ -64,9 +100,39 @@ describe('parseListQuery (allowlisted field filter)', () => {
     expect(parseListQuery({ ordering: '-createdAt,title' }, spec).orderBy).toEqual([
       { createdAt: 'desc' },
       { title: 'asc' },
+      { id: 'asc' },
     ]);
     // unknown sort field is dropped, falling back to default
-    expect(parseListQuery({ ordering: 'evil' }, spec).orderBy).toEqual({ createdAt: 'desc' });
+    expect(parseListQuery({ ordering: 'evil' }, spec).orderBy).toEqual([
+      { createdAt: 'desc' },
+      { id: 'asc' },
+    ]);
+  });
+
+  describe('a total order, so OFFSET pages neither repeat nor skip a row', () => {
+    it('ends every order with id: the default, and one the client asked for', () => {
+      expect(parseListQuery({}, spec).orderBy).toEqual([{ createdAt: 'desc' }, { id: 'asc' }]);
+      expect(parseListQuery({ ordering: 'title' }, spec).orderBy).toEqual([
+        { title: 'asc' },
+        { id: 'asc' },
+      ]);
+    });
+
+    it('does not add id to an order that already has it', () => {
+      const withId: ListQuerySpec = {
+        ...spec,
+        sortable: { ...spec.sortable, id: 'id' },
+        defaultOrderBy: [{ createdAt: 'asc' }, { id: 'desc' }],
+      };
+      expect(parseListQuery({}, withId).orderBy).toEqual([{ createdAt: 'asc' }, { id: 'desc' }]);
+      expect(parseListQuery({ ordering: '-id' }, withId).orderBy).toEqual([{ id: 'desc' }]);
+    });
+
+    it('leaves the spec’s own default untouched', () => {
+      const defaults: ListQuerySpec = { ...spec, defaultOrderBy: [{ title: 'asc' }] };
+      parseListQuery({}, defaults);
+      expect(defaults.defaultOrderBy).toEqual([{ title: 'asc' }]);
+    });
   });
 
   it('clamps pagination', () => {
@@ -101,7 +167,7 @@ describe('parseListQuery (allowlisted field filter)', () => {
 
       // The dropping behaviour itself is unchanged — the warn is diagnostic only.
       expect(where).toEqual({});
-      expect(orderBy).toEqual({ createdAt: 'desc' });
+      expect(orderBy).toEqual([{ createdAt: 'desc' }, { id: 'asc' }]);
 
       const messages = warn.mock.calls.map((c) => String(c[0]));
       expect(messages).toHaveLength(2);
@@ -111,8 +177,40 @@ describe('parseListQuery (allowlisted field filter)', () => {
 
     it('does not warn for reserved pagination/ordering keys', () => {
       process.env.NODE_ENV = 'development';
-      parseListQuery({ page: '2', pageSize: '10', format: 'json', status: 'ACTIVE' }, spec);
+      parseListQuery({ page: '2', pageSize: '10', q: 'x', status: 'ACTIVE' }, spec);
       expect(warn).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('parseListQuery — search and list fields', () => {
+  const spec = {
+    filterable: { assigneeId: { field: 'assigneeIds', type: 'json-array' as const } },
+    sortable: {},
+    search: ['title', 'hierarchyId'],
+  };
+
+  it('q searches every search field, case-insensitively', () => {
+    const { where } = parseListQuery({ q: ' Login ' }, spec);
+    expect(where).toEqual({
+      AND: [
+        {
+          OR: [
+            { title: { contains: 'Login', mode: 'insensitive' } },
+            { hierarchyId: { contains: 'Login', mode: 'insensitive' } },
+          ],
+        },
+      ],
+    });
+  });
+
+  it('q is ignored by a resource that names no search fields', () => {
+    expect(parseListQuery({ q: 'x' }, { filterable: {}, sortable: {} }).where).toEqual({});
+  });
+
+  it('a json-array filter asks the list to hold the value', () => {
+    expect(parseListQuery({ assigneeId: 'u1' }, spec).where).toEqual({
+      assigneeIds: { array_contains: ['u1'] },
     });
   });
 });

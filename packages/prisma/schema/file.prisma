@@ -1,21 +1,30 @@
 // File uploads (`files_uploadedfile`). The stored `file` field holds the
 // relative storage key (`uploads/{ws}/{id}/{filename}`); the blob itself lives
-// behind StorageService (local/S3). `uploadedById` is SET_NULL on user delete.
+// behind StorageService. `uploadedById` is SET_NULL on user delete.
+//
+// A file belongs to a project, and inside it to at most one task or client
+// requirement ('' for neither: the project's own files). Deleting that task or
+// requirement hands its files back to the project; deleting the project
+// deletes them.
 
 model UploadedFile {
-  id           String   @id
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
-  name         String
-  filePath     String   @map("file") // storage key, e.g. uploads/{ws}/{id}/{name}
-  mimeType     String   @default("") @map("mime_type")
-  size         BigInt   @default(0)
-  workspaceId  String   @default("") @map("workspace_id")
-  projectId    String   @default("") @map("project_id")
-  uploadedById String?  @map("uploaded_by_id")
-  bucket       String   @default("default")
+  id                  String   @id
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+  name                String
+  filePath            String   @map("file") // storage key, e.g. uploads/{ws}/{id}/{name}
+  mimeType            String   @default("") @map("mime_type")
+  size                BigInt   @default(0)
+  workspaceId         String   @default("") @map("workspace_id")
+  projectId           String   @default("") @map("project_id")
+  taskId              String   @default("") @map("task_id")
+  clientRequirementId String   @default("") @map("client_requirement_id")
+  uploadedById        String?  @map("uploaded_by_id")
+  bucket              String   @default("default")
 
   @@index([workspaceId])
   @@index([projectId])
+  @@index([taskId])
+  @@index([clientRequirementId])
   @@map("files_uploadedfile")
 }

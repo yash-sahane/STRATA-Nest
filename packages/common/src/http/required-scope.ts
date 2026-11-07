@@ -61,3 +61,27 @@ export function optionalScopeParam(
   }
   return distinct[0];
 }
+
+/**
+ * A copy of `query` in which `name` can only mean `value`.
+ *
+ * For a list that has just authorised the caller against one value of a scope
+ * parameter: every caller-supplied form of that key is dropped — the bare one
+ * and each `__suffix` — and the checked value is put back, so nothing later in
+ * the query can widen the list past what was authorised. The parser now ANDs
+ * such predicates rather than letting one replace another, which closes the same
+ * hole from the other side; this keeps a scoped list correct on its own terms.
+ */
+export function pinScopeParam(
+  query: Record<string, string | string[] | undefined>,
+  name: string,
+  value: string,
+): Record<string, string | string[] | undefined> {
+  const pinned: Record<string, string | string[] | undefined> = {};
+  for (const [key, entry] of Object.entries(query)) {
+    if (key === name || key.startsWith(`${name}__`)) continue;
+    pinned[key] = entry;
+  }
+  pinned[name] = value;
+  return pinned;
+}

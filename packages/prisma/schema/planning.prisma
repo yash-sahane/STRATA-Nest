@@ -22,7 +22,6 @@ model Epic {
   endDate       DateTime? @map("end_date") @db.Date
   status        String    @default("TODO")
   progress      Int       @default(0)
-  assignedTeam  String    @default("") @map("assigned_team")
   createdById   String    @map("created_by_id")
   createdByName String    @default("") @map("created_by_name")
 
@@ -58,26 +57,11 @@ model Sprint {
   // that counts "tasks whose sprintId is this one" finds only the DONE ones and
   // reports 100% for every completed sprint, however badly it went. These are
   // the only surviving record of the real figures.
-  completedAt          DateTime? @map("completed_at")
-  completedTaskCount   Int?      @map("completed_task_count")
-  totalTaskCount       Int?      @map("total_task_count")
-  rolledOverTaskCount  Int?      @map("rolled_over_task_count")
+  completedAt         DateTime? @map("completed_at")
+  completedTaskCount  Int?      @map("completed_task_count")
+  totalTaskCount      Int?      @map("total_task_count")
+  rolledOverTaskCount Int?      @map("rolled_over_task_count")
 
   @@index([projectId, status])
   @@map("sprints_sprint")
-}
-
-model Retrospective {
-  id               String   @id
-  createdAt        DateTime @default(now()) @map("created_at")
-  updatedAt        DateTime @updatedAt @map("updated_at")
-  sprintId         String   @map("sprint_id")
-  workspaceId      String   @map("workspace_id")
-  projectId        String   @map("project_id")
-  wentWell         Json     @default("[]") @map("went_well")
-  needsImprovement Json     @default("[]") @map("needs_improvement")
-  actionItems      Json     @default("[]") @map("action_items")
-  createdById      String   @map("created_by_id")
-
-  @@map("sprints_retrospective")
 }

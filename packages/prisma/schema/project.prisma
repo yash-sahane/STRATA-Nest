@@ -1,5 +1,6 @@
 // Project (`projects_project`). `startDate`/`endDate` serialize date-only on the
-// wire; `member_ids` and `project_settings` are JSON. Indexed on (workspace, status).
+// wire. Indexed on (workspace, status). Who works on a project is the
+// workspace's members; a project has no member list of its own.
 
 model Project {
   id              String    @id
@@ -16,18 +17,12 @@ model Project {
   shortCode       String    @map("short_code")
   description     String    @default("")
   clientName      String    @default("") @map("client_name")
-  logo            String    @default("")
-  color           String    @default("")
-  methodology     String    @default("SCRUM")
   status          String    @default("PLANNING")
-  archived        Boolean   @default(false)
   startDate       DateTime? @map("start_date") @db.Date
   endDate         DateTime? @map("end_date") @db.Date
   ownerId         String    @map("owner_id")
   createdById     String    @map("created_by_id")
   createdByName   String    @default("") @map("created_by_name")
-  memberIds       Json      @default("[]") @map("member_ids")
-  projectSettings Json      @default("{}") @map("project_settings")
 
   // `short_code` prefixes every task hierarchy id in the project, so two
   // projects sharing one inside a workspace make those ids ambiguous.

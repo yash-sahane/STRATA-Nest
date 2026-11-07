@@ -23,6 +23,26 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     this.writeHook = hook;
   }
 
+  /**
+   * Tell the write hook about a write it could not see for itself.
+   *
+   * The middleware below reports `create`, `update` and `delete`. A
+   * compare-and-swap has to be written as `updateMany` (the condition is on a
+   * non-unique column), and that is invisible to it — which is every save made
+   * through an edit dialog since rows got a `version`, and every leave or time
+   * decision. Those changed the row and told nobody: a colleague's open board
+   * kept the old card until they navigated away. The caller re-reads the row
+   * and hands it over here.
+   */
+  announceWrite(model: string, action: WriteAction, row: unknown): void {
+    if (!this.writeHook) return;
+    try {
+      this.writeHook(model, action, row);
+    } catch (err) {
+      this.logger.warn(`writeHook failed: ${(err as Error).message}`);
+    }
+  }
+
   async onModuleInit(): Promise<void> {
     this.$use(async (params, next) => {
       const result = await next(params);

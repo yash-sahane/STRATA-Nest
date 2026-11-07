@@ -1,6 +1,5 @@
-// Activity + saved searches. ActivityLog is an APPEND-ONLY audit trail (no
-// update/delete surface), written server-side via AuditSubscriber. SavedSearch
-// is user-owned CRUD.
+// Activity. ActivityLog is an APPEND-ONLY audit trail (no update/delete
+// surface), written server-side (AuditSubscriber, writeAuditRow).
 
 model ActivityLog {
   id          String   @id
@@ -17,17 +16,4 @@ model ActivityLog {
   @@index([workspaceId, createdAt])
   @@index([entityType, entityId])
   @@map("activity_activitylog")
-}
-
-model SavedSearch {
-  id          String   @id
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
-  workspaceId String   @map("workspace_id")
-  userId      String   @map("user_id")
-  name        String
-  query       String
-  filters     Json     @default("{}")
-
-  @@map("activity_savedsearch")
 }

@@ -8,6 +8,8 @@ export interface ApiErrorEnvelope {
     message: string | string[] | Record<string, unknown>;
     code: number;
     type: string;
+    /** The fields the error is about, when the API names them (a save refused because somebody else changed them). */
+    fields?: string[];
   };
 }
 

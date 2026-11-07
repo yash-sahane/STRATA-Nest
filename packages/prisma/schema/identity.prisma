@@ -5,7 +5,6 @@ model User {
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt @map("updated_at")
   password        String
-  lastLogin       DateTime? @map("last_login")
   isSuperuser     Boolean   @default(false) @map("is_superuser")
   email           String    @unique
   name            String
@@ -17,7 +16,6 @@ model User {
   hasTempPassword Boolean   @default(false) @map("has_temp_password")
   isAdminFlag     Boolean   @default(false) @map("is_admin_flag")
   isActive        Boolean   @default(true) @map("is_active")
-  isStaff         Boolean   @default(false) @map("is_staff")
 
   @@map("accounts_user")
 }

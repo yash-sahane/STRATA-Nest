@@ -24,7 +24,41 @@ const ERROR_TYPE_BY_STATUS: Record<number, string> = {
   415: 'UnsupportedMediaType',
   429: 'Throttled',
   500: 'APIException',
+  503: 'ServiceUnavailable',
 };
+
+/**
+ * Prisma's "the database is not there right now" codes: cannot reach it (P1001),
+ * timed out (P1002, P1008), it closed the connection (P1017 — what a running API
+ * gets when Postgres goes away), no pooled connection in time (P2024).
+ */
+const PRISMA_UNAVAILABLE_CODES = new Set(['P1001', 'P1002', 'P1008', 'P1017', 'P2024']);
+
+/**
+ * A backing service — the database or Redis — that cannot be reached right now.
+ *
+ * These reached the client as a bare 500 "Internal server error", which reads as
+ * a fault in the request and gives nothing to wait on. They are transient: the
+ * same request works once the service is back. So they are a 503 with
+ * Retry-After, which rest-client.ts and the query retry policy already honour.
+ */
+function isBackingServiceUnavailable(exception: unknown): boolean {
+  const e = exception as { constructor?: { name?: string }; code?: unknown; message?: unknown };
+  const cls = e?.constructor?.name;
+  if (cls === 'PrismaClientInitializationError') return true;
+  if (
+    (cls === 'PrismaClientKnownRequestError' || cls === 'PrismaClientUnknownRequestError') &&
+    typeof e.code === 'string' &&
+    PRISMA_UNAVAILABLE_CODES.has(e.code)
+  ) {
+    return true;
+  }
+  // ioredis: a command that outlived commandTimeout, ran out of retries, or was
+  // issued on a connection that has gone.
+  if (cls === 'MaxRetriesPerRequestError') return true;
+  const message = typeof e?.message === 'string' ? e.message : '';
+  return /^(Command timed out|Connection is closed|Stream isn't writeable)/.test(message);
+}
 
 /**
  * Prisma known-request error codes worth mapping to a 4xx instead of a raw 500:
@@ -74,6 +108,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let message: string | string[] | Record<string, unknown> = 'Internal server error';
     let type = (exception as { constructor?: { name?: string } })?.constructor?.name ?? 'Error';
+    let fields: string[] | undefined;
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();
@@ -85,6 +120,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
         message = (b.message ?? b.detail ?? b) as typeof message;
         // Allow a caller to pin an exact error 'type' via the exception payload.
         if (typeof b.type === 'string') type = b.type;
+        // And to name the fields it is about — a lost-update refusal does, so a
+        // form can show the other person's values in just those fields.
+        if (Array.isArray(b.fields) && b.fields.every((f) => typeof f === 'string')) {
+          fields = b.fields as string[];
+        }
       }
       // Default the type to the canonical name for this status, unless pinned above.
       if (type === exception.constructor.name || type === 'Error') {
@@ -102,6 +142,18 @@ export class AllExceptionsFilter implements ExceptionFilter {
       status = mapped.status;
       message = mapped.message;
       type = ERROR_TYPE_BY_STATUS[status] ?? 'ValidationError';
+    } else if (isBackingServiceUnavailable(exception)) {
+      // Logged as a warning, once per request, without the stack: the cause is
+      // the outage, not this code path.
+      const e = exception as { code?: unknown; message?: unknown };
+      const lastLine = String(e?.message ?? '').trim().split('\n').pop() ?? '';
+      this.logger.warn(
+        `Backing service unavailable: ${[typeof e?.code === 'string' ? e.code : '', lastLine].filter(Boolean).join(' ')}`,
+      );
+      status = HttpStatus.SERVICE_UNAVAILABLE;
+      message = 'The service is temporarily unavailable. Please try again in a moment.';
+      type = ERROR_TYPE_BY_STATUS[status];
+      res.setHeader('Retry-After', '5');
     } else {
       // Unknown/unexpected error — log the stack, never leak internals to the client.
       this.logger.error(exception);
@@ -113,6 +165,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
         message: Array.isArray(message) || typeof message === 'object' ? message : String(message),
         code: status,
         type,
+        ...(fields ? { fields } : {}),
       },
     };
 

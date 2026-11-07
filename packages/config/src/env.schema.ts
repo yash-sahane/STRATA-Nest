@@ -31,9 +31,6 @@ export const envSchema = z.object({
   CORS_ALLOWED_ORIGINS: z.string().default('http://localhost:3000'),
   FRONTEND_URL: z.string().url().default('http://localhost:3000'),
 
-  // Worker
-  WORKER_PORT: z.coerce.number().int().positive().default(8001),
-
   // Database
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
 
@@ -42,7 +39,6 @@ export const envSchema = z.object({
   REDIS_PORT: z.coerce.number().int().positive().default(6379),
   REDIS_CACHE_DB: z.coerce.number().int().min(0).default(0),
   REDIS_QUEUE_DB: z.coerce.number().int().min(0).default(1),
-  REDIS_SOCKET_DB: z.coerce.number().int().min(0).default(2),
 
   // Auth / JWT (cookie-based)
   JWT_ACCESS_SECRET: z.string().min(1, 'JWT_ACCESS_SECRET is required'),
@@ -54,9 +50,11 @@ export const envSchema = z.object({
   JWT_COOKIE_DOMAIN: z.string().optional(),
   JWT_COOKIE_SECURE: boolEnv(false),
   JWT_COOKIE_SAMESITE: z.enum(['Lax', 'Strict', 'None']).default('Lax'),
-  // AUTH_STRICT_REFRESH: false = compatibility mode (accept any signature-valid
-  // refresh token); true = strict (jti must be tracked in Redis).
-  AUTH_STRICT_REFRESH: boolEnv(false),
+  // Failed sign-ins are counted per ACCOUNT as well as per address: after this
+  // many inside the window the account takes no more guesses, from anywhere,
+  // until the window has run out. 0 switches the pause off.
+  AUTH_LOCKOUT_ATTEMPTS: z.coerce.number().int().min(0).default(10),
+  AUTH_LOCKOUT_WINDOW: z.coerce.number().int().positive().default(900),
   // RBAC_ENFORCED: false = membership-only floor; true = enforce
   // per-permission role checks on writes. Secure by default — set to false
   // only as an explicit, temporary rollback lever (docs/release/ROLLBACK.md).
@@ -72,11 +70,6 @@ export const envSchema = z.object({
   // Storage (StorageService)
   STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
   STORAGE_LOCAL_ROOT: z.string().default('./.storage'),
-  AWS_ACCESS_KEY_ID: z.string().optional(),
-  AWS_SECRET_ACCESS_KEY: z.string().optional(),
-  AWS_STORAGE_BUCKET_NAME: z.string().optional(),
-  AWS_S3_REGION_NAME: z.string().default('us-east-1'),
-  AWS_S3_ENDPOINT_URL: z.string().optional(),
 
   // Integration token encryption
   INTEGRATION_TOKEN_ENC_KEY: z.string().optional(),
@@ -88,8 +81,6 @@ export const envSchema = z.object({
   // Swagger/OpenAPI UI. Off unless explicitly enabled; forced off in production
   // unless SWAGGER_ENABLED=true — the schema is not exposed publicly by default.
   SWAGGER_ENABLED: boolEnv(false),
-  // Prometheus /metrics endpoint. Off by default; scrape target only.
-  METRICS_ENABLED: boolEnv(false),
 
   // Rate limiting — TTLs in seconds, limits in requests/TTL.
   THROTTLE_DEFAULT_LIMIT: z.coerce.number().int().positive().default(120),
@@ -98,10 +89,13 @@ export const envSchema = z.object({
   THROTTLE_LOGIN_TTL: z.coerce.number().int().positive().default(60),
   THROTTLE_REFRESH_LIMIT: z.coerce.number().int().positive().default(20),
   THROTTLE_REFRESH_TTL: z.coerce.number().int().positive().default(60),
-  THROTTLE_REGISTER_LIMIT: z.coerce.number().int().positive().default(3),
-  THROTTLE_REGISTER_TTL: z.coerce.number().int().positive().default(3600),
   THROTTLE_RESET_LIMIT: z.coerce.number().int().positive().default(3),
   THROTTLE_RESET_TTL: z.coerce.number().int().positive().default(3600),
+  // Proxies whose X-Real-IP / X-Forwarded-For are believed when keying rate
+  // limits and sign-in lockouts: comma-separated addresses, CIDR ranges,
+  // `loopback`, or host names. Empty = nobody. Parsed and checked entry by entry
+  // in apps/api/src/throttling/trusted-proxies.ts (a bad entry stops the boot).
+  TRUSTED_PROXIES: z.string().default('loopback'),
 })
   /**
    * Production-only hard gates. In `production` we refuse to boot with

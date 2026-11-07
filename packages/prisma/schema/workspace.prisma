@@ -7,10 +7,7 @@ model Workspace {
   updatedAt   DateTime @updatedAt @map("updated_at")
   name        String
   description String   @default("")
-  logo        String   @default("")
-  color       String   @default("")
   ownerId     String   @map("owner_id")
-  inviteCode  String   @unique @map("invite_code")
   settings    Json     @default("{}")
 
   @@map("workspaces_workspace")
@@ -57,21 +54,6 @@ model InviteCode {
   @@map("workspaces_invitecode")
 }
 
-model EmailInvitation {
-  id          String   @id
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
-  workspaceId String   @map("workspace_id")
-  email       String
-  role        String   @default("MEMBER")
-  token       String   @unique
-  status      String   @default("PENDING")
-  expiresAt   DateTime @map("expires_at")
-  invitedById String   @map("invited_by_id")
-
-  @@map("workspaces_emailinvitation")
-}
-
 model JoinRequest {
   id          String   @id
   createdAt   DateTime @default(now()) @map("created_at")
@@ -84,18 +66,4 @@ model JoinRequest {
 
   @@unique([workspaceId, userId])
   @@map("workspaces_joinrequest")
-}
-
-model PendingWorkspaceAccess {
-  id            String   @id
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @updatedAt @map("updated_at")
-  workspaceId   String   @map("workspace_id")
-  userId        String   @map("user_id")
-  requestedRole String   @default("MEMBER") @map("requested_role")
-
-  // One pending request per (workspace, user) — mirrors JoinRequest. Without it
-  // every re-submit appended another row and the table grew without bound.
-  @@unique([workspaceId, userId])
-  @@map("workspaces_pendingworkspaceaccess")
 }

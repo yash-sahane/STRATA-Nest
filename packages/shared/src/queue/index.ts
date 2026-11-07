@@ -9,7 +9,6 @@ export const Queues = {
   Email: 'email',
   Git: 'git',
 } as const;
-export type QueueName = (typeof Queues)[keyof typeof Queues];
 
 /** The kinds of transactional email the system sends. */
 export const EmailKind = {
@@ -41,6 +40,30 @@ export interface EmailJob {
   context?: Record<string, unknown>;
   /** Dedupe key → BullMQ jobId; a duplicate enqueue is ignored. */
   idempotencyKey?: string;
+  /**
+   * How long a SENT job is remembered, so that a repeat enqueue under the same
+   * key is still ignored. Unset, a finished job is forgotten immediately. Only
+   * for mails whose body is harmless to keep: the job data stays in Redis for
+   * the window.
+   */
+  dedupeForSeconds?: number;
+}
+
+/**
+ * Where the worker says what it changed, for the API to act on (pub/sub; the
+ * channel is the same in every Redis database). The worker has no event bus and
+ * no sockets of its own — see WorkerEventsBridge in the API.
+ */
+export const WORKER_EVENTS_CHANNEL = 'strata:worker-events';
+
+/** Tasks a commit moved to Review, and where each of them was before. */
+export interface TasksMovedByCommit {
+  kind: 'tasks.moved_by_commit';
+  /** Unique per message: every API instance hears it, and only the first acts on it. */
+  id?: string;
+  projectId: string;
+  moves: Array<{ taskId: string; from: string }>;
+  commit: { sha: string; author: string };
 }
 
 /** Job name used when adding to the git queue. */

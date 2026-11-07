@@ -28,7 +28,7 @@ function hashPassword(password: string): string {
 
 const ADMIN_EMAIL = process.env.SEED_ADMIN_EMAIL ?? 'admin@strata.local';
 const ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD ?? 'ChangeMe123!';
-const ADMIN_WORKSPACE_INVITE_CODE = 'ADMIN-DEFAULT';
+const ADMIN_WORKSPACE_NAME = 'Admin Workspace';
 
 /**
  * One ordinary account per workspace role, for the end-to-end suite.
@@ -83,7 +83,7 @@ const prisma = new PrismaClient();
 async function main(): Promise<void> {
   const admin = await prisma.user.upsert({
     where: { email: ADMIN_EMAIL },
-    update: { isSuperuser: true, isAdminFlag: true, isStaff: true, status: 'ACTIVE' },
+    update: { isSuperuser: true, isAdminFlag: true, status: 'ACTIVE' },
     create: {
       id: generateId(),
       email: ADMIN_EMAIL,
@@ -92,21 +92,24 @@ async function main(): Promise<void> {
       role: 'MANAGER',
       isSuperuser: true,
       isAdminFlag: true,
-      isStaff: true,
       status: 'ACTIVE',
     },
   });
 
-  const workspace = await prisma.workspace.upsert({
-    where: { inviteCode: ADMIN_WORKSPACE_INVITE_CODE },
-    update: { ownerId: admin.id },
-    create: {
-      id: generateId(),
-      name: 'Admin Workspace',
-      ownerId: admin.id,
-      inviteCode: ADMIN_WORKSPACE_INVITE_CODE,
-    },
-  });
+  // The admin's own workspace, found the way it is linked: by the pointer on the
+  // admin's row, else by ownership and name (a database seeded before the
+  // pointer was written). It used to be found by `Workspace.inviteCode`, a
+  // column whose only other job was to be printed as a code nothing redeemed.
+  const workspace =
+    (admin.workspaceId
+      ? await prisma.workspace.findUnique({ where: { id: admin.workspaceId } })
+      : null) ??
+    (await prisma.workspace.findFirst({
+      where: { ownerId: admin.id, name: ADMIN_WORKSPACE_NAME },
+    })) ??
+    (await prisma.workspace.create({
+      data: { id: generateId(), name: ADMIN_WORKSPACE_NAME, ownerId: admin.id },
+    }));
 
   if (admin.workspaceId !== workspace.id) {
     await prisma.user.update({ where: { id: admin.id }, data: { workspaceId: workspace.id } });

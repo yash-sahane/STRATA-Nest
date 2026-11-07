@@ -21,24 +21,6 @@ model Notification {
   @@map("notifications_notification")
 }
 
-// Notification -> delivery split: one row per channel a notification is fanned
-// out to. The `in_app` delivery is written inline; email/push channels go
-// through the email queue.
-model NotificationDelivery {
-  id             String    @id
-  createdAt      DateTime  @default(now()) @map("created_at")
-  updatedAt      DateTime  @updatedAt @map("updated_at")
-  notificationId String    @map("notification_id")
-  channel        String    @default("in_app") // in_app | email | push
-  status         String    @default("pending") // pending | delivered | failed
-  deliveredAt    DateTime? @map("delivered_at")
-  error          String    @default("")
-
-  @@index([notificationId])
-  @@index([status, channel])
-  @@map("notifications_notificationdelivery")
-}
-
 // Per-user delivery preferences for one notification `type` in one workspace.
 // OPT-OUT model: a missing row means "deliver on every channel", so existing
 // users keep today's behaviour with no backfill. `type` is stored

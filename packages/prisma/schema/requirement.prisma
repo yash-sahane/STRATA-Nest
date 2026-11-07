@@ -3,8 +3,8 @@
 // Notes:
 // - Soft FKs (epicId/sprintId/clientRequirementId) are scalar id strings; the
 //   wire emits raw ids.
-// - `tags`/`linkedProjectIds` are CSV-serialized AS STRINGS to match the wire
-//   contract; array normalization would be a v2 contract change.
+// - A functional requirement's people are `assigneeIds`/`assigneeNames`, the
+//   same two columns a task has; the names are the server's.
 
 model ClientRequirement {
   id            String   @id
@@ -23,7 +23,6 @@ model ClientRequirement {
   clientName    String   @default("") @map("client_name")
   priority      String   @default("MEDIUM")
   status        String   @default("DRAFT")
-  attachments   Json     @default("[]")
   createdById   String   @map("created_by_id")
   createdByName String   @default("") @map("created_by_name")
 
@@ -51,14 +50,11 @@ model FunctionalRequirement {
   description         String   @default("")
   type                String   @default("FUNCTIONAL")
   complexity          String   @default("MEDIUM")
-  priority            String   @default("")
+  priority            String   @default("MEDIUM")
   status              String   @default("DRAFT")
   progress            Int      @default(0)
-  reusable            Boolean  @default(false)
-  assignedTo          Json     @default("[]") @map("assigned_to")
-  assignedToNames     Json     @default("[]") @map("assigned_to_names")
-  tags                String   @default("")
-  linkedProjectIds    String   @default("") @map("linked_project_ids")
+  assigneeIds         Json     @default("[]") @map("assignee_ids")
+  assigneeNames       Json     @default("[]") @map("assignee_names")
   createdById         String   @map("created_by_id")
   createdByName       String   @default("") @map("created_by_name")
 
