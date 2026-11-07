@@ -1,5 +1,5 @@
-import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
-import { generateId, toDate, toRequiredDate, type ListQuerySpec } from '@strata/common';
+import { BadRequestException, ForbiddenException, Injectable, Optional } from '@nestjs/common';
+import { generateId, pinScopeParam, toDate, toRequiredDate, type ListQuerySpec } from '@strata/common';
 import type { PaginatedResponse } from '@strata/shared';
 import { PrismaService } from '@strata/prisma';
 import type { Attendance, Holiday, User } from '@prisma/client';
@@ -22,12 +22,46 @@ import type {
   UpdateHolidayDto,
 } from './dto';
 import { attendanceResponse, holidayResponse } from './mappers';
-import { businessDayMarker } from '@strata/config';
+import { businessDayMarker, workScheduleOf, type WorkSchedule } from '@strata/config';
+import { type HolidayReconciliation, reconcileHolidayChange } from '../leave/holiday-reconcile';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { tellPeople } from '../notifications/notice';
 
 
 /** Manager-level HR marker. Attendance rows are personal, so a caller may only
  *  file/read/alter someone else's with the workspace's HR-approver permission. */
 const HR_MANAGE: PermissionKey = Permission.LeaveApprove;
+
+const MS_PER_HOUR = 60 * 60 * 1000;
+const MS_PER_DAY = 24 * MS_PER_HOUR;
+
+/**
+ * How long after a check-in the shift it opened is still taken to be running.
+ *
+ * A day is filed under the date it STARTED on, and check-out used to look only
+ * for a row filed under today — so anybody still at work when the office's day
+ * rolled over could never check out: "Not checked in today", from a system that
+ * had their check-in. Within this window the open row from the previous day is
+ * the shift in progress. Past it, the check-out was simply forgotten, and what
+ * the hours were is for whoever corrects attendance to say.
+ */
+const MAX_SHIFT_HOURS = 16;
+
+/** How far back an unclosed day is still brought to its owner's attention. */
+const UNCLOSED_LOOKBACK_DAYS = 31;
+
+/**
+ * An arrival on a day the person holds approved half-day leave for.
+ *
+ * Nothing in attendance knew the leave existed. Somebody with the morning off
+ * who came in at 13:00 was LATE by four and a half hours, and one who left at
+ * lunchtime could close the day PRESENT. A day with half of it on leave is a
+ * half day, and there is no start time for it to be late against.
+ */
+const HALF_DAY_ARRIVAL: { lateMinutes: number; status: string } = {
+  lateMinutes: 0,
+  status: 'HALF_DAY',
+};
 
 /** The only columns the subject of an attendance row may set themselves: soft
  *  annotations that claim nothing about when they arrived or how long they
@@ -54,8 +88,39 @@ export class AttendanceService extends ScopedCrudService<
     sortable: { createdAt: 'createdAt', date: 'date' },
     defaultOrderBy: { date: 'desc' },
   };
-  constructor(prisma: PrismaService, access: WorkspaceAccessService) {
+  constructor(
+    prisma: PrismaService,
+    access: WorkspaceAccessService,
+    private readonly events?: EventEmitter2,
+  ) {
     super(prisma, access);
+  }
+
+  /**
+   * Somebody else filed, corrected or deleted this person's day.
+   *
+   * Attendance is the record a person's hours and lateness are read from, and
+   * a manager could restate any of it without the person being told: the first
+   * they knew was a figure that no longer matched what they remembered. Their
+   * own check-in and check-out tell them nothing new and are not announced.
+   */
+  private announceRestated(
+    actor: User,
+    row: { id?: string; workspaceId: string; userId: string; date: Date },
+    what: 'filed' | 'corrected' | 'deleted',
+  ): void {
+    if (row.userId === actor.id) return;
+    const day = row.date.toISOString().slice(0, 10);
+    tellPeople(this.events, {
+      workspaceId: row.workspaceId,
+      recipients: [row.userId],
+      actorId: actor.id,
+      type: 'ATTENDANCE_CORRECTED',
+      title: `Attendance ${what} for ${day}`,
+      message: `${actor.name || actor.email} ${what} your attendance for ${day}. Check the day on your attendance calendar.`,
+      relatedEntityId: row.id ?? '',
+      relatedEntityType: 'ATTENDANCE',
+    });
   }
   protected map(row: Attendance) {
     return attendanceResponse(row);
@@ -67,7 +132,16 @@ export class AttendanceService extends ScopedCrudService<
     user: User,
     query: Record<string, string | string[] | undefined>,
   ): Promise<PaginatedResponse<ReturnType<typeof attendanceResponse>>> {
-    if (await this.canManage(user, query.workspaceId)) return super.list(user, query);
+    if (await this.canManage(user, query.workspaceId)) {
+      // The wide read is for the workspace that was just checked, and no other:
+      // `?workspaceId=<where I manage>&workspaceId__in=<where I am a plain member>`
+      // otherwise carried HR-manager reach into the second workspace.
+      const wide =
+        typeof query.workspaceId === 'string' && !this.access.isPlatformAdmin(user)
+          ? pinScopeParam(query, 'workspaceId', query.workspaceId)
+          : query;
+      return super.list(user, wide);
+    }
     // Drop every caller-supplied userId predicate before forcing the caller's
     // own id. Overwriting the `userId` KEY alone was not enough: the suffixed
     // forms (`userId__ne`, `userId__in`, `userId__not_in`) are separate keys and
@@ -118,13 +192,26 @@ export class AttendanceService extends ScopedCrudService<
    * checking in.
    */
   private async businessToday(workspaceId: string): Promise<Date> {
+    return (await this.officeClock(workspaceId)).today;
+  }
+
+  /**
+   * The office's day and the office's hours, from one read of its settings.
+   *
+   * The hours are the other half of the same declaration. "Late" was measured
+   * against 08:30 plus fifteen minutes for every workspace, on the SERVER's wall
+   * clock — so an office that starts at 10:00 had everybody late every day, and
+   * one in Kolkata on a UTC host had nobody late ever (09:00 IST is 03:30 there).
+   * A workspace now states its own start and grace period, and both are read in
+   * the timezone it files its days in.
+   */
+  private async officeClock(workspaceId: string): Promise<{ today: Date; schedule: WorkSchedule }> {
     const ws = await this.prisma.workspace.findUnique({
       where: { id: workspaceId },
       select: { settings: true },
     });
-    const settings = (ws?.settings ?? {}) as Record<string, unknown>;
-    const zone = typeof settings.timezone === 'string' ? settings.timezone : null;
-    return businessDayMarker(zone);
+    const schedule = workScheduleOf(ws?.settings);
+    return { today: businessDayMarker(schedule.timeZone), schedule };
   }
 
   async create(user: User, dto: CreateAttendanceDto) {
@@ -132,7 +219,8 @@ export class AttendanceService extends ScopedCrudService<
     const date = toRequiredDate(dto.date, 'Date');
     const checkInTime = toRequiredDate(dto.checkInTime, 'Check-in time');
     const checkOutTime = toDate(dto.checkOutTime, 'Check-out time');
-    if (date.getTime() > (await this.businessToday(dto.workspaceId)).getTime()) {
+    const { today, schedule } = await this.officeClock(dto.workspaceId);
+    if (date.getTime() > today.getTime()) {
       throw new BadRequestException('Attendance cannot be filed for a future date.');
     }
     if (checkOutTime && checkOutTime.getTime() <= checkInTime.getTime()) {
@@ -144,10 +232,15 @@ export class AttendanceService extends ScopedCrudService<
     const isHoliday = (await this.closedHolidayOn(dto.workspaceId, date)) !== null;
     const dayIsWeekend = isWeekend(date);
     const officeOpen = !isHoliday && !dayIsWeekend;
-    const arrival = this.arrivalFigures(checkInTime, officeOpen);
-    return this.createIn(user, dto.workspaceId, {
+    const subject = await this.subjectOf(user, dto.workspaceId, dto.userId);
+    await this.assertNotOwnRecord(user, dto.workspaceId, subject, 'file');
+    const halfDay = await this.onHalfDayLeave(dto.workspaceId, subject, date);
+    const arrival = halfDay
+      ? HALF_DAY_ARRIVAL
+      : this.arrivalFigures(checkInTime, officeOpen, schedule);
+    const filed = await this.createIn(user, dto.workspaceId, {
       workspaceId: dto.workspaceId,
-      userId: await this.subjectOf(user, dto.workspaceId, dto.userId),
+      userId: subject,
       createdById: user.id,
       createdByName: user.name ?? '',
       date,
@@ -159,8 +252,14 @@ export class AttendanceService extends ScopedCrudService<
       status:
         dto.status === 'ABSENT' || dto.status === 'ON_LEAVE' || dto.status === 'HALF_DAY'
           ? dto.status
-          : checkOutTime
-            ? determineAttendanceStatus(checkInTime, checkOutTime, workHours ?? 0, officeOpen)
+          : checkOutTime && !halfDay
+            ? determineAttendanceStatus(
+                checkInTime,
+                checkOutTime,
+                workHours ?? 0,
+                officeOpen,
+                schedule,
+              )
             : arrival.status,
       lateMinutes: arrival.lateMinutes,
       location: dto.location ?? '',
@@ -171,6 +270,8 @@ export class AttendanceService extends ScopedCrudService<
       // done on a shut day rather than an ordinary attended one.
       isHoliday,
     });
+    this.announceRestated(user, { workspaceId: dto.workspaceId, userId: subject, date }, 'filed');
+    return filed;
   }
 
   /**
@@ -207,15 +308,22 @@ export class AttendanceService extends ScopedCrudService<
    * how to read it); it is simply not marked against a clock the office was not
    * keeping.
    */
-  private arrivalFigures(at: Date, officeOpen: boolean): { lateMinutes: number; status: string } {
+  private arrivalFigures(
+    at: Date,
+    officeOpen: boolean,
+    schedule: WorkSchedule,
+  ): { lateMinutes: number; status: string } {
     return {
-      lateMinutes: officeOpen ? calculateLateMinutes(at) : 0,
-      status: officeOpen && isLateCheckIn(at) ? 'LATE' : 'PRESENT',
+      lateMinutes: officeOpen ? calculateLateMinutes(at, schedule) : 0,
+      status: officeOpen && isLateCheckIn(at, schedule) ? 'LATE' : 'PRESENT',
     };
   }
 
   async patch(user: User, id: string, dto: UpdateAttendanceDto) {
     const data: Record<string, unknown> = {};
+    if (dto.checkInTime !== undefined) {
+      data.checkInTime = toRequiredDate(dto.checkInTime, 'Check-in time');
+    }
     if (dto.checkOutTime !== undefined) data.checkOutTime = dto.checkOutTime ? new Date(dto.checkOutTime) : null;
     if (dto.workHours !== undefined) data.workHours = dto.workHours;
     if (dto.status !== undefined) data.status = dto.status;
@@ -225,7 +333,56 @@ export class AttendanceService extends ScopedCrudService<
     if (dto.isWeekend !== undefined) data.isWeekend = dto.isWeekend;
     if (dto.isHoliday !== undefined) data.isHoliday = dto.isHoliday;
     await this.assertMayEdit(user, id, Object.keys(data));
-    return this.update(user, id, data);
+    /**
+     * A corrected TIME restates the day, so the figures that describe it are
+     * derived again here — exactly as `create` and check-in/out derive them.
+     *
+     * Corrections were possible through this route but only half-made: a manager
+     * could move the check-out and the row kept the hours, the lateness and the
+     * status of the times it used to have, unless they also did that arithmetic
+     * themselves and sent it along. An explicit status in the same request still
+     * wins, which is how a day is restated as ABSENT, ON_LEAVE or a HALF_DAY.
+     */
+    if (data.checkInTime !== undefined || data.checkOutTime !== undefined) {
+      const row = await this.findScoped(user, id);
+      const checkIn = (data.checkInTime as Date | undefined) ?? row.checkInTime;
+      const checkOut =
+        data.checkOutTime !== undefined ? (data.checkOutTime as Date | null) : row.checkOutTime;
+      if (checkOut && checkOut.getTime() <= checkIn.getTime()) {
+        throw new BadRequestException('Check-out must be after the check-in.');
+      }
+      const workHours = checkOut ? calculateWorkHours(checkIn, checkOut) : null;
+      const officeOpen = !row.isHoliday && !row.isWeekend;
+      const { schedule } = await this.officeClock(row.workspaceId);
+      const halfDay = await this.onHalfDayLeave(row.workspaceId, row.userId, row.date);
+      const arrival = halfDay
+        ? HALF_DAY_ARRIVAL
+        : this.arrivalFigures(checkIn, officeOpen, schedule);
+      data.workHours = workHours;
+      data.lateMinutes = arrival.lateMinutes;
+      if (dto.status === undefined) {
+        data.status =
+          checkOut && !halfDay
+            ? determineAttendanceStatus(checkIn, checkOut, workHours ?? 0, officeOpen, schedule)
+            : arrival.status;
+      }
+    }
+    const result = await this.update(user, id, data);
+    // Only a restatement of the day itself: a note added to it is not one.
+    const restated = Object.keys(data).some((field) => !SELF_EDITABLE.has(field));
+    if (restated) {
+      this.announceRestated(
+        user,
+        {
+          id,
+          workspaceId: result.workspaceId,
+          userId: result.userId,
+          date: new Date(`${result.date}T00:00:00.000Z`),
+        },
+        'corrected',
+      );
+    }
+    return result;
   }
 
   /**
@@ -238,9 +395,38 @@ export class AttendanceService extends ScopedCrudService<
     const forensic = fields.filter((f) => !SELF_EDITABLE.has(f));
     if (forensic.length === 0) return;
     const row = await this.findScoped(user, id);
-    if (await this.canManage(user, this.workspaceOf(row))) return;
+    if (await this.canManage(user, this.workspaceOf(row))) {
+      await this.assertNotOwnRecord(user, row.workspaceId, row.userId, 'correct');
+      return;
+    }
     throw new ForbiddenException(
       `Only an HR manager can change ${forensic.join(', ')} on an attendance record.`,
+    );
+  }
+
+  /**
+   * An HR manager's own day is somebody else's to restate.
+   *
+   * Leave and time already held to this — your own balance, your own leave
+   * (unless you are the only approver) and your own hours are decided by another
+   * approver. Attendance did not: a manager could delete their own late arrival
+   * and file an on-time day in its place, and since the change was their own
+   * nobody was told. The same exception as leave: when nobody else holds the
+   * permission, there is nobody else to ask.
+   */
+  private async assertNotOwnRecord(
+    user: User,
+    workspaceId: string,
+    subjectId: string,
+    verb: 'file' | 'correct' | 'delete',
+  ): Promise<void> {
+    if (subjectId !== user.id || this.access.isPlatformAdmin(user)) return;
+    const others = (await this.access.membersHolding(workspaceId, HR_MANAGE)).filter(
+      (id) => id !== user.id,
+    );
+    if (others.length === 0) return;
+    throw new ForbiddenException(
+      `Another HR manager has to ${verb} your own attendance — you cannot ${verb} a day of your own record.`,
     );
   }
 
@@ -253,14 +439,23 @@ export class AttendanceService extends ScopedCrudService<
     if (!(await this.canManage(user, this.workspaceOf(row)))) {
       throw new ForbiddenException('Only an HR manager can delete an attendance record.');
     }
-    return super.remove(user, id);
+    await this.assertNotOwnRecord(user, row.workspaceId, row.userId, 'delete');
+    await super.remove(user, id);
+    this.announceRestated(user, row, 'deleted');
   }
 
   /** Whose attendance the row is for: only an HR manager may file someone else's. */
   private async subjectOf(user: User, workspaceId: string, userId?: string): Promise<string> {
     if (!userId || userId === user.id) return user.id;
-    if (await this.access.can(user, workspaceId, HR_MANAGE)) return userId;
-    throw new ForbiddenException(DENY_MESSAGE);
+    if (!(await this.access.can(user, workspaceId, HR_MANAGE))) {
+      throw new ForbiddenException(DENY_MESSAGE);
+    }
+    // Any account id was accepted, and the "attendance filed" notice then went
+    // to that account — a person who may not belong to this workspace at all.
+    if (!(await this.access.activeMembership(userId, workspaceId))) {
+      throw new BadRequestException('That person is not an active member of this workspace.');
+    }
+    return userId;
   }
 
   private async canManage(user: User, workspaceId?: string | string[]): Promise<boolean> {
@@ -270,9 +465,80 @@ export class AttendanceService extends ScopedCrudService<
   }
 
   /** Server-computed check-in (lateMinutes + status). */
+  /** Whether this person holds APPROVED half-day leave for this day. */
+  private async onHalfDayLeave(workspaceId: string, userId: string, date: Date): Promise<boolean> {
+    const leave = await this.prisma.leaveRequest.findFirst({
+      where: { workspaceId, userId, status: 'APPROVED', type: 'HALF_DAY', startDate: date },
+      select: { id: true },
+    });
+    return leave !== null;
+  }
+
+  /**
+   * The shift this person started on the previous business day and has not
+   * closed, while it can still be the one in progress — see MAX_SHIFT_HOURS.
+   */
+  private async continuingShift(
+    workspaceId: string,
+    userId: string,
+    today: Date,
+  ): Promise<Attendance | null> {
+    const row = await this.prisma.attendance.findFirst({
+      where: {
+        workspaceId,
+        userId,
+        date: new Date(today.getTime() - MS_PER_DAY),
+        checkOutTime: null,
+        status: { not: 'ON_LEAVE' },
+      },
+    });
+    if (!row) return null;
+    return Date.now() - row.checkInTime.getTime() <= MAX_SHIFT_HOURS * MS_PER_HOUR ? row : null;
+  }
+
+  /**
+   * Where the caller stands right now: the row check-out would close, and the
+   * most recent earlier day that was never closed.
+   *
+   * The browser used to work this out by asking for "the row dated today",
+   * which is the wrong question twice over. After midnight it found nothing and
+   * offered Check In to somebody in the middle of a shift; and a day whose
+   * check-out was forgotten vanished from view the next morning, still open,
+   * with nobody told — not the person, who could no longer close it, and not
+   * whoever could correct it.
+   */
+  async current(user: User, workspaceId: string) {
+    if (!workspaceId) throw new BadRequestException('workspaceId is required.');
+    await this.access.assertPermission(user, workspaceId, Permission.HrRead);
+    const { today } = await this.officeClock(workspaceId);
+    const mine = { workspaceId, userId: user.id };
+    const todays = await this.prisma.attendance.findFirst({ where: { ...mine, date: today } });
+    const running = todays ? null : await this.continuingShift(workspaceId, user.id, today);
+    const unclosed = await this.prisma.attendance.findFirst({
+      where: {
+        ...mine,
+        date: {
+          lt: today,
+          gte: new Date(today.getTime() - UNCLOSED_LOOKBACK_DAYS * MS_PER_DAY),
+        },
+        checkOutTime: null,
+        status: { in: ['PRESENT', 'LATE', 'HALF_DAY'] },
+        ...(running ? { id: { not: running.id } } : {}),
+      },
+      orderBy: { date: 'desc' },
+    });
+    const record = todays ?? running;
+    return {
+      record: record ? attendanceResponse(record) : null,
+      /** True when `record` is yesterday's shift, still running. */
+      continuing: running !== null,
+      unclosed: unclosed ? attendanceResponse(unclosed) : null,
+    };
+  }
+
   async checkIn(user: User, dto: CheckInDto) {
     await this.access.assertPermission(user, dto.workspaceId, Permission.HrWrite);
-    const date = await this.businessToday(dto.workspaceId);
+    const { today: date, schedule } = await this.officeClock(dto.workspaceId);
     // The workspace calendar LABELS this day; it does not veto it.
     //
     // Check-in used to refuse outright on a declared (non-optional) holiday,
@@ -292,10 +558,20 @@ export class AttendanceService extends ScopedCrudService<
     const isHoliday = (await this.closedHolidayOn(dto.workspaceId, date)) !== null;
     const dayIsWeekend = isWeekend(date);
     const now = new Date();
-    const arrival = this.arrivalFigures(now, !isHoliday && !dayIsWeekend);
+    const halfDay = await this.onHalfDayLeave(dto.workspaceId, user.id, date);
+    const arrival = halfDay
+      ? HALF_DAY_ARRIVAL
+      : this.arrivalFigures(now, !isHoliday && !dayIsWeekend, schedule);
     const existing = await this.prisma.attendance.findFirst({
       where: { workspaceId: dto.workspaceId, userId: user.id, date },
     });
+    // Still inside the shift that began yesterday: that one is closed first.
+    // Starting a second day on top of it would leave the first open for good.
+    if (!existing && (await this.continuingShift(dto.workspaceId, user.id, date))) {
+      throw new BadRequestException(
+        'You are still checked in from yesterday. Check out before starting a new day.',
+      );
+    }
     // Approving leave materialises an ON_LEAVE marker for every covered working
     // day (leave-approval's materializeLeaveAttendance). Someone who comes in
     // anyway is checking in for the FIRST time, not twice — and they cannot
@@ -358,10 +634,14 @@ export class AttendanceService extends ScopedCrudService<
   /** Server-computed check-out (workHours + status). */
   async checkOut(user: User, dto: CheckOutDto) {
     await this.access.assertPermission(user, dto.workspaceId, Permission.HrWrite);
-    const date = await this.businessToday(dto.workspaceId);
-    const record = await this.prisma.attendance.findFirst({
-      where: { workspaceId: dto.workspaceId, userId: user.id, date },
-    });
+    const { today: date, schedule } = await this.officeClock(dto.workspaceId);
+    const record =
+      (await this.prisma.attendance.findFirst({
+        where: { workspaceId: dto.workspaceId, userId: user.id, date },
+      })) ??
+      // No row for today, but a shift that started yesterday and is still
+      // running — the office's day turned over while they were at work.
+      (await this.continuingShift(dto.workspaceId, user.id, date));
     if (!record) throw new BadRequestException('Not checked in today');
     // A leave-materialised ON_LEAVE row IS today's row and has a non-null
     // check-in pinned to the day marker (UTC midnight) with no check-out, so
@@ -377,6 +657,7 @@ export class AttendanceService extends ScopedCrudService<
     const now = new Date();
     if (now < record.checkInTime) throw new BadRequestException('Check-out precedes check-in');
     const workHours = calculateWorkHours(record.checkInTime, now);
+    const halfDay = await this.onHalfDayLeave(dto.workspaceId, user.id, record.date);
     const updated = await this.prisma.attendance.update({
       where: { id: record.id },
       data: {
@@ -385,13 +666,17 @@ export class AttendanceService extends ScopedCrudService<
         // Same rule as the arrival: a day the office was shut had no expected
         // start, so closing it out grades the hours and can never come back
         // LATE. Without the flags here, check-out reinstated the very lateness
-        // `arrivalFigures` had just declined to record.
-        status: determineAttendanceStatus(
-          record.checkInTime,
-          now,
-          workHours,
-          !record.isHoliday && !record.isWeekend,
-        ),
+        // `arrivalFigures` had just declined to record. And a day with half of
+        // it on approved leave closes as the half day it was.
+        status: halfDay
+          ? HALF_DAY_ARRIVAL.status
+          : determineAttendanceStatus(
+              record.checkInTime,
+              now,
+              workHours,
+              !record.isHoliday && !record.isWeekend,
+              schedule,
+            ),
         ...(dto.notes ? { notes: `${record.notes || ''}\n${dto.notes}`.trim() } : {}),
       },
     });
@@ -411,27 +696,91 @@ export class HolidaysService extends ScopedCrudService<Holiday, ReturnType<typeo
     sortable: { createdAt: 'createdAt', date: 'date' },
     defaultOrderBy: { date: 'asc' },
   };
-  constructor(prisma: PrismaService, access: WorkspaceAccessService) {
+  constructor(
+    prisma: PrismaService,
+    access: WorkspaceAccessService,
+    @Optional() private readonly holidayEvents?: EventEmitter2,
+  ) {
     super(prisma, access);
   }
   protected map(row: Holiday) {
     return holidayResponse(row);
   }
-  create(user: User, dto: CreateHolidayDto) {
-    return this.createIn(user, dto.workspaceId, {
+
+  /**
+   * The people whose approved leave a calendar change re-counted are told.
+   * Their balance moved — a day handed back, or charged again — and the first
+   * they knew was a different number on the Leave page.
+   */
+  private tellRecounted(
+    user: User,
+    workspaceId: string,
+    reconciled: HolidayReconciliation,
+    what: string,
+  ): void {
+    if (!reconciled.peopleCharged?.length) return;
+    tellPeople(this.holidayEvents, {
+      workspaceId,
+      recipients: reconciled.peopleCharged,
+      actorId: user.id,
+      type: 'LEAVE_BALANCE_ADJUSTED',
+      title: 'Leave re-counted for a holiday change',
+      message: `${what}, so approved leave across it was counted again. Open Leave to see your balance.`,
+      relatedEntityType: 'LEAVE',
+    });
+  }
+  /**
+   * Every write to the calendar is followed by `reconcileHolidayChange` for the
+   * day (or days) whose standing it may have changed, and the answer says what
+   * that did: leave re-counted, days returned, attendance re-read. The calendar
+   * used to apply only to what was written AFTER it — see holiday-reconcile.ts.
+   */
+  async create(user: User, dto: CreateHolidayDto) {
+    const date = new Date(dto.date);
+    const created = await this.createIn(user, dto.workspaceId, {
       workspaceId: dto.workspaceId,
       name: dto.name,
-      date: new Date(dto.date),
+      date,
       isOptional: dto.isOptional ?? false,
       description: dto.description ?? '',
     });
+    const reconciled = await reconcileHolidayChange(this.prisma, dto.workspaceId, date);
+    this.tellRecounted(user, dto.workspaceId, reconciled, `${dto.name} on ${dto.date.slice(0, 10)} is now a holiday`);
+    return { ...created, reconciled };
   }
-  patch(user: User, id: string, dto: UpdateHolidayDto) {
+  async patch(user: User, id: string, dto: UpdateHolidayDto) {
     const data: Record<string, unknown> = {};
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.date !== undefined) data.date = new Date(dto.date);
     if (dto.isOptional !== undefined) data.isOptional = dto.isOptional;
     if (dto.description !== undefined) data.description = dto.description;
-    return this.update(user, id, data);
+    const before = await this.findScoped(user, id);
+    const updated = await this.update(user, id, data);
+    // The day it was on and the day it is on: either may have changed standing.
+    const days = new Map<number, Date>([[before.date.getTime(), before.date]]);
+    if (data.date) days.set((data.date as Date).getTime(), data.date as Date);
+    let reconciled: HolidayReconciliation = { attendanceRows: 0, leaveRequests: 0, daysReturned: 0 };
+    for (const day of days.values()) {
+      const part = await reconcileHolidayChange(this.prisma, before.workspaceId, day);
+      reconciled = {
+        attendanceRows: reconciled.attendanceRows + part.attendanceRows,
+        leaveRequests: reconciled.leaveRequests + part.leaveRequests,
+        daysReturned: reconciled.daysReturned + part.daysReturned,
+        peopleCharged: [...new Set([...(reconciled.peopleCharged ?? []), ...(part.peopleCharged ?? [])])],
+      };
+    }
+    this.tellRecounted(user, before.workspaceId, reconciled, `The holiday ${before.name} was changed`);
+    return { ...updated, reconciled };
+  }
+  async remove(user: User, id: string): Promise<void> {
+    const before = await this.findScoped(user, id);
+    await super.remove(user, id);
+    const reconciled = await reconcileHolidayChange(this.prisma, before.workspaceId, before.date);
+    this.tellRecounted(
+      user,
+      before.workspaceId,
+      reconciled,
+      `${before.name} on ${before.date.toISOString().slice(0, 10)} is no longer a holiday`,
+    );
   }
 }

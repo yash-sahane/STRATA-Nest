@@ -5,10 +5,11 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
-import { TrimmedText } from '@strata/common';
+import { BasedOn, TrimmedText } from '@strata/common';
 import { LEAVE_TYPES } from '../leave-balance';
 
 export class CreateLeaveRequestDto {
@@ -32,18 +33,18 @@ export class RejectLeaveDto {
   @IsOptional() @IsString() reason?: string;
 }
 
-export class CreateLeaveBalanceDto {
+/** POST leave_balances/adjust — set a member's allowance for a year. */
+export class AdjustLeaveBalanceDto {
+  /**
+   * The figures the editor saw, keyed like the fields below. Sent, a figure
+   * that has moved since (an approval debited it) is refused with a 409 rather
+   * than overwritten; see LeaveBalancesService.adjust.
+   */
+  @BasedOn() basedOn?: Record<string, unknown>;
   @IsString() workspaceId!: string;
   @IsString() userId!: string;
   @IsInt() @Min(0) year!: number;
-  @IsOptional() @IsNumber() @Min(0) paidLeave?: number;
-  @IsOptional() @IsNumber() @Min(0) unpaidLeave?: number;
-  @IsOptional() @IsNumber() @Min(0) halfDay?: number;
-  @IsOptional() @IsNumber() @Min(0) compOff?: number;
-}
-export class UpdateLeaveBalanceDto {
-  @IsOptional() @IsNumber() @Min(0) paidLeave?: number;
-  @IsOptional() @IsNumber() @Min(0) unpaidLeave?: number;
-  @IsOptional() @IsNumber() @Min(0) halfDay?: number;
-  @IsOptional() @IsNumber() @Min(0) compOff?: number;
+  @IsOptional() @IsNumber() @Min(0) @Max(366) paidLeave?: number;
+  @IsOptional() @IsNumber() @Min(0) @Max(366) halfDay?: number;
+  @IsOptional() @IsNumber() @Min(0) @Max(366) compOff?: number;
 }

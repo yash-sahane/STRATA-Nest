@@ -1,24 +1,17 @@
-import { IsArray, IsBoolean, IsInt, IsNumber, IsObject, IsOptional, IsString, Min } from 'class-validator';
+import { IsArray, IsBoolean, IsOptional, IsString } from 'class-validator';
 import { IsStrictBoolean } from '@strata/common';
 
 export class CreateTimeEntryDto {
   @IsString() workspaceId!: string;
   @IsString() startTime!: string;
   @IsString() endTime!: string;
-  // Accepted for backwards compatibility and then IGNORED: the server derives
-  // duration from startTime/endTime. Trusting it let a 90-minute window carry
-  // 100000 minutes, and a PATCH of the times never recomputed it, so a row
-  // could permanently claim 8h for a range of -99 minutes.
-  @IsOptional() @IsInt() duration?: number;
+  // No `duration`: the server derives it from startTime/endTime. Trusting one
+  // let a 90-minute window carry 100000 minutes.
+  /** The task and project are named by id; their titles are read from the records. */
   @IsOptional() @IsString() taskId?: string;
-  @IsOptional() @IsString() taskTitle?: string;
-  @IsOptional() @IsString() taskHierarchyId?: string;
   @IsOptional() @IsString() projectId?: string;
-  @IsOptional() @IsString() projectName?: string;
   @IsOptional() @IsString() description?: string;
   @IsOptional() @IsStrictBoolean() @IsBoolean() isBillable?: boolean;
-  @IsOptional() @IsNumber() @Min(0) billableRate?: number | null;
-  @IsOptional() @IsString() type?: string;
   @IsOptional() @IsArray() tags?: unknown[];
 }
 export class UpdateTimeEntryDto {
@@ -26,15 +19,8 @@ export class UpdateTimeEntryDto {
   // POST :id/approve|reject (manager-only, self-approval blocked).
   @IsOptional() @IsString() startTime?: string;
   @IsOptional() @IsString() endTime?: string;
-  @IsOptional() @IsInt() duration?: number;
   @IsOptional() @IsString() description?: string;
   @IsOptional() @IsStrictBoolean() @IsBoolean() isBillable?: boolean;
-  // `null` is a MEANINGFUL value here and @IsOptional() lets it through (it
-  // skips validation for null as well as undefined): an absent key leaves the
-  // stored rate alone, `null` clears it. Without a way to say "no rate" a
-  // cleared field could only be sent as undefined, which JSON.stringify drops,
-  // so the entry kept a rate the owner had deleted.
-  @IsOptional() @IsNumber() @Min(0) billableRate?: number | null;
   @IsOptional() @IsArray() tags?: unknown[];
 }
 
@@ -43,34 +29,26 @@ export class RejectTimeEntryDto {
 }
 
 // Active timer
-export class CreateActiveTimerDto {
-  @IsString() startTime!: string;
-  @IsOptional() @IsString() taskId?: string;
-  @IsOptional() @IsString() taskTitle?: string;
-  @IsOptional() @IsString() taskHierarchyId?: string;
-  @IsOptional() @IsString() projectId?: string;
-  @IsOptional() @IsString() description?: string;
-  @IsOptional() @IsString() type?: string;
-  @IsOptional() @IsObject() pomodoroSettings?: Record<string, unknown>;
-}
-export class UpdateActiveTimerDto {
-  @IsOptional() @IsStrictBoolean() @IsBoolean() isPaused?: boolean;
-  @IsOptional() @IsString() description?: string;
-  @IsOptional() @IsObject() pomodoroSettings?: Record<string, unknown>;
-}
-
 // Timer lifecycle
 export class StartTimerDto {
+  /** The workspace a timer on no task or project is for. */
+  @IsOptional() @IsString() workspaceId?: string;
+  /**
+   * Stop the running timer — logging its time — and start this one in its
+   * place. A running timer whose workspace the caller can no longer log time
+   * in is discarded instead; the response's `replaced` says which happened.
+   */
+  @IsOptional() @IsStrictBoolean() @IsBoolean() replace?: boolean;
   @IsOptional() @IsString() taskId?: string;
-  @IsOptional() @IsString() taskTitle?: string;
-  @IsOptional() @IsString() taskHierarchyId?: string;
   @IsOptional() @IsString() projectId?: string;
   @IsOptional() @IsString() description?: string;
-  @IsOptional() @IsString() type?: string;
-  @IsOptional() @IsObject() pomodoroSettings?: Record<string, unknown>;
 }
 export class StopTimerDto {
   @IsString() workspaceId!: string;
   @IsOptional() @IsStrictBoolean() @IsBoolean() isBillable?: boolean;
-  @IsOptional() @IsNumber() @Min(0) billableRate?: number;
+  /**
+   * When the work actually stopped, for a timer left running past it. Absent,
+   * the server's clock ends the run — the ordinary Stop.
+   */
+  @IsOptional() @IsString() endTime?: string;
 }

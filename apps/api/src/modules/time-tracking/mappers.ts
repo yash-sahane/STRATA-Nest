@@ -22,8 +22,6 @@ export function timeEntryResponse(t: TimeEntry) {
     endTime: formatApiTimestamp(t.endTime),
     duration: t.duration,
     isBillable: t.isBillable,
-    billableRate: t.billableRate,
-    type: t.type,
     status: t.status,
     approvedBy: t.approvedBy,
     approvedAt: isoOrNull(t.approvedAt),
@@ -54,6 +52,7 @@ export function activeTimerResponse(t: ActiveTimer) {
   return {
     id: String(t.id),
     userId: t.userId,
+    workspaceId: t.workspaceId,
     taskId: t.taskId,
     taskTitle: t.taskTitle,
     taskHierarchyId: t.taskHierarchyId,
@@ -63,8 +62,6 @@ export function activeTimerResponse(t: ActiveTimer) {
     isPaused: t.isPaused,
     pausedAt: isoOrNull(t.pausedAt),
     totalPausedTime: t.totalPausedTime,
-    type: t.type,
-    pomodoroSettings: t.pomodoroSettings,
     createdAt: formatApiTimestamp(t.createdAt),
     updatedAt: formatApiTimestamp(t.updatedAt),
   };

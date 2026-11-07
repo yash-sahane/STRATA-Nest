@@ -35,7 +35,9 @@ describe('AttendanceService — per-user scoping', () => {
     updatedAt: new Date(),
   } as unknown as Attendance;
 
-  function build(opts: { isManager?: boolean } = {}) {
+  function build(
+    opts: { isManager?: boolean; settings?: Record<string, unknown>; otherHrManagers?: string[] } = {},
+  ) {
     const attendance = {
       create: jest.fn().mockImplementation(({ data }) => Promise.resolve({ ...row, ...data })),
       findFirst: jest.fn().mockResolvedValue(row),
@@ -50,16 +52,52 @@ describe('AttendanceService — per-user scoping', () => {
     // Every day-level decision resolves 'today' in the WORKSPACE's declared timezone,
     // so the service reads workspace.settings first. No timezone declared here, which
     // is the common case and keeps these tests on the server's zone.
-    const workspace = { findUnique: jest.fn().mockResolvedValue({ settings: {} }) };
-    const prisma = { attendance, holiday, workspace } as unknown as PrismaService;
+    const workspace = {
+      findUnique: jest.fn().mockResolvedValue({ settings: opts.settings ?? {} }),
+    };
+    // Check-in, check-out and corrections ask whether the day carries approved
+    // half-day leave. None, unless a case says so.
+    const leaveRequest = { findFirst: jest.fn().mockResolvedValue(null) };
+    const prisma = { attendance, holiday, workspace, leaveRequest } as unknown as PrismaService;
     const access = {
       assertPermission: jest.fn().mockResolvedValue(undefined),
       scopeWhere: jest.fn().mockResolvedValue({}),
       isPlatformAdmin: jest.fn().mockReturnValue(false),
       can: jest.fn().mockResolvedValue(opts.isManager ?? false),
+      // The other HR managers there are; none unless a case says so, so the
+      // caller is the only one and may file their own day.
+      membersHolding: jest.fn().mockResolvedValue(opts.otherHrManagers ?? []),
+      activeMembership: jest.fn().mockResolvedValue({ id: 'membership' }),
     } as unknown as WorkspaceAccessService;
-    return { svc: new AttendanceService(prisma, access), attendance, access, holiday };
+    return { svc: new AttendanceService(prisma, access), attendance, access, holiday, leaveRequest };
   }
+
+  // Leave and time already held to this: your own record is somebody else's to
+  // restate. Attendance let a manager erase their own late arrival.
+  it('create: refuses a manager filing their own day while another HR manager exists', async () => {
+    const { svc, attendance } = build({ isManager: true, otherHrManagers: [manager.id, 'mgr2'] });
+    await expect(
+      svc.create(manager, {
+        workspaceId: 'w1',
+        date: '2026-08-08',
+        checkInTime: '2026-08-08T03:00:00.000Z',
+      } as never),
+    ).rejects.toThrow(/Another HR manager/);
+    expect(attendance.create).not.toHaveBeenCalled();
+  });
+
+  it('create: refuses a day for somebody who is not a member of the workspace', async () => {
+    const { svc, access } = build({ isManager: true });
+    (access.activeMembership as jest.Mock).mockResolvedValue(null);
+    await expect(
+      svc.create(manager, {
+        workspaceId: 'w1',
+        userId: 'stranger',
+        date: '2026-08-08',
+        checkInTime: '2026-08-08T03:00:00.000Z',
+      } as never),
+    ).rejects.toThrow(/not an active member/);
+  });
 
   it('create: stamps the caller as the subject and the audit trail', async () => {
     // Filing by hand is an HR correction now, so the caller is a manager.
@@ -220,6 +258,96 @@ describe('AttendanceService — per-user scoping', () => {
     expect(attendance.update).not.toHaveBeenCalled();
     expect(attendance.delete).not.toHaveBeenCalled();
   });
+
+  // The stored row: checked in 03:00Z, still open.
+  it('patch: a corrected check-out restates the hours and status, not just the time', async () => {
+    const { svc, attendance } = build({ isManager: true });
+    await svc.patch(manager, 'att-1', { checkOutTime: '2026-08-08T11:30:00.000Z' });
+    const data = attendance.update.mock.calls[0][0].data;
+    expect(data.workHours).toBe(8.5);
+    // Derived from the merged times, as check-out itself would have derived it.
+    expect(['PRESENT', 'LATE']).toContain(data.status);
+    expect(data).toHaveProperty('lateMinutes');
+  });
+
+  it('patch: a corrected check-in is a manager’s to make, and re-derives the day too', async () => {
+    const asMember = build();
+    await expect(
+      asMember.svc.patch(member, 'att-1', { checkInTime: '2026-08-08T02:00:00.000Z' }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+
+    const { svc, attendance } = build({ isManager: true });
+    await svc.patch(manager, 'att-1', {
+      checkInTime: '2026-08-08T02:00:00.000Z',
+      checkOutTime: '2026-08-08T04:00:00.000Z',
+    });
+    const data = attendance.update.mock.calls[0][0].data;
+    expect(data.workHours).toBe(2);
+    // Two hours on the clock is under half a day.
+    expect(data.status).toBe('HALF_DAY');
+  });
+
+  it('patch: an explicit status still wins over the derived one', async () => {
+    const { svc, attendance } = build({ isManager: true });
+    await svc.patch(manager, 'att-1', {
+      checkOutTime: '2026-08-08T11:30:00.000Z',
+      status: 'ABSENT',
+    });
+    expect(attendance.update.mock.calls[0][0].data.status).toBe('ABSENT');
+  });
+
+  it('patch: refuses a check-out at or before the check-in', async () => {
+    const { svc, attendance } = build({ isManager: true });
+    await expect(
+      svc.patch(manager, 'att-1', { checkOutTime: '2026-08-08T02:59:00.000Z' }),
+    ).rejects.toThrow('Check-out must be after the check-in.');
+    expect(attendance.update).not.toHaveBeenCalled();
+  });
+
+  // Monday 10 August 2026, 10:15 in Kolkata.
+  const mondayArrival = {
+    workspaceId: 'w1',
+    date: '2026-08-10',
+    checkInTime: '2026-08-10T04:45:00.000Z',
+  };
+
+  it('create: lateness is measured against the workspace’s own hours and clock', async () => {
+    const strict = build({
+      isManager: true,
+      settings: { timezone: 'Asia/Kolkata', workdayStart: '10:00', lateGraceMinutes: 0 },
+    });
+    await strict.svc.create(manager, mondayArrival);
+    expect(strict.attendance.create.mock.calls[0][0].data).toMatchObject({
+      status: 'LATE',
+      lateMinutes: 15,
+    });
+
+    const lenient = build({
+      isManager: true,
+      settings: { timezone: 'Asia/Kolkata', workdayStart: '10:00', lateGraceMinutes: 30 },
+    });
+    await lenient.svc.create(manager, mondayArrival);
+    expect(lenient.attendance.create.mock.calls[0][0].data).toMatchObject({
+      status: 'PRESENT',
+      lateMinutes: 0,
+    });
+  });
+
+  it('create: with no hours declared, the default 08:30 + 15m in the declared zone', async () => {
+    const { svc, attendance } = build({ isManager: true, settings: { timezone: 'Asia/Kolkata' } });
+    await svc.create(manager, mondayArrival);
+    // 10:15 against 08:45.
+    expect(attendance.create.mock.calls[0][0].data).toMatchObject({
+      status: 'LATE',
+      lateMinutes: 90,
+    });
+  });
+
+  it('patch: a note alone derives nothing', async () => {
+    const { svc, attendance } = build({ isManager: true });
+    await svc.patch(manager, 'att-1', { notes: 'forgot badge' });
+    expect(attendance.update.mock.calls[0][0].data).toEqual({ notes: 'forgot badge' });
+  });
 });
 
 /**
@@ -261,13 +389,16 @@ describe('AttendanceService.checkIn — duplicate guard', () => {
     // so the service reads workspace.settings first. No timezone declared here, which
     // is the common case and keeps these tests on the server's zone.
     const workspace = { findUnique: jest.fn().mockResolvedValue({ settings: {} }) };
-    const prisma = { attendance, holiday, workspace } as unknown as PrismaService;
+    // Check-in, check-out and corrections ask whether the day carries approved
+    // half-day leave. None, unless a case says so.
+    const leaveRequest = { findFirst: jest.fn().mockResolvedValue(null) };
+    const prisma = { attendance, holiday, workspace, leaveRequest } as unknown as PrismaService;
     const access = {
       assertPermission: jest.fn().mockResolvedValue(undefined),
       isPlatformAdmin: jest.fn().mockReturnValue(false),
       can: jest.fn().mockResolvedValue(false),
     } as unknown as WorkspaceAccessService;
-    return { svc: new AttendanceService(prisma, access), attendance, holiday };
+    return { svc: new AttendanceService(prisma, access), attendance, holiday, leaveRequest };
   }
 
   it('creates the row when nothing exists for today', async () => {
@@ -426,13 +557,16 @@ describe('AttendanceService.checkOut — leave markers are not open check-ins', 
     // so the service reads workspace.settings first. No timezone declared here, which
     // is the common case and keeps these tests on the server's zone.
     const workspace = { findUnique: jest.fn().mockResolvedValue({ settings: {} }) };
-    const prisma = { attendance, holiday, workspace } as unknown as PrismaService;
+    // Check-in, check-out and corrections ask whether the day carries approved
+    // half-day leave. None, unless a case says so.
+    const leaveRequest = { findFirst: jest.fn().mockResolvedValue(null) };
+    const prisma = { attendance, holiday, workspace, leaveRequest } as unknown as PrismaService;
     const access = {
       assertPermission: jest.fn().mockResolvedValue(undefined),
       isPlatformAdmin: jest.fn().mockReturnValue(false),
       can: jest.fn().mockResolvedValue(false),
     } as unknown as WorkspaceAccessService;
-    return { svc: new AttendanceService(prisma, access), attendance };
+    return { svc: new AttendanceService(prisma, access), attendance, leaveRequest, access };
   }
 
   it('refuses to check out against an ON_LEAVE marker', async () => {
@@ -462,5 +596,182 @@ describe('AttendanceService.checkOut — leave markers are not open check-ins', 
     const call = attendance.update.mock.calls[0][0] as { data: Record<string, unknown> };
     expect(call.data.checkOutTime).toBeInstanceOf(Date);
     expect(typeof call.data.workHours).toBe('number');
+  });
+});
+
+describe('AttendanceService — a shift that runs past midnight', () => {
+  const member = { id: 'user-MEMBER', name: 'Member' } as User;
+  const HOUR = 60 * 60 * 1000;
+
+  /** `yesterday` is the open row filed under the previous business day, if any. */
+  function build(yesterday: Partial<Attendance> | null, todays: Partial<Attendance> | null = null) {
+    const attendance = {
+      // Asked for one exact day at a time: today's row, or the previous day's.
+      findFirst: jest.fn(({ where }: { where: { date?: unknown; checkOutTime?: unknown } }) =>
+        Promise.resolve(
+          where.date instanceof Date && where.checkOutTime === null ? yesterday : todays,
+        ),
+      ),
+      create: jest.fn().mockImplementation(({ data }) =>
+        Promise.resolve({
+          checkOutTime: null,
+          workHours: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          ...data,
+        }),
+      ),
+      update: jest
+        .fn()
+        .mockImplementation(({ data }) =>
+          Promise.resolve({ ...yesterday, ...data, createdAt: new Date(), updatedAt: new Date() }),
+        ),
+    };
+    const prisma = {
+      attendance,
+      holiday: { findFirst: jest.fn().mockResolvedValue(null) },
+      workspace: { findUnique: jest.fn().mockResolvedValue({ settings: {} }) },
+      leaveRequest: { findFirst: jest.fn().mockResolvedValue(null) },
+    } as unknown as PrismaService;
+    const access = {
+      assertPermission: jest.fn().mockResolvedValue(undefined),
+      isPlatformAdmin: jest.fn().mockReturnValue(false),
+      can: jest.fn().mockResolvedValue(false),
+    } as unknown as WorkspaceAccessService;
+    return { svc: new AttendanceService(prisma, access), attendance };
+  }
+
+  const openSince = (hoursAgo: number): Partial<Attendance> => {
+    const checkInTime = new Date(Date.now() - hoursAgo * HOUR);
+    return {
+      id: 'att-y',
+      workspaceId: 'w1',
+      userId: member.id,
+      date: new Date('2026-08-07T00:00:00.000Z'),
+      checkInTime,
+      checkOutTime: null,
+      status: 'PRESENT',
+      isHoliday: false,
+      isWeekend: false,
+      notes: '',
+    };
+  };
+
+  // Check-out looked only for a row dated today, so anybody still at work when
+  // the office's day turned over was told "Not checked in today".
+  it('closes the shift that started yesterday and is still running', async () => {
+    const { svc, attendance } = build(openSince(6));
+    await svc.checkOut(member, { workspaceId: 'w1' });
+    const { where, data } = attendance.update.mock.calls[0][0] as {
+      where: { id: string };
+      data: { workHours: number; checkOutTime: Date };
+    };
+    expect(where.id).toBe('att-y');
+    expect(data.checkOutTime).toBeInstanceOf(Date);
+    expect(data.workHours).toBeGreaterThan(5.9);
+    expect(data.workHours).toBeLessThan(6.1);
+  });
+
+  it('does not let a new day be started on top of it', async () => {
+    const { svc, attendance } = build(openSince(6));
+    await expect(svc.checkIn(member, { workspaceId: 'w1' })).rejects.toThrow(
+      /still checked in from yesterday/i,
+    );
+    expect(attendance.create).not.toHaveBeenCalled();
+  });
+
+  // Past the window the check-out was simply forgotten. Closing the row now
+  // would credit every hour since — a day and a night of "work".
+  it('leaves a day whose check-out was forgotten for a correction', async () => {
+    const { svc, attendance } = build(openSince(30));
+    await expect(svc.checkOut(member, { workspaceId: 'w1' })).rejects.toThrow('Not checked in today');
+    expect(attendance.update).not.toHaveBeenCalled();
+    // ...and it does not stop the next day from starting.
+    await expect(svc.checkIn(member, { workspaceId: 'w1' })).resolves.toBeDefined();
+  });
+
+  it('says where the caller stands: the running shift, and no day left open', async () => {
+    const { svc } = build({ ...openSince(6), createdAt: new Date(), updatedAt: new Date() });
+    // The "left open" probe selects by a date RANGE, which this double answers
+    // with today's row — none.
+    const standing = await svc.current(member, 'w1');
+    expect(standing.continuing).toBe(true);
+    expect(standing.record?.id).toBe('att-y');
+    expect(standing.unclosed).toBeNull();
+  });
+});
+
+describe('AttendanceService — a day with approved half-day leave', () => {
+  const member = { id: 'user-MEMBER', name: 'Member' } as User;
+  const day = new Date('2026-08-10T00:00:00.000Z'); // a Monday
+
+  function build(existing: Partial<Attendance> | null) {
+    const attendance = {
+      findFirst: jest.fn().mockResolvedValue(existing),
+      create: jest.fn().mockImplementation(({ data }) =>
+        Promise.resolve({ checkOutTime: null, workHours: null, createdAt: new Date(), updatedAt: new Date(), ...data }),
+      ),
+      update: jest
+        .fn()
+        .mockImplementation(({ data }) =>
+          Promise.resolve({ ...existing, ...data, createdAt: new Date(), updatedAt: new Date() }),
+        ),
+    };
+    const leaveRequest = { findFirst: jest.fn().mockResolvedValue({ id: 'half' }) };
+    const prisma = {
+      attendance,
+      holiday: { findFirst: jest.fn().mockResolvedValue(null) },
+      // An office that starts at 08:30 on the UTC clock: a 13:00 arrival is
+      // four and a half hours after it.
+      workspace: { findUnique: jest.fn().mockResolvedValue({ settings: { timezone: 'UTC' } }) },
+      leaveRequest,
+    } as unknown as PrismaService;
+    const access = {
+      assertPermission: jest.fn().mockResolvedValue(undefined),
+      isPlatformAdmin: jest.fn().mockReturnValue(false),
+      can: jest.fn().mockResolvedValue(false),
+    } as unknown as WorkspaceAccessService;
+    return { svc: new AttendanceService(prisma, access), attendance, leaveRequest };
+  }
+
+  beforeAll(() => {
+    // Only the clock: 13:00 UTC on the Monday.
+    jest.useFakeTimers({
+      now: new Date('2026-08-10T13:00:00.000Z'),
+      doNotFake: ['nextTick', 'setImmediate', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'queueMicrotask'],
+    });
+  });
+  afterAll(() => jest.useRealTimers());
+
+  // Nothing in attendance knew the leave existed: the morning off made the
+  // afternoon's arrival four and a half hours late.
+  it('an afternoon arrival is a half day, not a late one', async () => {
+    const { svc, attendance, leaveRequest } = build(null);
+    await svc.checkIn(member, { workspaceId: 'w1' });
+    expect(leaveRequest.findFirst).toHaveBeenCalledWith({
+      where: { workspaceId: 'w1', userId: member.id, status: 'APPROVED', type: 'HALF_DAY', startDate: day },
+      select: { id: true },
+    });
+    const { data } = attendance.create.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(data).toMatchObject({ status: 'HALF_DAY', lateMinutes: 0 });
+  });
+
+  it('and it closes as a half day however long the afternoon was', async () => {
+    const { svc, attendance } = build({
+      id: 'att-1',
+      workspaceId: 'w1',
+      userId: member.id,
+      date: day,
+      checkInTime: new Date('2026-08-10T08:00:00.000Z'),
+      checkOutTime: null,
+      status: 'HALF_DAY',
+      isHoliday: false,
+      isWeekend: false,
+      notes: '',
+    });
+    await svc.checkOut(member, { workspaceId: 'w1' });
+    const { data } = attendance.update.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(data.status).toBe('HALF_DAY');
+    expect(data.workHours).toBe(5);
   });
 });

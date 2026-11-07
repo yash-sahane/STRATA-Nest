@@ -6,6 +6,7 @@ import {
   isWeekend,
   weekOfMonth,
 } from './attendance-compute';
+import { minutesOfDayIn, workScheduleOf } from '@strata/config';
 
 // Local-time Date at a given hour:minute (compute uses getHours/getMinutes).
 const at = (h: number, m: number): Date => new Date(2026, 5, 15, h, m, 0);
@@ -152,5 +153,53 @@ describe('attendance-compute — day rules are UTC (TZ boundary)', () => {
       expect(isWeekend(new Date(`${iso}T12:00:00.000Z`))).toBe(start);
       expect(isWeekend(new Date(`${iso}T23:59:59.999Z`))).toBe(start);
     }
+  });
+});
+
+/**
+ * The same rules, kept by an OFFICE's clock rather than the server's. Every
+ * instant below is written in UTC, so these hold wherever the suite runs.
+ */
+describe('attendance-compute — a workspace-declared schedule', () => {
+  const kolkata = workScheduleOf({ timezone: 'Asia/Kolkata' }); // 08:30 + 15m, IST
+  // 09:00 in Kolkata. On a UTC host the server's own clock reads 03:30.
+  const nineIst = new Date('2026-06-15T03:30:00.000Z');
+
+  it('reads the time of day off the office wall clock', () => {
+    expect(minutesOfDayIn(nineIst, 'Asia/Kolkata')).toBe(9 * 60);
+    expect(minutesOfDayIn(nineIst, 'UTC')).toBe(3 * 60 + 30);
+    // Midnight is 0, not 24:00 — the hour cycle a locale picks by default varies.
+    expect(minutesOfDayIn(new Date('2026-06-14T18:30:00.000Z'), 'Asia/Kolkata')).toBe(0);
+  });
+
+  it('grades an arrival against the office clock, whatever the host is set to', () => {
+    expect(isLateCheckIn(nineIst, kolkata)).toBe(true);
+    expect(calculateLateMinutes(nineIst, kolkata)).toBe(15); // 09:00 less 08:45
+    expect(determineAttendanceStatus(nineIst, null, null, true, kolkata)).toBe('LATE');
+  });
+
+  it('uses the start time and grace period the workspace declared', () => {
+    const lateStart = workScheduleOf({
+      timezone: 'Asia/Kolkata',
+      workdayStart: '10:00',
+      lateGraceMinutes: 0,
+    });
+    expect(isLateCheckIn(nineIst, lateStart)).toBe(false);
+    expect(calculateLateMinutes(nineIst, lateStart)).toBe(0);
+    const tenOhOne = new Date('2026-06-15T04:31:00.000Z');
+    expect(isLateCheckIn(tenOhOne, lateStart)).toBe(true);
+    expect(calculateLateMinutes(tenOhOne, lateStart)).toBe(1);
+  });
+
+  it('falls back field by field on a stored value it cannot use', () => {
+    const fallback = workScheduleOf({ workdayStart: '25:99', lateGraceMinutes: -5 });
+    expect(fallback.startMinutes).toBe(8 * 60 + 30);
+    expect(fallback.graceMinutes).toBe(15);
+    expect(workScheduleOf(null).startMinutes).toBe(8 * 60 + 30);
+    // One bad field does not discard the good one next to it.
+    expect(workScheduleOf({ workdayStart: '09:15', lateGraceMinutes: 'ten' })).toMatchObject({
+      startMinutes: 9 * 60 + 15,
+      graceMinutes: 15,
+    });
   });
 });

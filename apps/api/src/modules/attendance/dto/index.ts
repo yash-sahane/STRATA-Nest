@@ -39,6 +39,8 @@ export class CreateAttendanceDto {
   @IsOptional() @IsStrictBoolean() @IsBoolean() isHoliday?: boolean;
 }
 export class UpdateAttendanceDto {
+  /** HR correction only: when the member actually arrived. */
+  @IsOptional() @IsDateString() checkInTime?: string;
   @IsOptional() @IsDateString() checkOutTime?: string;
   @IsOptional() @IsNumber() @Min(0) @Max(24) workHours?: number;
   @IsOptional() @IsIn(ATTENDANCE_STATUSES) status?: string;

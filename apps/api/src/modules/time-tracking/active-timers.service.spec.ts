@@ -1,6 +1,7 @@
-import { NotFoundException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import type { PrismaService } from '@strata/prisma';
 import type { User } from '@prisma/client';
+import type { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { ActiveTimersService } from './time-tracking.services';
 
 /**
@@ -23,8 +24,6 @@ describe('ActiveTimersService — per-user ownership scoping', () => {
     isPaused: false,
     pausedAt: null,
     totalPausedTime: 0,
-    type: 'TIMER',
-    pomodoroSettings: null,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
@@ -40,9 +39,13 @@ describe('ActiveTimersService — per-user ownership scoping', () => {
     };
     const prisma = {
       activeTimer,
+      task: { findUnique: jest.fn().mockResolvedValue({ id: 'task-1' }) },
       $transaction: (ops: unknown[]) => Promise.all(ops),
     } as unknown as PrismaService;
-    return { svc: new ActiveTimersService(prisma), activeTimer };
+    const access = {
+      assertPermission: jest.fn().mockResolvedValue(undefined),
+    } as unknown as WorkspaceAccessService;
+    return { svc: new ActiveTimersService(prisma, access), activeTimer, prisma, access };
   }
 
   it('retrieve: owner gets their timer', async () => {
@@ -53,14 +56,6 @@ describe('ActiveTimersService — per-user ownership scoping', () => {
   it('retrieve: another user gets 404 (not the owner)', async () => {
     const { svc } = makeService();
     await expect(svc.retrieve(attacker, 'timer-1')).rejects.toBeInstanceOf(NotFoundException);
-  });
-
-  it('update: another user cannot mutate the owner’s timer', async () => {
-    const { svc, activeTimer } = makeService();
-    await expect(svc.update(attacker, 'timer-1', { isPaused: true })).rejects.toBeInstanceOf(
-      NotFoundException,
-    );
-    expect(activeTimer.update).not.toHaveBeenCalled();
   });
 
   it('remove: another user cannot delete the owner’s timer', async () => {
@@ -74,5 +69,72 @@ describe('ActiveTimersService — per-user ownership scoping', () => {
     await svc.list(owner, { userId: attacker.id });
     const call = activeTimer.findMany.mock.calls[0][0] as { where: { userId: string } };
     expect(call.where.userId).toBe(owner.id);
+  });
+});
+
+/**
+ * A timer outlives what it was started for. Once its owner lost the right to
+ * log time in its workspace, Stop answered 403, a switch answered 403 and a
+ * plain start 409 — and the header chip went on ticking. Its task could be
+ * deleted too, taking the only Stop button with it. The timer now says which,
+ * and its owner can always throw it away.
+ */
+describe('ActiveTimersService — a timer that can no longer be filed', () => {
+  const owner = { id: 'user-OWNER' } as User;
+  const timer = {
+    id: 'timer-9',
+    userId: owner.id,
+    workspaceId: 'ws-left',
+    taskId: 'task-gone',
+    taskTitle: 'Ship it',
+    taskHierarchyId: 'TTV-1',
+    projectId: 'p1',
+    description: '',
+    startTime: new Date(),
+    isPaused: false,
+    pausedAt: null,
+    totalPausedTime: 0,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+
+  function makeService(opts: { canLog: boolean; taskExists: boolean }) {
+    const activeTimer = {
+      findUnique: jest.fn().mockResolvedValue(timer),
+      findMany: jest.fn().mockResolvedValue([timer]),
+      count: jest.fn().mockResolvedValue(1),
+      delete: jest.fn().mockResolvedValue(timer),
+    };
+    const prisma = {
+      activeTimer,
+      task: { findUnique: jest.fn().mockResolvedValue(opts.taskExists ? { id: 'task-gone' } : null) },
+      $transaction: (ops: unknown[]) => Promise.all(ops),
+    } as unknown as PrismaService;
+    const access = {
+      assertPermission: jest.fn(() =>
+        opts.canLog ? Promise.resolve(undefined) : Promise.reject(new ForbiddenException('no')),
+      ),
+    } as unknown as WorkspaceAccessService;
+    return { svc: new ActiveTimersService(prisma, access), activeTimer };
+  }
+
+  it('says when its workspace no longer lets its owner log time', async () => {
+    const { svc } = makeService({ canLog: false, taskExists: true });
+    const { items } = await svc.list(owner, {});
+    expect(items[0]).toMatchObject({ id: 'timer-9', canLog: false, taskMissing: false });
+  });
+
+  it('says when its task has been deleted', async () => {
+    const { svc } = makeService({ canLog: true, taskExists: false });
+    await expect(svc.retrieve(owner, 'timer-9')).resolves.toMatchObject({
+      canLog: true,
+      taskMissing: true,
+    });
+  });
+
+  it('lets its owner discard it even where they can no longer log time', async () => {
+    const { svc, activeTimer } = makeService({ canLog: false, taskExists: false });
+    await svc.remove(owner, 'timer-9');
+    expect(activeTimer.delete).toHaveBeenCalledWith({ where: { id: 'timer-9' } });
   });
 });

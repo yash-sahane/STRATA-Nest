@@ -1,4 +1,5 @@
 import type { PrismaService } from '@strata/prisma';
+import { businessDayMarker } from '@strata/config';
 import type { User } from '@prisma/client';
 import { LeaveApprovalService } from './leave-approval.service';
 import { LEAVE_TYPE_TO_BALANCE_FIELD, countWorkingDays, requiredUnits } from './leave-balance';
@@ -31,7 +32,15 @@ const BALANCE = { id: 'b1', paidLeave: 21, unpaidLeave: 0, halfDay: 12, compOff:
 
 function build(
   partial: Record<string, unknown>,
-  opts: { covered?: boolean; balance?: typeof BALANCE; employee?: null } = {},
+  opts: {
+    covered?: boolean;
+    balance?: typeof BALANCE;
+    employee?: null;
+    /** Declared (non-optional) holidays inside the leave's range. */
+    holidays?: Date[];
+    /** Everybody in the workspace who can approve leave. */
+    approvers?: string[];
+  } = {},
 ) {
   // Complete the row so leaveRequestResponse (which reads dates) doesn't crash.
   const request = {
@@ -52,15 +61,28 @@ function build(
   // against, exactly as `UPDATE ... WHERE status = $1` does in Postgres.
   const row: Record<string, unknown> = { ...request };
   const leaveRequest = {
-    findUnique: jest.fn().mockResolvedValue(request),
+    // What the service READ earlier (load(), cancel()) is the request as it was
+    // handed in; a probe asking for a column (`select`) after a failed claim
+    // sees the row as it is now.
+    findUnique: jest.fn(async (args?: { select?: unknown }) => (args?.select ? { ...row } : request)),
     findUniqueOrThrow: jest.fn(async () => ({ ...row })),
     update: jest.fn(async ({ data }: { data: Record<string, unknown> }) => {
       Object.assign(row, data);
       return { ...row };
     }),
+    // Matches only while EVERY column it names still holds what it names —
+    // `UPDATE ... WHERE status = $1 AND days_count = $2 ...` in Postgres.
     updateMany: jest.fn(
       async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
-        if (where.status !== undefined && where.status !== row.status) return { count: 0 };
+        for (const [key, expected] of Object.entries(where)) {
+          if (key === 'id') continue;
+          const actual = row[key];
+          const same =
+            expected instanceof Date
+              ? actual instanceof Date && actual.getTime() === expected.getTime()
+              : actual === expected;
+          if (!same) return { count: 0 };
+        }
         Object.assign(row, data);
         return { count: 1 };
       },
@@ -75,16 +97,25 @@ function build(
     createMany: jest.fn().mockResolvedValue({ count: 0 }),
     deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
   };
-  const tx = { leaveRequest, leaveBalance, attendance };
+  // Approval reads the calendar before it lays the ON_LEAVE markers.
+  const holiday = {
+    findMany: jest.fn().mockResolvedValue((opts.holidays ?? []).map((date) => ({ date }))),
+  };
+  const tx = { leaveRequest, leaveBalance, attendance, holiday };
   const prisma = {
     leaveRequest,
     leaveBalance,
     attendance,
+    holiday,
+    // No settings: the business day is the server's zone.
+    workspace: { findUnique: jest.fn().mockResolvedValue({ settings: {} }) },
     user: {
       findUnique: jest
         .fn()
         .mockResolvedValue(opts.employee === null ? null : { email: 'u2@corp.com', name: 'Ada' }),
     },
+    // No stored row means "everything on", which is what these cases assume.
+    notificationPreference: { findUnique: jest.fn().mockResolvedValue(null) },
     // Model the ROLLBACK too: a body that throws must leave the row exactly as
     // it found it, which is what makes "the claim is undone when the balance
     // turns out not to cover it" a real assertion instead of a vacuous one.
@@ -102,6 +133,8 @@ function build(
   const access = {
     assertPermission: jest.fn().mockResolvedValue(undefined),
     can: jest.fn().mockResolvedValue(true),
+    // Two approvers unless a case says otherwise: the manager and one other.
+    membersHolding: jest.fn().mockResolvedValue(opts.approvers ?? ['mgr', 'mgr2']),
   } as never;
   const events = { emit: jest.fn() } as never;
   const email = { send: jest.fn().mockResolvedValue({ success: true }) };
@@ -185,6 +218,43 @@ describe('LeaveApprovalService.approve (D9 balance deduction)', () => {
     expect(row.approvedBy).toBe('mgr');
   });
 
+  // The requester changed 1 day to 5 between the approval's read and its
+  // claim: the request went on record APPROVED for 5 days with 1 debited, and
+  // cancelling it later refunded 5.
+  it('does not approve a request that changed after it was read', async () => {
+    const { svc, row, leaveBalance, attendance } = build({
+      id: 'lr42', workspaceId: 'w1', userId: 'u2', type: 'CASUAL', daysCount: 1,
+      startDate: new Date('2026-03-02'), status: 'PENDING',
+    });
+    // The edit lands after load() read the request.
+    Object.assign(row, { endDate: new Date('2026-03-06'), daysCount: 5 });
+    await expect(svc.approve(mgr, 'lr42')).rejects.toThrow(/changed while you were deciding/);
+    expect(row.status).toBe('PENDING');
+    expect(leaveBalance.updateMany).not.toHaveBeenCalled();
+    expect(attendance.createMany).not.toHaveBeenCalled();
+  });
+
+  it('charges what the claimed row says, and lays its markers', async () => {
+    const { svc, leaveBalance, attendance, leaveRequest } = build({
+      id: 'lr43', workspaceId: 'w1', userId: 'u2', type: 'CASUAL', daysCount: 3,
+      startDate: new Date('2026-03-02'), endDate: new Date('2026-03-04'), status: 'PENDING',
+    });
+    await svc.approve(mgr, 'lr43');
+    expect(leaveRequest.updateMany.mock.calls[0][0].where).toEqual({
+      id: 'lr43',
+      status: 'PENDING',
+      type: 'CASUAL',
+      startDate: new Date('2026-03-02'),
+      endDate: new Date('2026-03-04'),
+      daysCount: 3,
+    });
+    expect(leaveBalance.updateMany).toHaveBeenCalledWith({
+      where: { id: 'b1', paidLeave: { gte: 3 } },
+      data: { paidLeave: { decrement: 3 } },
+    });
+    expect(attendance.createMany).toHaveBeenCalled();
+  });
+
   it('an approval cannot overwrite a rejection that already landed', async () => {
     const { svc, row } = build({
       id: 'lr41', workspaceId: 'w1', userId: 'u2', type: 'CASUAL', daysCount: 1,
@@ -203,6 +273,22 @@ describe('LeaveApprovalService.approve (D9 balance deduction)', () => {
     });
     await expect(svc.approve(mgr, 'lr3')).rejects.toThrow(/your own leave/i);
   });
+
+  // With one approver in the workspace, that person's own request had nobody
+  // to decide it: it stayed pending for good.
+  it('lets the ONLY approver decide their own request', async () => {
+    const { svc, row, leaveBalance } = build(
+      {
+        id: 'lr4', workspaceId: 'w1', userId: 'mgr', type: 'CASUAL', daysCount: 1,
+        startDate: new Date('2026-03-02'), status: 'PENDING',
+      },
+      { approvers: ['mgr'] },
+    );
+    await svc.approve(mgr, 'lr4');
+    expect(row.status).toBe('APPROVED');
+    expect(row.approvedBy).toBe('mgr');
+    expect(leaveBalance.updateMany).toHaveBeenCalled();
+  });
 });
 
 describe('LeaveApprovalService.cancel', () => {
@@ -220,8 +306,14 @@ describe('LeaveApprovalService.cancel', () => {
     });
     expect(leaveRequest.updateMany).toHaveBeenCalledWith({
       // Conditional on the status the cancellation was decided against, so two
-      // simultaneous cancellations cannot both refund the allowance.
-      where: { id: 'lr6', status: 'APPROVED' },
+      // simultaneous cancellations cannot both refund the allowance — and on the
+      // end and days the refund is worked out from.
+      where: {
+        id: 'lr6',
+        status: 'APPROVED',
+        endDate: new Date('2099-03-01'),
+        daysCount: 3,
+      },
       data: { status: 'CANCELLED' },
     });
   });
@@ -235,12 +327,82 @@ describe('LeaveApprovalService.cancel', () => {
     expect(leaveBalance.update).not.toHaveBeenCalled();
   });
 
-  it('refuses to cancel leave that has already started', async () => {
+  it('leaves leave that is over alone: it is a record of time taken', async () => {
     const { svc } = build({
       id: 'lr8', workspaceId: 'w1', userId: 'u2', type: 'CASUAL', daysCount: 3,
       startDate: new Date('2020-03-01'), status: 'APPROVED',
     });
-    await expect(svc.cancel(owner, 'lr8')).rejects.toThrow(/already started/i);
+    await expect(svc.cancel(mgr, 'lr8')).rejects.toThrow(/over/i);
+  });
+
+  describe('leave under way', () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const today = businessDayMarker();
+    /** Two weeks of leave that began a week ago — working days on both sides of today. */
+    const running = (id: string) => ({
+      id, workspaceId: 'w1', userId: 'u2', type: 'CASUAL', daysCount: 10,
+      startDate: new Date(today.getTime() - 7 * DAY),
+      endDate: new Date(today.getTime() + 7 * DAY),
+      status: 'APPROVED',
+    });
+
+    it('an approver ends it early: it ends yesterday, and the days not taken go back', async () => {
+      const req = running('lr11');
+      const { svc, row, leaveBalance, attendance } = build(req);
+      await svc.cancel(mgr, 'lr11');
+      const yesterday = new Date(today.getTime() - DAY);
+      expect(row.endDate).toEqual(yesterday);
+      expect(row.status).toBe('APPROVED');
+      const taken = countWorkingDays(req.startDate, yesterday);
+      expect(row.daysCount).toBe(taken);
+      expect(leaveBalance.update).toHaveBeenCalledWith({
+        where: { id: 'b1' },
+        data: { paidLeave: { increment: 10 - taken } },
+      });
+      // Only the markers from today on come off; the days taken stay taken.
+      expect(attendance.deleteMany).toHaveBeenCalledWith({
+        where: {
+          workspaceId: 'w1', userId: 'u2', status: 'ON_LEAVE',
+          date: { gte: today, lte: req.endDate },
+        },
+      });
+    });
+
+    it('its owner asks an approver, unless they are the only one', async () => {
+      const { svc } = build(running('lr12'));
+      await expect(svc.cancel(owner, 'lr12')).rejects.toThrow(/somebody who approves leave/i);
+      const alone = build(running('lr13'), { approvers: ['u2'] });
+      await alone.svc.cancel(owner, 'lr13');
+      expect(alone.row.endDate).toEqual(new Date(today.getTime() - DAY));
+    });
+
+    /** A week of leave that begins today. */
+    const startingToday = (id: string) => ({
+      id, workspaceId: 'w1', userId: 'u2', type: 'CASUAL', daysCount: 5,
+      startDate: today,
+      endDate: new Date(today.getTime() + 6 * DAY),
+      status: 'APPROVED',
+    });
+
+    // `startDate < today` read a leave starting today as not yet begun, so its
+    // owner could withdraw it on the morning they were off and have that day
+    // handed back as well.
+    it('has begun on its first day: its owner cannot withdraw it themselves', async () => {
+      const { svc, row, leaveBalance } = build(startingToday('lr14'));
+      await expect(svc.cancel(owner, 'lr14')).rejects.toThrow(/has started/i);
+      expect(row.status).toBe('APPROVED');
+      expect(leaveBalance.update).not.toHaveBeenCalled();
+    });
+
+    it('an approver ending it on its first day withdraws it — none of it was taken', async () => {
+      const { svc, row, leaveBalance } = build(startingToday('lr15'));
+      await svc.cancel(mgr, 'lr15');
+      expect(row.status).toBe('CANCELLED');
+      expect(leaveBalance.update).toHaveBeenCalledWith({
+        where: { id: 'b1' },
+        data: { paidLeave: { increment: 5 } },
+      });
+    });
   });
 
   it('withdraws only the ON_LEAVE markers the approval wrote', async () => {
@@ -348,5 +510,26 @@ describe('LeaveApprovalService decision email (rendered server-side)', () => {
     email.send.mockRejectedValueOnce(new Error('redis down'));
     await expect(svc.approve(mgr, 'lr32')).resolves.toMatchObject({ status: 'APPROVED' });
     expect(leaveRequest.updateMany).toHaveBeenCalled();
+  });
+});
+
+describe('LeaveApprovalService — a holiday inside the leave', () => {
+  // The request was not charged for the holiday, and the office is shut: the
+  // markers used to be laid without looking, so the team view showed somebody
+  // "on leave" on a day nobody was working.
+  it('lays no ON_LEAVE marker on a declared holiday', async () => {
+    const { svc, attendance } = build(
+      {
+        id: 'lr9', workspaceId: 'w1', userId: 'u2', type: 'CASUAL', daysCount: 2,
+        startDate: new Date('2026-03-02'), endDate: new Date('2026-03-04'), status: 'PENDING',
+      },
+      { holidays: [new Date('2026-03-03')] },
+    );
+    await svc.approve({ id: 'mgr' } as User, 'lr9');
+    const { data } = attendance.createMany.mock.calls[0][0] as { data: Array<{ date: Date }> };
+    expect(data.map((marker) => marker.date.toISOString().slice(0, 10))).toEqual([
+      '2026-03-02',
+      '2026-03-04',
+    ]);
   });
 });

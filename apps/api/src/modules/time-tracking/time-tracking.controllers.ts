@@ -1,16 +1,14 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Put, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import type { User } from '@prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Permission } from '../authz/permissions';
 import { RequirePermission } from '../authz/require-permission.decorator';
 import {
-  CreateActiveTimerDto,
   CreateTimeEntryDto,
   RejectTimeEntryDto,
   StartTimerDto,
   StopTimerDto,
-  UpdateActiveTimerDto,
   UpdateTimeEntryDto,
 } from './dto';
 import { ActiveTimersService, TimeEntriesService } from './time-tracking.services';
@@ -30,9 +28,11 @@ export class TimeEntriesController {
   /** approve/reject — manager-only, self-approval blocked. */
   @Post(':id/approve') approve(@CurrentUser() u: User, @Param('id') id: string) { return this.approvals.approve(u, id); }
   @Post(':id/reject') reject(@CurrentUser() u: User, @Param('id') id: string, @Body() d: RejectTimeEntryDto) { return this.approvals.reject(u, id, d.reason); }
+  @Get('approvers') approvers(@CurrentUser() u: User, @Query('workspaceId') workspaceId: string) { return this.svc.approvers(u, workspaceId); }
+  /** Everybody's logged time on one task, as totals — no entries, names or rates. */
+  @Get('task-summary') taskSummary(@CurrentUser() u: User, @Query('taskId') taskId: string) { return this.svc.taskSummary(u, taskId); }
   @Get(':id') get(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.retrieve(u, id); }
   @Patch(':id') patch(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateTimeEntryDto) { return this.svc.patch(u, id, d); }
-  @Put(':id') put(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateTimeEntryDto) { return this.svc.patch(u, id, d); }
   @Delete(':id') @HttpCode(204) remove(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.remove(u, id); }
 }
 
@@ -46,14 +46,13 @@ export class ActiveTimersController {
     private readonly timer: TimerService,
   ) {}
   @Get() list(@CurrentUser() u: User, @Query() q: Q) { return this.svc.list(u, q); }
-  @Post() create(@CurrentUser() u: User, @Body() d: CreateActiveTimerDto) { return this.svc.create(u, d); }
+  /** The same start as /start: a second door that skipped its checks was a way round them. */
+  @Post() create(@CurrentUser() u: User, @Body() d: StartTimerDto) { return this.timer.start(u, d); }
   /** timer lifecycle. */
   @Post('start') start(@CurrentUser() u: User, @Body() d: StartTimerDto) { return this.timer.start(u, d); }
   @Post('pause') pause(@CurrentUser() u: User) { return this.timer.pause(u); }
   @Post('resume') resume(@CurrentUser() u: User) { return this.timer.resume(u); }
   @Post('stop') stop(@CurrentUser() u: User, @Body() d: StopTimerDto) { return this.timer.stop(u, d); }
   @Get(':id') get(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.retrieve(u, id); }
-  @Patch(':id') patch(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateActiveTimerDto) { return this.svc.update(u, id, d); }
-  @Put(':id') put(@CurrentUser() u: User, @Param('id') id: string, @Body() d: UpdateActiveTimerDto) { return this.svc.update(u, id, d); }
   @Delete(':id') @HttpCode(204) remove(@CurrentUser() u: User, @Param('id') id: string) { return this.svc.remove(u, id); }
 }

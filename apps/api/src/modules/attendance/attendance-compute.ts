@@ -1,16 +1,22 @@
+import { minutesOfDayIn, type WorkSchedule } from '@strata/config';
+
 /**
  * Server-side attendance computation (late minutes, work hours, status).
  *
  * Two clocks, deliberately kept apart:
- *  - TIME-OF-DAY rules (isLateCheckIn / calculateLateMinutes) read the server's
- *    LOCAL wall clock off a real instant, so keep the server's timezone aligned
- *    with the workspace's working timezone.
+ *  - TIME-OF-DAY rules (isLateCheckIn / calculateLateMinutes) read a wall clock
+ *    off a real instant: the OFFICE's, when they are handed the workspace's
+ *    schedule, which is how the service calls them. Without one they fall back
+ *    to the server's local clock and the default hours below — what they always
+ *    did, before a workspace could declare its own.
  *  - DAY rules (isWeekend / weekOfMonth) read UTC parts off a date-only DAY
  *    MARKER — `Attendance.date` is a @db.Date column stored at UTC midnight, and
  *    reading its local parts shifts it to the previous day west of UTC.
  * Pass instants to the first group and day markers to the second; never swap.
  */
 export const WORK_SCHEDULE = {
+  /** Defaults only — a workspace's own start and grace period override these
+   *  (`workScheduleOf` in @strata/config). */
   START_MINUTES: 8 * 60 + 30, // 08:30
   GRACE_MINUTES: 15,
   HALF_DAY_HOURS: 4,
@@ -31,19 +37,25 @@ export function calculateWorkHours(checkIn: Date, checkOut: Date): number {
   return Number.isFinite(hours) && hours > 0 ? hours : 0;
 }
 
-function minutesOfDay(d: Date): number {
-  return d.getHours() * 60 + d.getMinutes();
+function minutesOfDay(d: Date, schedule?: WorkSchedule): number {
+  return schedule ? minutesOfDayIn(d, schedule.timeZone) : d.getHours() * 60 + d.getMinutes();
 }
 
-export function isLateCheckIn(checkIn: Date): boolean {
-  return minutesOfDay(checkIn) > WORK_SCHEDULE.START_MINUTES + WORK_SCHEDULE.GRACE_MINUTES;
+/** The minute of the day after which an arrival is late. */
+function lateAfter(schedule?: WorkSchedule): number {
+  return schedule
+    ? schedule.startMinutes + schedule.graceMinutes
+    : WORK_SCHEDULE.START_MINUTES + WORK_SCHEDULE.GRACE_MINUTES;
+}
+
+export function isLateCheckIn(checkIn: Date, schedule?: WorkSchedule): boolean {
+  return minutesOfDay(checkIn, schedule) > lateAfter(schedule);
 }
 
 /** Minutes late, measured from the END of the grace period so that "is late"
  *  and "how late" can never contradict each other. */
-export function calculateLateMinutes(checkIn: Date): number {
-  const diff =
-    minutesOfDay(checkIn) - (WORK_SCHEDULE.START_MINUTES + WORK_SCHEDULE.GRACE_MINUTES);
+export function calculateLateMinutes(checkIn: Date, schedule?: WorkSchedule): number {
+  const diff = minutesOfDay(checkIn, schedule) - lateAfter(schedule);
   return diff > 0 ? diff : 0;
 }
 
@@ -65,6 +77,8 @@ export function determineAttendanceStatus(
    * hours alone.
    */
   expectsPunctuality = true,
+  /** The office's hours. Omitted, the defaults on the server's own clock. */
+  schedule?: WorkSchedule,
 ): string {
   // Nobody was expected in, so nobody failed to turn up. A shut day with no
   // stamps at all is not an absence either — the calendar and the Team tab
@@ -77,7 +91,7 @@ export function determineAttendanceStatus(
   if (closed && (workHours as number) < WORK_SCHEDULE.MIN_CREDIT_HOURS) {
     return expectsPunctuality ? 'ABSENT' : 'HOLIDAY';
   }
-  if (expectsPunctuality && isLateCheckIn(checkIn)) {
+  if (expectsPunctuality && isLateCheckIn(checkIn, schedule)) {
     if (!closed) return 'LATE';
     return (workHours as number) < WORK_SCHEDULE.HALF_DAY_HOURS ? 'HALF_DAY' : 'LATE';
   }
