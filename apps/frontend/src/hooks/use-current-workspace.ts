@@ -2,7 +2,7 @@ import { useWorkspaceContext } from '@/components/providers/workspace-provider';
 import { useWorkspaces } from '@/hooks/use-workspace';
 import { useAuth } from '@/components/providers/auth-provider';
 import { useEffect } from 'react';
-import { setWorkspaceTimeZone } from '@/lib/utils/working-days';
+import { setWorkingWeek, setWorkspaceTimeZone } from '@/lib/utils/working-days';
 import { toast } from 'sonner';
 
 /**
@@ -35,6 +35,14 @@ export function useCurrentWorkspace() {
     useEffect(() => {
         setWorkspaceTimeZone(workspaceTimeZone);
     }, [workspaceTimeZone]);
+
+    // ...and on its working week: which Saturdays the calendar, the attendance rate
+    // and a leave's day count treat as working days, the way the API counts them.
+    // Keyed by its text so a refetch that changes nothing does not re-run it.
+    const workingWeekKey = JSON.stringify(currentWorkspace?.settings?.workingWeek ?? []);
+    useEffect(() => {
+        setWorkingWeek({ workingWeek: JSON.parse(workingWeekKey) });
+    }, [workingWeekKey]);
 
     // Wrapper function that adds toast notification
     const setCurrentWorkspaceId = (id: string) => {

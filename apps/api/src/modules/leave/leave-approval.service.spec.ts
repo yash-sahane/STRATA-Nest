@@ -107,14 +107,17 @@ function build(
   const holiday = {
     findMany: jest.fn().mockResolvedValue((opts.holidays ?? []).map((date) => ({ date }))),
   };
-  const tx = { leaveRequest, leaveBalance, attendance, holiday };
+  // No settings: the business day is the server's zone, the working week the default.
+  const workspace = { findUnique: jest.fn().mockResolvedValue({ settings: {} }) };
+  // Every decision takes the calendar lock (shared) first — see calendar-lock.ts.
+  const executeRaw = jest.fn().mockResolvedValue(1);
+  const tx = { leaveRequest, leaveBalance, attendance, holiday, workspace, $executeRaw: executeRaw };
   const prisma = {
     leaveRequest,
     leaveBalance,
     attendance,
     holiday,
-    // No settings: the business day is the server's zone.
-    workspace: { findUnique: jest.fn().mockResolvedValue({ settings: {} }) },
+    workspace,
     user: {
       findUnique: jest
         .fn()
@@ -151,10 +154,47 @@ function build(
     leaveBalance,
     attendance,
     email,
+    executeRaw,
   };
 }
 
 const mgr = { id: 'mgr' } as User;
+
+/** The advisory locks a case took, as `<sql function>:<key>`. */
+const locksTaken = (executeRaw: jest.Mock) =>
+  executeRaw.mock.calls.map(([sql, key]: [TemplateStringsArray, string]) => {
+    const fn = /pg_advisory_xact_lock(_shared)?/.exec(sql.join('?'))?.[0] ?? '?';
+    return `${fn}:${key}`;
+  });
+
+/**
+ * A decision charges or refunds by working days, so the calendar is held still
+ * while it does: a holiday or a change of working week being declared across
+ * the request waits for the decision and then re-counts it.
+ */
+describe('LeaveApprovalService — decisions hold the calendar still', () => {
+  it('an approval takes the calendar lock, shared, before its claim', async () => {
+    const { svc, executeRaw, leaveRequest } = build({
+      id: 'lr1', workspaceId: 'w1', userId: 'u2', type: 'CASUAL', daysCount: 2,
+      startDate: new Date('2026-03-02'), endDate: new Date('2026-03-03'), status: 'PENDING',
+    });
+    await svc.approve(mgr, 'lr1');
+    expect(locksTaken(executeRaw)).toEqual(['pg_advisory_xact_lock_shared:calendar:w1']);
+    expect(executeRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      leaveRequest.updateMany.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('so does a cancellation that gives days back', async () => {
+    const future = new Date(Date.UTC(new Date().getUTCFullYear() + 1, 2, 2));
+    const { svc, executeRaw } = build({
+      id: 'lr1', workspaceId: 'w1', userId: 'u2', type: 'CASUAL', daysCount: 1,
+      startDate: future, endDate: future, status: 'APPROVED',
+    });
+    await svc.cancel({ id: 'u2' } as User, 'lr1');
+    expect(locksTaken(executeRaw)).toEqual(['pg_advisory_xact_lock_shared:calendar:w1']);
+  });
+});
 
 describe('LeaveApprovalService.approve (D9 balance deduction)', () => {
   it('deducts paidLeave by ceil(days) for a paid type, only while it is covered', async () => {

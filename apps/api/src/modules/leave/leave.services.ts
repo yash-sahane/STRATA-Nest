@@ -33,6 +33,7 @@ import {
 } from './leave-balance';
 import { leaveBalanceResponse, leaveRequestResponse } from './mappers';
 import { tellPeople } from '../notifications/notice';
+import { shareCalendar } from './calendar-lock';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -227,7 +228,6 @@ export class LeaveRequestsService extends ScopedCrudService<
   async create(user: User, dto: CreateLeaveRequestDto) {
     // Authorize before the overlap/balance probes touch the target workspace.
     await this.access.assertPermission(user, dto.workspaceId, this.writePermission);
-    const range = await this.resolveRange(dto.workspaceId, dto.type, dto.startDate, dto.endDate);
 
     /**
      * Serialize submissions for this member in this workspace.
@@ -252,8 +252,14 @@ export class LeaveRequestsService extends ScopedCrudService<
      * entries, refused 98 of 110 saves).
      */
     const lockKey = `leave:${dto.workspaceId}:${user.id}`;
-    const row = await this.prisma.$transaction(async (tx) => {
+    const { row, range } = await this.prisma.$transaction(async (tx) => {
+      // The calendar first (shared), then the member: the order every leave
+      // write takes them in — see calendar-lock.ts. The days are counted under
+      // both, so a holiday declared a moment ago is counted, and one being
+      // declared now waits for this request and then re-counts it.
+      await shareCalendar(tx, dto.workspaceId);
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey})::bigint)`;
+      const range = await this.resolveRange(dto.workspaceId, dto.type, dto.startDate, dto.endDate, tx);
       await this.assertNoOverlap(user.id, dto.workspaceId, range.startDate, range.endDate, undefined, tx);
       await this.assertAffordable(
         user.id,
@@ -284,7 +290,7 @@ export class LeaveRequestsService extends ScopedCrudService<
           },
         ],
       });
-      return inserted;
+      return { row: inserted, range };
     });
     // What `createIn` does after its insert (the permission was checked above).
     this.prisma.announceWrite?.('LeaveRequest', 'create', row);
@@ -353,7 +359,19 @@ export class LeaveRequestsService extends ScopedCrudService<
     // person ended up booked twice for one day, or spending one balance twice.
     const { count } = range
       ? await this.prisma.$transaction(async (tx) => {
+          await shareCalendar(tx, row.workspaceId);
           await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`leave:${row.workspaceId}:${row.userId}`})::bigint)`;
+          // Counted again under the locks, on this transaction: the count above
+          // only shaped the change and its error messages.
+          const counted = await this.resolveRange(
+            row.workspaceId,
+            type,
+            dto.startDate ?? row.startDate.toISOString(),
+            dto.endDate ?? row.endDate.toISOString(),
+            tx,
+          );
+          range.daysCount = counted.daysCount;
+          data.daysCount = counted.daysCount;
           await this.assertNoOverlap(row.userId, row.workspaceId, range.startDate, range.endDate, id, tx);
           await this.assertAffordable(
             row.userId,
@@ -411,8 +429,9 @@ export class LeaveRequestsService extends ScopedCrudService<
     workspaceId: string,
     start: Date,
     end: Date,
+    db: Prisma.TransactionClient = this.prisma,
   ): Promise<ReadonlySet<string>> {
-    const rows = await this.prisma.holiday.findMany({
+    const rows = await db.holiday.findMany({
       where: { workspaceId, isOptional: false, date: { gte: start, lte: end } },
       select: { date: true },
     });
@@ -428,6 +447,8 @@ export class LeaveRequestsService extends ScopedCrudService<
     type: string,
     startDate: string,
     endDate: string,
+    /** The transaction holding the calendar lock, when called under it. */
+    db: Prisma.TransactionClient = this.prisma,
   ) {
     const start = parseDateOnly(startDate);
     const end = parseDateOnly(endDate);
@@ -449,11 +470,12 @@ export class LeaveRequestsService extends ScopedCrudService<
     // when sickness is reported — while a script could book last year. Leave
     // is asked for ahead; the kinds that are not planned can be recorded for a
     // while afterwards.
-    const workspace = await this.prisma.workspace.findUnique({
+    const workspace = await db.workspace.findUnique({
       where: { id: workspaceId },
       select: { settings: true },
     });
-    const today = businessDayMarker(workScheduleOf(workspace?.settings).timeZone);
+    const schedule = workScheduleOf(workspace?.settings);
+    const today = businessDayMarker(schedule.timeZone);
     const afterTheFact = AFTER_THE_FACT_LEAVE.has(type);
     const earliest = new Date(
       today.getTime() - (afterTheFact ? AFTER_THE_FACT_DAYS : 0) * MS_PER_DAY,
@@ -465,7 +487,14 @@ export class LeaveRequestsService extends ScopedCrudService<
           : 'This kind of leave has to be requested before it starts. Sick, bereavement and unpaid leave can be recorded afterwards.',
       );
     }
-    const workingDays = countWorkingDays(start, end, await this.holidaysIn(workspaceId, start, end));
+    // The workspace's own working week: a Saturday it works costs a day of
+    // leave, one it does not work costs nothing.
+    const workingDays = countWorkingDays(
+      start,
+      end,
+      await this.holidaysIn(workspaceId, start, end, db),
+      schedule,
+    );
     if (workingDays === 0) {
       throw new BadRequestException('The selected dates contain no working days.');
     }

@@ -23,6 +23,16 @@ interface DatePickerProps {
     allowClear?: boolean;
     /** For a <Label htmlFor>: the trigger is the control the label names. */
     id?: string;
+    /**
+     * The whole field switched off — a value that follows from another field,
+     * like a half-day's end date. (`disabled` is the per-day matcher.)
+     */
+    triggerDisabled?: boolean;
+    /**
+     * What the field is for, when no visible <Label> names it: the trigger's
+     * text is only the date, which says nothing about what the date is.
+     */
+    ariaLabel?: string;
 }
 
 export function DatePicker({
@@ -34,6 +44,8 @@ export function DatePicker({
     buttonClassName,
     allowClear = true,
     id,
+    triggerDisabled = false,
+    ariaLabel,
 }: DatePickerProps) {
     const [open, setOpen] = React.useState(false);
 
@@ -50,7 +62,7 @@ export function DatePicker({
     // the past (matcher `date < today`). Both left the user staring at a value
     // no interaction could remove. An explicit control is the fix, and it
     // belongs on the primitive so every caller inherits it.
-    const clearable = allowClear && !!date && !!onSelect;
+    const clearable = allowClear && !!date && !!onSelect && !triggerDisabled;
 
     // `relative` so the clear control can sit on the trigger's right edge. Every
     // call site gives the trigger `w-full`, so the wrapper and the button share
@@ -61,6 +73,16 @@ export function DatePicker({
                 <PopoverTrigger asChild>
                     <Button
                         id={id}
+                        type="button"
+                        disabled={triggerDisabled}
+                        // The value as the API takes it, for whoever needs to read
+                        // the field without parsing its label (tests, mostly).
+                        data-value={date ? format(date, 'yyyy-MM-dd') : ''}
+                        aria-label={
+                            ariaLabel
+                                ? `${ariaLabel}: ${date ? format(date, 'MMM d, yyyy') : placeholder}`
+                                : undefined
+                        }
                         variant="outline"
                         className={cn(
                             'w-full justify-start text-left font-normal',

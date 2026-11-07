@@ -1,4 +1,4 @@
-import { minutesOfDayIn, type WorkSchedule } from '@strata/config';
+import { minutesOfDayIn, workingSaturdaysOn, type WorkSchedule } from '@strata/config';
 
 /**
  * Server-side attendance computation (late minutes, work hours, status).
@@ -27,7 +27,8 @@ export const WORK_SCHEDULE = {
    * day. Under an hour on the clock is not half a day's work.
    */
   MIN_CREDIT_HOURS: 1,
-  ALTERNATE_SATURDAY_WEEKS: [1, 3],
+  // Which Saturdays are worked is the workspace's own — `workingWeek` on its
+  // schedule (DEFAULT_WORKING_SATURDAYS in @strata/config until it says).
 };
 
 /** Hours between check-in and check-out (never negative — a backwards clock
@@ -107,11 +108,17 @@ export function weekOfMonth(d: Date): number {
   return Math.ceil((d.getUTCDate() + firstDayOfWeek) / 7);
 }
 
-/** isWeekend: Sunday always; Saturday except on alternate working weeks (1 & 3).
- *  Takes a date-only DAY MARKER (UTC midnight), not a wall-clock instant. */
-export function isWeekend(d: Date): boolean {
+/** isWeekend: Sunday always; a Saturday unless the workspace works that week's
+ *  Saturday on that day (`workingWeek`, the 1st and 3rd until it says). Takes a
+ *  date-only DAY MARKER (UTC midnight), not a wall-clock instant.
+ *
+ *  The one statement of the rule: leave counting (`isNonWorkingDay`) asks this
+ *  too. It was written twice, and a workspace's own working week would have had
+ *  to be taught to both. */
+export function isWeekend(d: Date, schedule?: Pick<WorkSchedule, 'workingWeek'>): boolean {
   const day = d.getUTCDay();
   if (day === 0) return true;
-  if (day === 6) return !WORK_SCHEDULE.ALTERNATE_SATURDAY_WEEKS.includes(weekOfMonth(d));
-  return false;
+  if (day !== 6) return false;
+  const worked = workingSaturdaysOn(d.toISOString().slice(0, 10), schedule?.workingWeek ?? []);
+  return !worked.includes(weekOfMonth(d));
 }

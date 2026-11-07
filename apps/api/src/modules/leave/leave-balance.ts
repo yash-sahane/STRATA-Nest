@@ -3,8 +3,9 @@
  * required units used for server-side balance deduction on approval.
  */
 import { generateId } from '@strata/common';
+import type { WorkSchedule } from '@strata/config';
 import type { LeaveBalance, Prisma } from '@prisma/client';
-import { WORK_SCHEDULE } from '../attendance/attendance-compute';
+import { isWeekend } from '../attendance/attendance-compute';
 
 export type LeaveBalanceField = 'paidLeave' | 'unpaidLeave' | 'halfDay' | 'compOff';
 
@@ -61,19 +62,15 @@ export function parseDateOnly(value: string): Date {
   return new Date(`${value.slice(0, 10)}T00:00:00.000Z`);
 }
 
-function weekOfMonth(d: Date): number {
-  const firstDayOfWeek = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).getUTCDay();
-  return Math.ceil((d.getUTCDate() + firstDayOfWeek) / 7);
-}
+/** The workspace's working week, as a schedule carries it. Optional only for
+ *  callers with no workspace in hand, which then get the default week. */
+export type WorkingWeek = Pick<WorkSchedule, 'workingWeek'>;
 
-/** Sunday always; Saturday except on the alternate working weeks — the same
- *  rule attendance applies (WORK_SCHEDULE), read in UTC because leave dates are
- *  date-only columns stored at UTC midnight. */
-export function isNonWorkingDay(d: Date): boolean {
-  const day = d.getUTCDay();
-  if (day === 0) return true;
-  if (day === 6) return !WORK_SCHEDULE.ALTERNATE_SATURDAY_WEEKS.includes(weekOfMonth(d));
-  return false;
+/** Sunday always; a Saturday the workspace does not work — the rule attendance
+ *  applies (`isWeekend`), read in UTC because leave dates are date-only columns
+ *  stored at UTC midnight. */
+export function isNonWorkingDay(d: Date, schedule?: WorkingWeek): boolean {
+  return isWeekend(d, schedule);
 }
 
 /** 'YYYY-MM-DD' for a UTC-midnight date-only value — the key shape a holiday
@@ -90,12 +87,21 @@ export function dateOnlyKey(d: Date): string {
  * and the member was charged a day of their balance for a day the office was
  * shut. Optional so callers with no workspace context keep the weekend-only
  * rule, but LeaveRequestsService always passes one.
+ *
+ * `schedule` is the workspace's working week. Each day is counted by the rule in
+ * force ON it, so a range across a change in the working week costs what its
+ * days cost on each side of it.
  */
-export function countWorkingDays(start: Date, end: Date, holidays?: ReadonlySet<string>): number {
+export function countWorkingDays(
+  start: Date,
+  end: Date,
+  holidays?: ReadonlySet<string>,
+  schedule?: WorkingWeek,
+): number {
   let count = 0;
   const cursor = new Date(start.getTime());
   for (let i = 0; i <= MAX_LEAVE_RANGE_DAYS && cursor <= end; i += 1) {
-    if (!isNonWorkingDay(cursor) && !holidays?.has(dateOnlyKey(cursor))) count += 1;
+    if (!isNonWorkingDay(cursor, schedule) && !holidays?.has(dateOnlyKey(cursor))) count += 1;
     cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
   return count;

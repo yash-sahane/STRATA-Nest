@@ -4,15 +4,80 @@
  * Single source of truth for:
  * - date-only ('YYYY-MM-DD') <-> Date conversions using LOCAL calendar parts
  *   (never `toISOString()`, which shifts the day for non-UTC timezones), and
- * - the working-day rule: Monday-Friday plus alternate working Saturdays
- *   (weeks 1 and 3 of each month); Sundays and week 2/4/5 Saturdays are off.
+ * - the working-day rule: Monday-Friday plus the Saturdays the current
+ *   workspace works (Settings → Workspace; the 1st and 3rd of the month until
+ *   it says otherwise); Sundays are always off.
  *
  * Attendance, leave, and calendar math must all import these helpers so the
  * subsystems agree about which days count as working days.
  */
 
-/** Weeks of the month (1-5) whose Saturday is a working day. */
-export const WORKING_SATURDAY_WEEKS = [1, 3];
+/**
+ * Weeks of the month (1-5) whose Saturday is worked when a workspace has not
+ * said otherwise. Mirrors DEFAULT_WORKING_SATURDAYS in @strata/config, which the
+ * API applies; workday-defaults-parity.spec keeps the two the same.
+ */
+export const DEFAULT_WORKING_SATURDAYS: readonly number[] = [1, 3];
+
+/** One stretch of a workspace's working week, as the API stores it. */
+export interface WorkingWeekPeriod {
+  /** The first day it applies to, 'YYYY-MM-DD'. */
+  from: string;
+  /** Weeks of the month (1-5) whose Saturday is worked; [] for none. */
+  saturdays: number[];
+}
+
+/**
+ * The current workspace's working week (`settings.workingWeek`), oldest first.
+ *
+ * A history, the way the API keeps it: a change applies from the day it was
+ * made, so last month's calendar and attendance rate are read by the rule that
+ * was in force last month. Module-level for the same reason the timezone below
+ * is — the pure helpers here have no hooks. Set by useCurrentWorkspace.
+ */
+let workingWeek: WorkingWeekPeriod[] = [];
+
+const isWeekList = (value: unknown): value is number[] =>
+  Array.isArray(value) &&
+  value.every((w) => typeof w === 'number' && Number.isInteger(w) && w >= 1 && w <= 5);
+
+/** Read a stored history tolerantly — as the API does — oldest first. */
+export function workingWeekOf(settings: unknown): WorkingWeekPeriod[] {
+  const raw =
+    settings && typeof settings === 'object'
+      ? (settings as Record<string, unknown>).workingWeek
+      : undefined;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter(
+      (p): p is WorkingWeekPeriod =>
+        !!p &&
+        typeof p === 'object' &&
+        typeof (p as WorkingWeekPeriod).from === 'string' &&
+        /^\d{4}-\d{2}-\d{2}$/.test((p as WorkingWeekPeriod).from) &&
+        isWeekList((p as WorkingWeekPeriod).saturdays)
+    )
+    .map((p) => ({ from: p.from, saturdays: [...new Set(p.saturdays)].sort((a, b) => a - b) }))
+    .sort((a, b) => a.from.localeCompare(b.from));
+}
+
+/** The current workspace's working week. Set when its settings arrive. */
+export function setWorkingWeek(settings: unknown): void {
+  workingWeek = workingWeekOf(settings);
+}
+
+/** The Saturdays worked on `date` ('YYYY-MM-DD'), by the rule in force on it. */
+export function workingSaturdaysOn(
+  date: string,
+  periods: readonly WorkingWeekPeriod[] = workingWeek
+): readonly number[] {
+  let weeks: readonly number[] = DEFAULT_WORKING_SATURDAYS;
+  for (const period of periods) {
+    if (period.from > date.slice(0, 10)) break;
+    weeks = period.saturdays;
+  }
+  return weeks;
+}
 
 const pad = (n: number): string => String(n).padStart(2, '0');
 
@@ -137,12 +202,34 @@ export function getWeekOfMonth(date: string): number {
   return Math.ceil((d.getDate() + firstDayOfWeek) / 7);
 }
 
-/** Saturdays of weeks 1 and 3 are working days. */
-export function isSaturdayWorking(date: string): boolean {
-  return WORKING_SATURDAY_WEEKS.includes(getWeekOfMonth(date));
+const ORDINALS = ['1st', '2nd', '3rd', '4th', '5th'];
+
+/**
+ * The working week in a sentence, for screens that state it — by the rule in
+ * force on `date` (today unless said). "Saturdays on Week 1 and Week 3" was
+ * written into the calendar by hand, and stayed there whatever the workspace
+ * worked.
+ */
+export function describeWorkingSaturdays(date: string = todayDateOnly()): string {
+  const weeks = workingSaturdaysOn(date);
+  if (weeks.length === 0) return 'Saturdays and Sundays are off.';
+  if (weeks.length === 5) return 'Every Saturday is a working day. Sundays are off.';
+  const named = weeks.map((w) => ORDINALS[w - 1]);
+  const list =
+    named.length === 1
+      ? named[0]
+      : `${named.slice(0, -1).join(', ')} and ${named[named.length - 1]}`;
+  return `The ${list} Saturday${named.length === 1 ? '' : 's'} of the month ${
+    named.length === 1 ? 'is a working day' : 'are working days'
+  }. Other Saturdays and every Sunday are off.`;
 }
 
-/** Sunday, or a non-working (week 2/4/5) Saturday. */
+/** Whether the workspace works this Saturday, by the rule in force on the day. */
+export function isSaturdayWorking(date: string): boolean {
+  return workingSaturdaysOn(date).includes(getWeekOfMonth(date));
+}
+
+/** Sunday, or a Saturday the workspace does not work. */
 export function isWeekend(date: string): boolean {
   const day = parseDateOnly(date).getDay();
   if (day === 0) return true;
@@ -186,7 +273,7 @@ export function isHoliday(date: string, holidays?: HolidayDates): boolean {
 }
 
 /**
- * Monday-Friday, plus working Saturdays (weeks 1 and 3), minus public holidays.
+ * Monday-Friday, plus the Saturdays the workspace works, minus public holidays.
  * `holidays` is optional so existing callers keep the weekend-only rule until
  * they have a holiday list to pass.
  */
@@ -195,7 +282,7 @@ export function isWorkingDay(date: string, holidays?: HolidayDates): boolean {
   return !holidays || !holidaySetOf(holidays).has(date.slice(0, 10));
 }
 
-/** Count working days in a month, including alternate Saturdays (0-based month). */
+/** Count working days in a month, including the Saturdays worked (0-based month). */
 export function countWorkingDaysInMonth(
   year: number,
   month: number,
@@ -242,7 +329,7 @@ export function getMonthDateRange(year: number, month: number): { start: string;
 
 /**
  * Count working days in an inclusive date range (date-only strings).
- * Honors the alternate-Saturday rule so leave durations and attendance
+ * Honors the workspace's working Saturdays so leave durations and attendance
  * denominators agree about what a working day is. Pass `holidays` to exclude
  * public holidays from the count as well.
  */

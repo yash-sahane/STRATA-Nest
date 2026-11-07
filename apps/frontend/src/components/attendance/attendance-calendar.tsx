@@ -20,7 +20,12 @@ import {
   ATTENDANCE_STATUS,
   getUserLeaveDates,
 } from '@/lib/attendance-utils';
-import { businessDateOf, formatDateOnly, parseDateOnly } from '@/lib/utils/working-days';
+import {
+  businessDateOf,
+  describeWorkingSaturdays,
+  formatDateOnly,
+  parseDateOnly,
+} from '@/lib/utils/working-days';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -295,9 +300,8 @@ export function AttendanceCalendar() {
           <Info className="h-4 w-4 text-info-text mt-0.5 flex-shrink-0" />
           <div className="text-sm text-foreground">
             <p className="font-medium">Working Schedule</p>
-            <p className="text-info-text">
-              Saturdays on Week 1 and Week 3 are working days. All other Saturdays are off.
-            </p>
+            {/* The workspace's own week (Settings → Workspace), as it stands today. */}
+            <p className="text-info-text">{describeWorkingSaturdays()}</p>
           </div>
         </div>
 

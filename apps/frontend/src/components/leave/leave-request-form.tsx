@@ -11,7 +11,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import {
@@ -32,7 +31,8 @@ import {
   hasEnoughBalance,
 } from '@/lib/leave-utils';
 import { getBalanceFieldForLeaveType } from '@/lib/leave-balance-mapper';
-import { parseDateOnly } from '@/lib/utils/working-days';
+import { formatDateOnly, parseDateOnly } from '@/lib/utils/working-days';
+import { DatePicker } from '@/components/ui/date-picker';
 import { useHolidaySet } from '@/hooks/use-holidays';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
@@ -145,6 +145,12 @@ export function LeaveRequestForm({ open, onOpenChange, userId, workspaceId }: Le
       return;
     }
 
+    // The pickers are not form inputs, so `required` cannot hold them.
+    if (!startDate || !endDate) {
+      setValidationError('Choose the first and last day of the leave');
+      return;
+    }
+
     if (reason.length < 10) {
       setValidationError('Reason must be at least 10 characters long');
       return;
@@ -178,6 +184,11 @@ export function LeaveRequestForm({ open, onOpenChange, userId, workspaceId }: Le
   // Selectable range, on the LOCAL calendar: from today — or, for leave that
   // is recorded after the fact, from a month back — to one year out.
   const { min: minDate, max: maxDate } = leaveDateBounds(leaveType);
+  // The same bounds as days the pickers refuse. 'YYYY-MM-DD' compares in date order.
+  const outside = (low: string) => (day: Date) => {
+    const key = formatDateOnly(day);
+    return key < low || key > maxDate;
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -240,33 +251,33 @@ export function LeaveRequestForm({ open, onOpenChange, userId, workspaceId }: Le
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="startDate">Start Date *</Label>
-                <Input
+                {/* The app's own picker, as every other date in the app is chosen:
+                    the browser's input looked and behaved differently in each browser. */}
+                <DatePicker
                   id="startDate"
-                  type="date"
-                  value={startDate}
-                  onChange={(e) => {
-                    setStartDate(e.target.value);
-                    // Auto-set end date to same as start date
-                    if (!endDate || leaveType === 'HALF_DAY') {
-                      setEndDate(e.target.value);
+                  date={startDate ? parseDateOnly(startDate) : undefined}
+                  onSelect={(day) => {
+                    const value = day ? formatDateOnly(day) : '';
+                    setStartDate(value);
+                    // The end follows the start until it is chosen, and a half-day
+                    // is a single session on the start date.
+                    if (!endDate || leaveType === 'HALF_DAY' || (value && endDate < value)) {
+                      setEndDate(value);
                     }
                   }}
-                  min={minDate}
-                  max={maxDate}
-                  required
+                  disabled={outside(minDate)}
+                  placeholder="First day"
                 />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="endDate">End Date *</Label>
-                <Input
+                <DatePicker
                   id="endDate"
-                  type="date"
-                  value={endDate}
-                  onChange={(e) => setEndDate(e.target.value)}
-                  min={startDate || minDate}
-                  max={maxDate}
-                  disabled={leaveType === 'HALF_DAY'}
-                  required
+                  date={endDate ? parseDateOnly(endDate) : undefined}
+                  onSelect={(day) => setEndDate(day ? formatDateOnly(day) : '')}
+                  disabled={outside(startDate || minDate)}
+                  triggerDisabled={leaveType === 'HALF_DAY'}
+                  placeholder="Last day"
                 />
                 {leaveType === 'HALF_DAY' && (
                   <p className="text-xs text-muted-foreground">

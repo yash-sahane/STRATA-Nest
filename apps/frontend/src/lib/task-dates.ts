@@ -1,5 +1,6 @@
 import { differenceInCalendarDays } from 'date-fns';
-import { formatDate, parseWireDate } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
+import { businessDateOf, parseDateOnly } from '@/lib/utils/working-days';
 
 /**
  * When a task is overdue — one answer, for every screen that says so.
@@ -13,18 +14,32 @@ import { formatDate, parseWireDate } from '@/lib/utils';
  *
  * A task is overdue when it is not finished and its due DAY is before today.
  * Due today is not overdue: there is the whole of today left to do it in.
+ *
+ * Both days are the WORKSPACE's (`businessDateOf`, the zone it files its days
+ * in), not the viewer's. The Team page's counts come from the API, which reads
+ * them that way; these read the viewer's own clock, so somebody a few hours
+ * east or west of the office saw a task "overdue" here and not there, or "due
+ * today" on one screen and "due tomorrow" on the next.
  */
 
-const startOfLocalDay = (date: Date): Date =>
-  new Date(date.getFullYear(), date.getMonth(), date.getDate());
-
-/** The due date as the calendar day it names, or null when there is none. */
-export function dueDay(dueDate: string | Date | null | undefined): Date | null {
+/** The due date as the workspace day it names, 'YYYY-MM-DD', or null when there is none. */
+export function dueDayKey(dueDate: string | Date | null | undefined): string | null {
   if (!dueDate) return null;
-  // parseWireDate, not `new Date`: a date-only value read as UTC midnight is the
-  // previous day for every viewer west of UTC.
-  const parsed = parseWireDate(dueDate);
-  return Number.isNaN(parsed.getTime()) ? null : startOfLocalDay(parsed);
+  return businessDateOf(dueDate) || null;
+}
+
+/**
+ * The due date as the calendar day it names, or null when there is none — the
+ * workspace's day, at local midnight, so date arithmetic on it counts whole days.
+ */
+export function dueDay(dueDate: string | Date | null | undefined): Date | null {
+  const key = dueDayKey(dueDate);
+  return key ? parseDateOnly(key) : null;
+}
+
+/** Today, the workspace's day, at local midnight — what `dueDay` is measured against. */
+export function businessToday(now: Date = new Date()): Date {
+  return parseDateOnly(businessDateOf(now));
 }
 
 export function isTaskOverdue(
@@ -32,8 +47,9 @@ export function isTaskOverdue(
   now: Date = new Date()
 ): boolean {
   if (task.status === 'DONE') return false;
-  const due = dueDay(task.dueDate);
-  return due !== null && due.getTime() < startOfLocalDay(now).getTime();
+  const due = dueDayKey(task.dueDate);
+  // 'YYYY-MM-DD' strings compare in date order.
+  return due !== null && due < businessDateOf(now);
 }
 
 const days = (n: number) => (n === 1 ? '1 day' : `${n} days`);
@@ -50,11 +66,12 @@ export function dueDateLabel(
   task: { dueDate?: string | Date | null; status?: string | null },
   now: Date = new Date()
 ): { text: string; title: string; overdue: boolean } | null {
-  const due = dueDay(task.dueDate);
-  if (!due || !task.dueDate) return null;
-  const title = `Due ${formatDate(task.dueDate)}`;
+  const key = dueDayKey(task.dueDate);
+  if (!key) return null;
+  // The day it is due in the workspace, as every other label here counts it.
+  const title = `Due ${formatDate(key)}`;
   if (task.status === 'DONE') return { text: title, title, overdue: false };
-  const ahead = differenceInCalendarDays(due, now);
+  const ahead = differenceInCalendarDays(parseDateOnly(key), businessToday(now));
   if (ahead < 0) return { text: `Overdue by ${days(-ahead)}`, title, overdue: true };
   if (ahead === 0) return { text: 'Due today', title, overdue: false };
   if (ahead === 1) return { text: 'Due tomorrow', title, overdue: false };

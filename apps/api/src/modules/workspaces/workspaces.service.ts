@@ -16,7 +16,26 @@ import { UsersService } from '../users/users.service';
 import { tellPeople } from '../notifications/notice';
 import type { CreateWorkspaceDto, UpdateWorkspaceDto } from './dto';
 import { workspaceResponse } from './mappers';
-import { parseWorkspaceSettings } from '@strata/config';
+import {
+  businessDayMarker,
+  businessTimezone,
+  parseWorkspaceSettings,
+  settingsToStore,
+  todayIn,
+  workingWeekOf,
+  type WorkspaceSettings,
+  type WorkspaceSettingsInput,
+} from '@strata/config';
+import { lockCalendar } from '../leave/calendar-lock';
+import {
+  reconcileWorkingWeekChange,
+  sameWorkingWeekFrom,
+  type CalendarReconciliation,
+} from '../leave/holiday-reconcile';
+
+/** A working-week change re-counts every Saturday it flips, up to the furthest
+ *  leave on record: more than an interactive transaction's default five seconds. */
+const CALENDAR_TRANSACTION = { maxWait: 10_000, timeout: 120_000 };
 
 const SPEC: ListQuerySpec = {
   filterable: { name: { field: 'name' }, ownerId: { field: 'ownerId' } },
@@ -161,7 +180,7 @@ export class WorkspacesService {
           name: dto.name,
           description: dto.description ?? '',
           ownerId: user.id,
-          settings: this.checkedSettings(dto.settings),
+          settings: this.newSettings(dto.settings),
         },
       }),
       this.prisma.workspaceMember.create({
@@ -199,7 +218,7 @@ export class WorkspacesService {
         description: dto.description ?? '',
         // Held by the administrator only until the manager is in, a statement later.
         ownerId: user.id,
-        settings: this.checkedSettings(dto.settings),
+        settings: this.newSettings(dto.settings),
       },
     });
     const undo = () => this.prisma.workspace.delete({ where: { id: workspaceId } }).catch(() => undefined);
@@ -287,10 +306,88 @@ export class WorkspacesService {
     const data: Prisma.WorkspaceUpdateInput = {};
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.description !== undefined) data.description = dto.description;
-    if (dto.settings !== undefined) data.settings = this.checkedSettings(dto.settings);
-    const updated = await this.prisma.workspace.update({ where: { id: ws.id }, data });
+    const { row: updated, reconciled } =
+      dto.settings === undefined
+        ? { row: await this.prisma.workspace.update({ where: { id: ws.id }, data }), reconciled: null }
+        : await this.saveSettings(ws.id, this.checkedSettings(dto.settings), data);
+    if (reconciled) this.afterWorkingWeekChange(user, updated.id, reconciled);
     const members = await this.memberIds([updated.id]);
-    return workspaceResponse(updated, members.get(updated.id) ?? []);
+    return {
+      ...workspaceResponse(updated, members.get(updated.id) ?? []),
+      ...(reconciled ? { reconciled: this.summary(reconciled) } : {}),
+    };
+  }
+
+  /**
+   * Store a workspace's settings, and re-count what a change of working week
+   * re-prices — one transaction, under the calendar lock.
+   *
+   * The working week is a history (see WorkspaceSettings.workingWeek), folded
+   * into the row as it stands UNDER the lock: folded into a copy read before it,
+   * two saves at once each kept the history as it was, the second erased the
+   * first's change, and what the first had re-counted no longer matched any rule.
+   * A change of working week is a change of calendar, held and re-counted as a
+   * holiday is — see calendar-lock.ts: leave across a Saturday that starts or
+   * stops being worked costs a day more or less from today on.
+   */
+  private saveSettings(
+    workspaceId: string,
+    input: WorkspaceSettingsInput,
+    data: Prisma.WorkspaceUpdateInput,
+  ) {
+    // From the workspace's own today, in the zone it is declaring now. Days
+    // before keep the rule they were worked under.
+    const today = todayIn(businessTimezone(input.timezone ?? null));
+    const fromDay = businessDayMarker(input.timezone ?? null);
+    return this.prisma.$transaction(async (tx) => {
+      await lockCalendar(tx, workspaceId);
+      const current = await tx.workspace.findUniqueOrThrow({
+        where: { id: workspaceId },
+        select: { settings: true },
+      });
+      const settings: WorkspaceSettings = settingsToStore(input, current.settings, today);
+      const row = await tx.workspace.update({
+        where: { id: workspaceId },
+        data: { ...data, settings: settings as Prisma.InputJsonValue },
+      });
+      const before = workingWeekOf(current.settings);
+      const after = workingWeekOf(settings);
+      const reconciled = sameWorkingWeekFrom(today, before, after)
+        ? null
+        : await reconcileWorkingWeekChange(tx, workspaceId, fromDay, before, after);
+      return { row, reconciled };
+    }, CALENDAR_TRANSACTION);
+  }
+
+  /** What a working-week change re-counted, as the API reports it. */
+  private summary({ unannounced: _rows, ...counts }: CalendarReconciliation) {
+    return counts;
+  }
+
+  /**
+   * Once a working-week change has committed: the rows the write hook could not
+   * see are announced, and the people whose approved leave it re-counted — their
+   * balance moved — are told, as a holiday change tells them.
+   */
+  private afterWorkingWeekChange(
+    user: User,
+    workspaceId: string,
+    reconciled: CalendarReconciliation,
+  ): void {
+    for (const written of reconciled.unannounced ?? []) {
+      this.prisma.announceWrite?.(written.model, written.action, written.row);
+    }
+    if (!reconciled.peopleCharged?.length) return;
+    tellPeople(this.events, {
+      workspaceId,
+      recipients: reconciled.peopleCharged,
+      actorId: user.id,
+      type: 'LEAVE_BALANCE_ADJUSTED',
+      title: 'Leave re-counted for a change of working week',
+      message:
+        'The Saturdays this workspace works have changed from today, so approved leave across them was counted again. Open Leave to see your balance.',
+      relatedEntityType: 'LEAVE',
+    });
   }
 
   /**
@@ -303,10 +400,18 @@ export class WorkspacesService {
    * is refused here rather than stored and forgotten. Keys outside the contract
    * are dropped: the column used to keep whatever it was sent.
    */
-  private checkedSettings(input: unknown): Prisma.InputJsonValue {
+  private checkedSettings(input: unknown): WorkspaceSettingsInput {
     const parsed = parseWorkspaceSettings(input);
     if (!parsed.ok) throw new BadRequestException(parsed.message);
-    return parsed.settings as Prisma.InputJsonValue;
+    return parsed.settings;
+  }
+
+  /** Settings for a workspace that does not exist yet: nothing to fold into, and
+   *  its working week — when it declares one — holds from its first day. */
+  private newSettings(input: unknown): Prisma.InputJsonValue {
+    const checked = this.checkedSettings(input);
+    const today = todayIn(businessTimezone(checked.timezone ?? null));
+    return settingsToStore(checked, {}, today) as Prisma.InputJsonValue;
   }
 
   async remove(user: User, id: string): Promise<void> {

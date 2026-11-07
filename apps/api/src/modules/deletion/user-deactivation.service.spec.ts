@@ -51,6 +51,8 @@ function build(
     // HR is preserved: if anything ever reached for it, these would say so.
     attendance: deleted(),
     timeEntry: deleted(),
+    // The administration lock of each workspace the account is in.
+    $executeRaw: jest.fn().mockResolvedValue(1),
   };
   const prisma = {
     user: { findUnique: jest.fn().mockResolvedValue(target) },
@@ -145,5 +147,24 @@ describe('UserDeactivationService — switching an account off', () => {
     await expect(svc.deactivate(admin, 'u1')).resolves.toEqual({ deactivated: true });
     expect(tx.workspaceMember.updateMany).not.toHaveBeenCalled();
     expect(sideEffects.emitUpdates).toHaveBeenCalledWith([]);
+  });
+
+  // A manager demoted in one of these workspaces at the same moment would
+  // otherwise pass its own check while this one counted that manager.
+  it('holds each workspace’s administration still, in id order, before asking', async () => {
+    const { svc, tx, access } = build({
+      memberships: [
+        { id: 'm2', workspaceId: 'w2' },
+        { id: 'm1', workspaceId: 'w1' },
+      ],
+    });
+    await svc.deactivate(admin, 'u1');
+    const locks = tx.$executeRaw.mock.calls.map((call: unknown[]) => call.slice(1).join(','));
+    expect(locks).toEqual(['administration:w1', 'administration:w2']);
+    const lastLock = Math.max(...tx.$executeRaw.mock.invocationCallOrder);
+    const firstCheck = Math.min(
+      ...(access.capabilitiesOrphanedBy as jest.Mock).mock.invocationCallOrder,
+    );
+    expect(lastLock).toBeLessThan(firstCheck);
   });
 });

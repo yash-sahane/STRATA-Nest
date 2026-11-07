@@ -15,12 +15,131 @@ export interface WorkspaceSettings {
   workdayStart?: string;
   /** Minutes after the start before an arrival counts as late. */
   lateGraceMinutes?: number;
+  /**
+   * The Saturdays the office works, as a history: each period holds from its
+   * `from` day until the next one starts, and days before the first keep
+   * DEFAULT_WORKING_SATURDAYS.
+   *
+   * A history rather than one value because a change applies from the day it is
+   * made. The days before it were worked — and leave across them charged —
+   * under the rule in force then; read again under the new one, last month's
+   * attendance rate and balances already settled would change without anybody
+   * changing them. Written by the server (`withWorkingSaturdays`) from a
+   * request's `workingSaturdays`, never taken from a request as it is.
+   */
+  workingWeek?: WorkingWeekPeriod[];
 }
+
+/** One stretch of a workspace's working week. */
+export interface WorkingWeekPeriod {
+  /** The first day it applies to, 'YYYY-MM-DD', in the workspace's own day. */
+  from: string;
+  /** Weeks of the month (1–5) whose Saturday is a working day; [] for none. */
+  saturdays: number[];
+}
+
+/** What a request may declare: the working week as the rule from today on. */
+export type WorkspaceSettingsInput = Omit<WorkspaceSettings, 'workingWeek'> & {
+  /** Weeks of the month (1–5) whose Saturday is worked from today on; [] for none. */
+  workingSaturdays?: number[];
+};
 
 export const DEFAULT_WORKDAY_START = '08:30';
 export const DEFAULT_LATE_GRACE_MINUTES = 15;
 /** Four hours: past that it is not a grace period, it is a different start time. */
 export const MAX_LATE_GRACE_MINUTES = 240;
+/**
+ * The Saturdays worked when a workspace has not said: the 1st and the 3rd of
+ * the month — the rule every workspace ran on before it could declare its own,
+ * so a workspace that never touches the setting sees no day change. Sundays
+ * are never working days.
+ */
+export const DEFAULT_WORKING_SATURDAYS: readonly number[] = [1, 3];
+
+const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/;
+
+const isWeekList = (value: unknown): value is number[] =>
+  Array.isArray(value) &&
+  value.every((week) => typeof week === 'number' && Number.isInteger(week) && week >= 1 && week <= 5);
+
+const weekSet = (weeks: readonly number[]): number[] =>
+  [...new Set(weeks)].sort((a, b) => a - b);
+
+const sameWeeks = (a: readonly number[], b: readonly number[]): boolean =>
+  a.length === b.length && a.every((week, i) => week === b[i]);
+
+/**
+ * The working-week history a workspace's stored settings describe, oldest
+ * first. Tolerant, as `workScheduleOf` is: a malformed period is skipped, not
+ * allowed to stop anybody checking in.
+ */
+export function workingWeekOf(settings: unknown): WorkingWeekPeriod[] {
+  const raw =
+    settings && typeof settings === 'object'
+      ? (settings as Record<string, unknown>).workingWeek
+      : undefined;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter(
+      (period): period is { from: string; saturdays: number[] } =>
+        !!period &&
+        typeof period === 'object' &&
+        typeof (period as { from?: unknown }).from === 'string' &&
+        DAY_KEY.test((period as { from: string }).from) &&
+        isWeekList((period as { saturdays?: unknown }).saturdays),
+    )
+    .map((period) => ({ from: period.from, saturdays: weekSet(period.saturdays) }))
+    .sort((a, b) => a.from.localeCompare(b.from));
+}
+
+/** The Saturdays worked on `day` ('YYYY-MM-DD'), by the rule in force on it. */
+export function workingSaturdaysOn(
+  day: string,
+  periods: readonly WorkingWeekPeriod[],
+): readonly number[] {
+  let weeks: readonly number[] = DEFAULT_WORKING_SATURDAYS;
+  for (const period of periods) {
+    if (period.from > day) break;
+    weeks = period.saturdays;
+  }
+  return weeks;
+}
+
+/**
+ * The history with `saturdays` in force from `fromDay` on.
+ *
+ * Periods from `fromDay` onward are replaced — a second change on the same day
+ * corrects the first rather than stacking behind it — and nothing is added
+ * when the rule is already the one in force, so saving the settings form with
+ * the working week untouched writes no new period.
+ */
+export function withWorkingSaturdays(
+  periods: readonly WorkingWeekPeriod[],
+  saturdays: readonly number[],
+  fromDay: string,
+): WorkingWeekPeriod[] {
+  const kept = periods.filter((period) => period.from < fromDay);
+  const next = weekSet(saturdays);
+  if (sameWeeks(workingSaturdaysOn(fromDay, kept), next)) return kept;
+  return [...kept, { from: fromDay, saturdays: next }];
+}
+
+/**
+ * The settings to store: what a checked request declares, with the working
+ * week folded into the stored history from `today` — the workspace's own day
+ * — on. A request that does not mention the working week leaves it as it is.
+ */
+export function settingsToStore(
+  input: WorkspaceSettingsInput,
+  stored: unknown,
+  today: string,
+): WorkspaceSettings {
+  const { workingSaturdays, ...declared } = input;
+  const history = workingWeekOf(stored);
+  const workingWeek =
+    workingSaturdays === undefined ? history : withWorkingSaturdays(history, workingSaturdays, today);
+  return workingWeek.length ? { ...declared, workingWeek } : declared;
+}
 
 const CLOCK = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
@@ -44,9 +163,9 @@ const isBlank = (value: unknown) => value === undefined || value === null || val
  */
 export function parseWorkspaceSettings(
   input: unknown,
-): { ok: true; settings: WorkspaceSettings } | { ok: false; message: string } {
+): { ok: true; settings: WorkspaceSettingsInput } | { ok: false; message: string } {
   const raw = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
-  const settings: WorkspaceSettings = {};
+  const settings: WorkspaceSettingsInput = {};
 
   if (!isBlank(raw.timezone)) {
     if (typeof raw.timezone !== 'string' || !isValidTimeZone(raw.timezone)) {
@@ -84,6 +203,18 @@ export function parseWorkspaceSettings(
     settings.lateGraceMinutes = grace;
   }
 
+  // An empty list is a declaration — no Saturday is worked — not a blank.
+  if (raw.workingSaturdays !== undefined && raw.workingSaturdays !== null) {
+    if (!isWeekList(raw.workingSaturdays)) {
+      return {
+        ok: false,
+        message:
+          'Working Saturdays are weeks of the month: whole numbers from 1 to 5, for example [1, 3] for the 1st and 3rd. An empty list means no Saturday is worked.',
+      };
+    }
+    settings.workingSaturdays = weekSet(raw.workingSaturdays);
+  }
+
   return { ok: true, settings };
 }
 
@@ -95,6 +226,8 @@ export interface WorkSchedule {
   graceMinutes: number;
   /** IANA zone the start time is read in. */
   timeZone: string;
+  /** Which Saturdays are worked, and since when — see `workingSaturdaysOn`. */
+  workingWeek: WorkingWeekPeriod[];
 }
 
 /**
@@ -121,6 +254,7 @@ export function workScheduleOf(settings: unknown): WorkSchedule {
         ? grace
         : DEFAULT_LATE_GRACE_MINUTES,
     timeZone: businessTimezone(typeof raw.timezone === 'string' ? raw.timezone : null),
+    workingWeek: workingWeekOf(raw),
   };
 }
 

@@ -31,69 +31,50 @@ import {
   ArrowRight,
 } from 'lucide-react';
 import { formatDate, parseWireDate } from '@/lib/utils';
+import { dueDay } from '@/lib/task-dates';
+import { businessDateOf, parseDateOnly } from '@/lib/utils/working-days';
+import { differenceInCalendarDays } from 'date-fns';
 import { plural } from '@/lib/plural';
 import { EmptyState } from '@/components/ui/empty-state';
 import { useTasksRealtime, useProjectsRealtime } from '@/hooks/use-realtime';
 import { useHasPermission } from '@/hooks/use-permissions';
 import { Permission } from '@/lib/permissions';
 
-const DAY_MS = 1000 * 60 * 60 * 24;
-
-/** Local midnight of the day `date` falls on. */
-function startOfLocalDay(date: Date): Date {
-  const start = new Date(date);
-  start.setHours(0, 0, 0, 0);
-  return start;
-}
-
 /**
- * Local midnight, recomputed when the clock rolls into a new day.
+ * Today — the workspace's day, at local midnight — kept current.
  *
- * Every deadline label is relative to "today", but nothing on this page ever
- * re-derived what today is: the value was captured when the task list last
- * changed, so a dashboard left open overnight — the normal state of a
- * dashboard — kept yesterday's "Due today" until something happened to
- * refetch. Scheduling to the next local midnight rather than ticking every 24h
- * also keeps it correct across a DST boundary, where a day is 23 or 25 hours.
+ * Every deadline label is relative to "today", and nothing on this page ever
+ * re-derived what today is: a dashboard left open overnight — the normal state
+ * of a dashboard — kept yesterday's "Due today" until something happened to
+ * refetch. It is the WORKSPACE's day (lib/task-dates), which turns over at its
+ * own midnight rather than the viewer's, so it is looked at once a minute
+ * instead of being scheduled for a local midnight that is not the one that
+ * counts. That also picks up the zone once /auth/me has said what it is.
  */
 function useTodayStart(): Date {
-  const [todayStart, setTodayStart] = React.useState(() => startOfLocalDay(new Date()));
+  const [today, setToday] = React.useState(() => businessDateOf(new Date()));
 
   React.useEffect(() => {
-    let timer: ReturnType<typeof setTimeout>;
-
-    const scheduleRollover = () => {
-      const nextMidnight = startOfLocalDay(new Date());
-      nextMidnight.setDate(nextMidnight.getDate() + 1);
-      // A second of slack: firing a hair early would land back on the same day
-      // and reschedule with a ~0ms delay.
-      timer = setTimeout(
-        () => {
-          setTodayStart(startOfLocalDay(new Date()));
-          scheduleRollover();
-        },
-        nextMidnight.getTime() - Date.now() + 1000
-      );
-    };
-
-    scheduleRollover();
-    return () => clearTimeout(timer);
+    const timer = setInterval(() => {
+      const now = businessDateOf(new Date());
+      setToday((previous) => (previous === now ? previous : now));
+    }, 60_000);
+    return () => clearInterval(timer);
   }, []);
 
-  return todayStart;
+  return React.useMemo(() => parseDateOnly(today), [today]);
 }
 
 /**
- * Whole calendar days from `todayStart` to a due date, negative once it has
- * passed. The previous `Math.ceil((due - Date.now()) / day)` measured from the
- * current clock time, so every overdue task landed on 0 and rendered as
- * "Today", and a task due tomorrow rendered as "1 days". parseWireDate, not
- * `new Date`, so a date-only value is read as the calendar day the row below
- * prints and not as UTC midnight (a day earlier for every viewer west of UTC).
+ * Whole calendar days from today to a due date, negative once it has passed —
+ * both the workspace's days, as every overdue label in the app counts them
+ * (lib/task-dates). The previous `Math.ceil((due - Date.now()) / day)` measured
+ * from the current clock time, so every overdue task landed on 0 and rendered
+ * as "Today", and a task due tomorrow rendered as "1 days".
  */
 function daysUntilDue(dueDate: string, todayStart: Date): number {
-  const due = startOfLocalDay(parseWireDate(dueDate));
-  return Math.round((due.getTime() - todayStart.getTime()) / DAY_MS);
+  const due = dueDay(dueDate);
+  return due ? differenceInCalendarDays(due, todayStart) : 0;
 }
 
 /** Label and tone for a deadline that may already have passed. */
@@ -156,6 +137,16 @@ export default function DashboardPage() {
     [workspaceSprints]
   );
 
+  // Work somebody can still do. An archived project is read-only — nothing in it
+  // can be finished or re-dated — so its open tasks sat in "My Tasks" and the
+  // deadline list as overdue for good. They stay in the totals, which are a
+  // record of the work; they leave the lists, which are a call to act. The Team
+  // page's workload figures (GET /tasks/summary) leave them out the same way.
+  const liveTasks = React.useMemo(() => {
+    const archived = new Set(projects.filter((p) => p.status === 'ARCHIVED').map((p) => p.id));
+    return archived.size ? allTasks.filter((t) => !archived.has(t.projectId)) : allTasks;
+  }, [projects, allTasks]);
+
   // Calculate real stats
   const stats = React.useMemo(() => {
     // Active means active. This counted projects still being planned as well,
@@ -165,7 +156,7 @@ export default function DashboardPage() {
     const completedTasks = allTasks.filter((t) => t.status === 'DONE').length;
     // Open ones — what the list under "My Tasks" shows. The card counted
     // finished tasks too, so it read 14 above a list of 3.
-    const myTasks = allTasks.filter((t) => isAssignedTo(t, user?.id) && t.status !== 'DONE').length;
+    const myTasks = liveTasks.filter((t) => isAssignedTo(t, user?.id) && t.status !== 'DONE').length;
 
     return {
       activeProjects,
@@ -173,13 +164,15 @@ export default function DashboardPage() {
       completedTasks,
       totalTasks: allTasks.length,
       myTasks,
-      teamMembers: teamMembers.length,
+      // Not an unanswered invitation: it grants nothing until it is accepted, so
+      // it is not on the team yet (the Team page and Analytics count the same way).
+      teamMembers: teamMembers.filter((m) => m.status !== 'INVITED').length,
     };
-  }, [projects, allTasks, teamMembers, user]);
+  }, [projects, allTasks, liveTasks, teamMembers, user]);
 
   // Get my tasks: soonest due first, undated last.
   const myTasks = React.useMemo(() => {
-    return allTasks
+    return liveTasks
       .filter((t) => isAssignedTo(t, user?.id))
       .filter((t) => t.status !== 'DONE')
       .sort((a, b) => {
@@ -193,7 +186,7 @@ export default function DashboardPage() {
         return parseWireDate(a.dueDate).getTime() - parseWireDate(b.dueDate).getTime();
       })
       .slice(0, 5);
-  }, [allTasks, user]);
+  }, [liveTasks, user]);
 
   // The five nearest deadlines, soonest first. Overdue ones stay in the list —
   // they are the ones that need acting on — but are labelled as overdue below,
@@ -203,7 +196,7 @@ export default function DashboardPage() {
   // render from `todayStart` instead of being baked in here, so a rollover past
   // midnight relabels the list without waiting on a task refetch.
   const deadlines = React.useMemo(() => {
-    const tasksWithDueDates = allTasks
+    const tasksWithDueDates = liveTasks
       .filter((t) => t.dueDate && t.status !== 'DONE')
       // Whose deadlines. Everybody was shown the workspace's five nearest, so a
       // developer's dashboard was mostly other people's due dates. Somebody
@@ -227,7 +220,7 @@ export default function DashboardPage() {
         dueDate: task.dueDate!,
       };
     });
-  }, [allTasks, projects, seesTeamDeadlines, user]);
+  }, [liveTasks, projects, seesTeamDeadlines, user]);
 
   if (workspacesLoading || projectsLoading || tasksLoading || membersLoading) {
     return <PageLoader message="Loading your dashboard..." />;

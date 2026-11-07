@@ -144,9 +144,16 @@ describe('WorkspacesService.update — settings are a contract, not a bag', () =
       updatedAt: new Date(0),
     };
     const update = jest.fn().mockImplementation(({ data }) => Promise.resolve({ ...row, ...data }));
+    // Settings are saved under the calendar lock, folded into the row as it
+    // stands there (the working week is a history).
+    const tx = {
+      $executeRaw: jest.fn().mockResolvedValue(1),
+      workspace: { update, findUniqueOrThrow: jest.fn().mockResolvedValue(row) },
+    };
     const prisma = {
       workspace: { findFirst: jest.fn().mockResolvedValue(row), update },
       workspaceMember: { findMany: jest.fn().mockResolvedValue([]) },
+      $transaction: jest.fn((fn: (t: typeof tx) => unknown) => fn(tx)),
     } as unknown as PrismaService;
     const access = {
       isPlatformAdmin: jest.fn().mockReturnValue(false),
@@ -194,5 +201,141 @@ describe('WorkspacesService.update — settings are a contract, not a bag', () =
     const { svc, update } = buildUpdate();
     await expect(svc.update(user, 'w1', { settings })).rejects.toThrow(reason);
     expect(update).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The working week is the workspace's own, and a change to it applies from the
+ * day it is made: it is stored as a history, and the leave and attendance it
+ * re-prices are re-counted with it, in one transaction under the calendar lock.
+ */
+describe('WorkspacesService.update — the working week', () => {
+  const today = new Date().toISOString().slice(0, 10);
+
+  function buildWeek(
+    stored: Record<string, unknown> = { timezone: 'UTC' },
+    /** The settings as they stand once the lock is held, when another save landed first. */
+    underLock?: Record<string, unknown>,
+  ) {
+    const row = {
+      id: 'w1',
+      name: 'Acme',
+      description: '',
+      ownerId: 'u1',
+      settings: stored,
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    };
+    const update = jest.fn().mockImplementation(({ data }) => Promise.resolve({ ...row, ...data }));
+    const executeRaw = jest.fn().mockResolvedValue(1);
+    // Nothing recorded from today on: the re-count has nothing to visit.
+    const reconcile = jest.fn().mockResolvedValue({ _max: { endDate: null } });
+    const tx = {
+      $executeRaw: executeRaw,
+      workspace: {
+        update,
+        findUniqueOrThrow: jest.fn().mockResolvedValue(underLock ? { settings: underLock } : row),
+      },
+      leaveRequest: { aggregate: reconcile },
+      attendance: { aggregate: jest.fn().mockResolvedValue({ _max: { date: null } }) },
+    };
+    const prisma = {
+      workspace: { findFirst: jest.fn().mockResolvedValue(row), update },
+      workspaceMember: { findMany: jest.fn().mockResolvedValue([]) },
+      $transaction: jest.fn((fn: (t: typeof tx) => unknown) => fn(tx)),
+    } as unknown as PrismaService;
+    const access = {
+      isPlatformAdmin: jest.fn().mockReturnValue(false),
+      scopeWhere: jest.fn().mockResolvedValue({}),
+      assertPermission: jest.fn().mockResolvedValue(undefined),
+    } as unknown as WorkspaceAccessService;
+    return {
+      svc: new WorkspacesService(prisma, access, new EventEmitter2(), {} as never),
+      update,
+      prisma,
+      executeRaw,
+      reconcile,
+    };
+  }
+
+  it('a new rule holds from today, kept as history, and is re-counted under the calendar lock', async () => {
+    const { svc, update, prisma, executeRaw } = buildWeek();
+    const saved = await svc.update(user, 'w1', { settings: { timezone: 'UTC', workingSaturdays: [] } });
+    expect(update.mock.calls[0][0].data.settings).toEqual({
+      timezone: 'UTC',
+      workingWeek: [{ from: today, saturdays: [] }],
+    });
+    expect(prisma.$transaction).toHaveBeenCalled();
+    const [sql, key] = executeRaw.mock.calls[0] as [TemplateStringsArray, string];
+    expect(sql.join('?')).toContain('pg_advisory_xact_lock(');
+    expect(key).toBe('calendar:w1');
+    expect(saved).toEqual(expect.objectContaining({ reconciled: expect.any(Object) }));
+  });
+
+  it('the days before the change keep the rule they were worked under', async () => {
+    const { svc, update } = buildWeek({
+      timezone: 'UTC',
+      workingWeek: [{ from: '2026-01-05', saturdays: [2, 4] }],
+    });
+    await svc.update(user, 'w1', { settings: { timezone: 'UTC', workingSaturdays: [1, 2, 3, 4, 5] } });
+    expect(update.mock.calls[0][0].data.settings.workingWeek).toEqual([
+      { from: '2026-01-05', saturdays: [2, 4] },
+      { from: today, saturdays: [1, 2, 3, 4, 5] },
+    ]);
+  });
+
+  it('saving the form with the week untouched writes no new period and re-counts nothing', async () => {
+    const { svc, update, reconcile } = buildWeek();
+    const saved = await svc.update(user, 'w1', { settings: { timezone: 'UTC', workingSaturdays: [3, 1] } });
+    expect(update.mock.calls[0][0].data.settings).toEqual({ timezone: 'UTC' });
+    expect(reconcile).not.toHaveBeenCalled();
+    expect(saved).not.toHaveProperty('reconciled');
+  });
+
+  it('a request that does not mention the week leaves its history as it is', async () => {
+    const history = [{ from: '2026-01-05', saturdays: [] }];
+    const { svc, update, reconcile } = buildWeek({ timezone: 'UTC', workingWeek: history });
+    await svc.update(user, 'w1', { settings: { timezone: 'UTC', workdayStart: '09:00' } });
+    expect(update.mock.calls[0][0].data.settings).toEqual({
+      timezone: 'UTC',
+      workdayStart: '09:00',
+      workingWeek: history,
+    });
+    expect(reconcile).not.toHaveBeenCalled();
+  });
+
+  // Folded into a copy read before the lock, two saves at once each kept the
+  // history as it was, and the second erased the first's change.
+  it('the history is folded into the row as it stands under the lock', async () => {
+    const underLock = { from: '2026-02-02', saturdays: [2] };
+    const { svc, update, executeRaw } = buildWeek(
+      { timezone: 'UTC' },
+      { timezone: 'UTC', workingWeek: [underLock] },
+    );
+    await svc.update(user, 'w1', { settings: { timezone: 'UTC', workingSaturdays: [] } });
+    expect(executeRaw).toHaveBeenCalled();
+    expect(update.mock.calls[0][0].data.settings.workingWeek).toEqual([
+      underLock,
+      { from: today, saturdays: [] },
+    ]);
+  });
+
+  it.each([[[0]], [[6]], [[1.5]], [['1']], ['1,3']])(
+    'refuses working Saturdays %j: weeks of the month are 1 to 5',
+    async (workingSaturdays) => {
+      const { svc, update } = buildWeek();
+      await expect(
+        svc.update(user, 'w1', { settings: { workingSaturdays } as Record<string, unknown> }),
+      ).rejects.toThrow('Working Saturdays are weeks of the month');
+      expect(update).not.toHaveBeenCalled();
+    },
+  );
+
+  it('never takes a history from the request', async () => {
+    const { svc, update } = buildWeek();
+    await svc.update(user, 'w1', {
+      settings: { timezone: 'UTC', workingWeek: [{ from: '2000-01-01', saturdays: [] }] },
+    });
+    expect(update.mock.calls[0][0].data.settings).toEqual({ timezone: 'UTC' });
   });
 });

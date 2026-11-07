@@ -55,6 +55,14 @@ export interface WorkspaceSettings {
   workdayStart?: string;
   /** Minutes after the start before an arrival counts as late. Unset means 15. */
   lateGraceMinutes?: number;
+  /**
+   * Which Saturdays the office works, as a history the API keeps: each period holds
+   * from its `from` day until the next, and days before the first work the 1st and 3rd
+   * Saturdays. Read only — a save sends `workingSaturdays`, the rule from today on.
+   */
+  workingWeek?: Array<{ from: string; saturdays: number[] }>;
+  /** Sent, never received: the Saturdays worked (weeks of the month, 1-5) from today on. */
+  workingSaturdays?: number[];
 }
 
 export type ProjectStatus = 'PLANNING' | 'ACTIVE' | 'ON_HOLD' | 'COMPLETED' | 'ARCHIVED';

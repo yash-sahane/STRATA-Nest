@@ -95,6 +95,10 @@ function build(
           $executeRaw: jest.fn().mockResolvedValue(1),
           leaveRequest: prisma.leaveRequest,
           leaveBalance: prisma.leaveBalance,
+          // The days are counted under the locks, from the calendar as it
+          // stands there: its holidays and its working week.
+          holiday: prisma.holiday,
+          workspace: prisma.workspace,
         }),
       ),
     ),
@@ -303,12 +307,19 @@ describe('LeaveRequestsService write guards', () => {
         $executeRaw: executeRaw,
         leaveRequest: { ...prisma.leaveRequest, updateMany: inside },
         leaveBalance: prisma.leaveBalance,
+        holiday: prisma.holiday,
+        workspace: prisma.workspace,
       }),
     );
     const y = new Date().getUTCFullYear();
     await svc.patch(user, 'lr1', { startDate: `${y}-08-10`, endDate: `${y}-08-14` });
-    const [sql, key] = executeRaw.mock.calls[0] as [TemplateStringsArray, string];
-    expect(sql.join('?')).toContain('pg_advisory_xact_lock');
+    // The calendar first, shared — a holiday being declared waits for this —
+    // and then the person's own lock, the order every leave write takes them in.
+    const [calendarSql, calendarKey] = executeRaw.mock.calls[0] as [TemplateStringsArray, string];
+    expect(calendarSql.join('?')).toContain('pg_advisory_xact_lock_shared');
+    expect(calendarKey).toBe(`calendar:${ROW.workspaceId}`);
+    const [sql, key] = executeRaw.mock.calls[1] as [TemplateStringsArray, string];
+    expect(sql.join('?')).toContain('pg_advisory_xact_lock(');
     // The same key a new request from this person takes.
     expect(key).toBe(`leave:${ROW.workspaceId}:${ROW.userId}`);
     expect(inside).toHaveBeenCalledWith({

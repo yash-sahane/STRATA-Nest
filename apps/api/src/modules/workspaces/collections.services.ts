@@ -17,7 +17,7 @@ import type {
   User,
   WorkspaceRole,
 } from '@prisma/client';
-import { describeCapabilities } from '../authz/administration';
+import { describeCapabilities, lockAdministration } from '../authz/administration';
 import {
   PERMISSION_KEYS,
   Permission,
@@ -160,12 +160,15 @@ export class WorkspaceRolesService extends ScopedCrudService<
     user: User,
     existing: WorkspaceRole,
     next: string[],
+    /** The transaction holding the workspace's administration lock. */
+    db: Prisma.TransactionClient,
   ): Promise<void> {
     if (this.access.isPlatformAdmin(user)) return;
-    const orphaned = await this.access.capabilitiesOrphanedBy(existing.workspaceId, {
-      roleName: existing.name,
-      permissions: next,
-    });
+    const orphaned = await this.access.capabilitiesOrphanedBy(
+      existing.workspaceId,
+      { roleName: existing.name, permissions: next },
+      db,
+    );
     if (orphaned.length) {
       throw new ForbiddenException(
         `That would leave nobody active in this workspace who can ${describeCapabilities(orphaned)}. Give that to another member's role first.`,
@@ -235,8 +238,31 @@ export class WorkspaceRolesService extends ScopedCrudService<
       await this.assertGrantable(user, existing.workspaceId, permissions);
       // Taking power away from a role takes it from everybody holding it.
       await this.assertOwnersRoleKept(user, existing, permissions);
-      await this.assertStillAdministered(user, existing, permissions);
       data.permissions = permissions;
+    }
+    // A new permission list is checked against the last-manager rule and saved
+    // as one unit, under the lock a membership demotion takes: cutting this
+    // role down while somebody demotes the one other manager would otherwise
+    // pass both checks, each reading the other's target as still in charge.
+    if (data.permissions !== undefined && existing) {
+      const permissions = data.permissions as string[];
+      const row = await this.prisma.$transaction(async (tx) => {
+        await lockAdministration(tx, existing.workspaceId);
+        await this.assertStillAdministered(user, existing, permissions, tx);
+        const saved = await tx.workspaceRole.update({
+          where: { id },
+          data: data as Prisma.WorkspaceRoleUpdateInput,
+        });
+        if (rename) {
+          const scope = { workspaceId: rename.workspaceId, role: rename.from };
+          await tx.workspaceMember.updateMany({ where: scope, data: { role: rename.to } });
+          await tx.inviteCode.updateMany({ where: scope, data: { role: rename.to } });
+        }
+        return saved;
+      });
+      if (rename) await this.announceRenamedHolders(rename.workspaceId, rename.to);
+      await this.recordAudit(user, row.workspaceId, 'updated', id, row, Object.keys(data));
+      return this.map(row);
     }
     // Every row that stores the role by NAME follows it, in the SAME transaction
     // as the rename itself. Refusing the rename while the name was in use only
@@ -256,16 +282,20 @@ export class WorkspaceRolesService extends ScopedCrudService<
         this.prisma.workspaceMember.updateMany({ where: scope, data: { role: rename.to } }),
         this.prisma.inviteCode.updateMany({ where: scope, data: { role: rename.to } }),
       ]);
-      // `updateMany` is invisible to the write hook, so the holders' open
-      // screens went on resolving their permissions under the old name — which
-      // now matched no role, and read as the read-only floor until a reload.
-      const moved = await this.prisma.workspaceMember.findMany({
-        where: { workspaceId: rename.workspaceId, role: rename.to },
-      });
-      for (const member of moved) this.prisma.announceWrite?.('WorkspaceMember', 'update', member);
+      await this.announceRenamedHolders(rename.workspaceId, rename.to);
       return this.map(row);
     }
     return this.update(user, id, data);
+  }
+
+  /**
+   * `updateMany` is invisible to the write hook, so the holders' open screens
+   * went on resolving their permissions under the old name — which now matched
+   * no role, and read as the read-only floor until a reload.
+   */
+  private async announceRenamedHolders(workspaceId: string, role: string): Promise<void> {
+    const moved = await this.prisma.workspaceMember.findMany({ where: { workspaceId, role } });
+    for (const member of moved) this.prisma.announceWrite?.('WorkspaceMember', 'update', member);
   }
 
   /**

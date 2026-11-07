@@ -1,6 +1,7 @@
 import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '@strata/prisma';
 import type { Prisma, User } from '@prisma/client';
+import { lockAdministration } from '../authz/administration';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import { RefreshTokenStore } from '../auth/services/refresh-token.store';
 import { DeletionSideEffectsService, type DeletedEntity } from './deletion-side-effects.service';
@@ -40,6 +41,14 @@ export class UserDeactivationService {
         where: { userId, status: 'ACTIVE' },
         select: { id: true, workspaceId: true },
       });
+      // Each of those workspaces' administration held still until this commits,
+      // as a demotion or a removal holds it: a manager demoted in one of them at
+      // the same moment would otherwise pass its own check — this account still
+      // counted — while this check counted that manager.
+      await lockAdministration(
+        txc,
+        memberships.map((m) => m.workspaceId),
+      );
       // The rules every other way out of a workspace keeps, asked in the same
       // transaction as the writes they guard.
       await this.assertOwnsNothing(txc, target);

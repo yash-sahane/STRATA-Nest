@@ -1,4 +1,34 @@
+import type { Prisma } from '@prisma/client';
 import { Permission, isBuiltInRole, permissionsForRole, type PermissionKey } from './permissions';
+
+/**
+ * Hold a workspace's administration still until this transaction ends.
+ *
+ * Every write that can take power away asks `capabilitiesOrphaned` first, and
+ * the question is only as good as the state it reads. Two of them in flight at
+ * once each read the other's target as still ACTIVE: a workspace's only two
+ * managers demoting each other at the same moment both passed — each saw the
+ * other left in charge — and the workspace was left with nobody able to manage
+ * it. Taken by each such write (a demotion, a switch-off, a removal, leaving, a
+ * custom role cut down, an account deactivated) before its check, and released
+ * at commit, so the second check reads the first write.
+ *
+ * Several workspaces are locked in id order, so two writes that each need more
+ * than one (account deactivations) always queue rather than deadlock.
+ *
+ * The check and the write must run on THIS `tx`: a query through the plain
+ * client from inside the lock takes a second pool connection, and enough of
+ * those waiting at once starve the pool.
+ */
+export async function lockAdministration(
+  tx: Pick<Prisma.TransactionClient, '$executeRaw'>,
+  workspaceIds: string | readonly string[],
+): Promise<void> {
+  const ids = [...new Set(typeof workspaceIds === 'string' ? [workspaceIds] : workspaceIds)].sort();
+  for (const id of ids) {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`administration:${id}`})::bigint)`;
+  }
+}
 
 /**
  * The capabilities a workspace must never lose its last ACTIVE holder of.

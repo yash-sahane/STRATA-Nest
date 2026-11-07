@@ -23,7 +23,12 @@ import type {
 } from './dto';
 import { attendanceResponse, holidayResponse } from './mappers';
 import { businessDayMarker, workScheduleOf, type WorkSchedule } from '@strata/config';
-import { type HolidayReconciliation, reconcileHolidayChange } from '../leave/holiday-reconcile';
+import {
+  type CalendarReconciliation,
+  mergeReconciliations,
+  reconcileCalendarDay,
+} from '../leave/holiday-reconcile';
+import { lockCalendar } from '../leave/calendar-lock';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { tellPeople } from '../notifications/notice';
 
@@ -31,6 +36,16 @@ import { tellPeople } from '../notifications/notice';
 /** Manager-level HR marker. Attendance rows are personal, so a caller may only
  *  file/read/alter someone else's with the workspace's HR-approver permission. */
 const HR_MANAGE: PermissionKey = Permission.LeaveApprove;
+
+/**
+ * A calendar change and its re-count run as one transaction, and the re-count
+ * can touch every request and attendance row across the day — more than the
+ * five seconds Prisma gives an interactive transaction by default.
+ */
+const CALENDAR_TRANSACTION = { maxWait: 10_000, timeout: 60_000 };
+
+/** What a calendar change re-counted, as the API reports it (without the rows it announced). */
+const summary = ({ unannounced: _rows, ...counts }: CalendarReconciliation) => counts;
 
 const MS_PER_HOUR = 60 * 60 * 1000;
 const MS_PER_DAY = 24 * MS_PER_HOUR;
@@ -230,7 +245,7 @@ export class AttendanceService extends ScopedCrudService<
     // The day marker's own properties, read off the workspace calendar and the
     // calendar itself rather than taken from the request.
     const isHoliday = (await this.closedHolidayOn(dto.workspaceId, date)) !== null;
-    const dayIsWeekend = isWeekend(date);
+    const dayIsWeekend = isWeekend(date, schedule);
     const officeOpen = !isHoliday && !dayIsWeekend;
     const subject = await this.subjectOf(user, dto.workspaceId, dto.userId);
     await this.assertNotOwnRecord(user, dto.workspaceId, subject, 'file');
@@ -556,7 +571,7 @@ export class AttendanceService extends ScopedCrudService<
     // the office is open, so `closedHolidayOn` ignores those and the day is
     // graded like any other.
     const isHoliday = (await this.closedHolidayOn(dto.workspaceId, date)) !== null;
-    const dayIsWeekend = isWeekend(date);
+    const dayIsWeekend = isWeekend(date, schedule);
     const now = new Date();
     const halfDay = await this.onHalfDayLeave(dto.workspaceId, user.id, date);
     const arrival = halfDay
@@ -715,7 +730,7 @@ export class HolidaysService extends ScopedCrudService<Holiday, ReturnType<typeo
   private tellRecounted(
     user: User,
     workspaceId: string,
-    reconciled: HolidayReconciliation,
+    reconciled: CalendarReconciliation,
     what: string,
   ): void {
     if (!reconciled.peopleCharged?.length) return;
@@ -730,23 +745,41 @@ export class HolidaysService extends ScopedCrudService<Holiday, ReturnType<typeo
     });
   }
   /**
-   * Every write to the calendar is followed by `reconcileHolidayChange` for the
-   * day (or days) whose standing it may have changed, and the answer says what
-   * that did: leave re-counted, days returned, attendance re-read. The calendar
-   * used to apply only to what was written AFTER it — see holiday-reconcile.ts.
+   * Every write to the calendar and the re-count of the day (or days) whose
+   * standing it may have changed are ONE transaction, under the workspace's
+   * calendar lock — see calendar-lock.ts and holiday-reconcile.ts.
+   *
+   * They were two: the holiday committed, then the re-count ran on its own. A
+   * failure between them (a dropped connection, a deploy) left a holiday on the
+   * calendar with the leave across it still charged for the day, and nothing
+   * ever re-ran it. And a leave request written in the same moment was counted
+   * against the calendar from before the holiday, after the re-count had
+   * already looked for it. The answer still says what the re-count did: leave
+   * re-counted, days returned, attendance re-read.
    */
   async create(user: User, dto: CreateHolidayDto) {
+    await this.access.assertPermission(user, dto.workspaceId, this.createPermission);
     const date = new Date(dto.date);
-    const created = await this.createIn(user, dto.workspaceId, {
-      workspaceId: dto.workspaceId,
-      name: dto.name,
-      date,
-      isOptional: dto.isOptional ?? false,
-      description: dto.description ?? '',
-    });
-    const reconciled = await reconcileHolidayChange(this.prisma, dto.workspaceId, date);
-    this.tellRecounted(user, dto.workspaceId, reconciled, `${dto.name} on ${dto.date.slice(0, 10)} is now a holiday`);
-    return { ...created, reconciled };
+    const { row, reconciled } = await this.prisma.$transaction(
+      async (tx) => {
+        await lockCalendar(tx, dto.workspaceId);
+        const row = await tx.holiday.create({
+          data: {
+            id: generateId(),
+            workspaceId: dto.workspaceId,
+            name: dto.name,
+            date,
+            isOptional: dto.isOptional ?? false,
+            description: dto.description ?? '',
+          },
+        });
+        return { row, reconciled: await reconcileCalendarDay(tx, dto.workspaceId, date) };
+      },
+      CALENDAR_TRANSACTION,
+    );
+    await this.recordAudit(user, dto.workspaceId, 'created', row.id, row);
+    this.afterRecount(user, dto.workspaceId, reconciled, `${dto.name} on ${dto.date.slice(0, 10)} is now a holiday`);
+    return { ...this.map(row), reconciled: summary(reconciled) };
   }
   async patch(user: User, id: string, dto: UpdateHolidayDto) {
     const data: Record<string, unknown> = {};
@@ -755,32 +788,62 @@ export class HolidaysService extends ScopedCrudService<Holiday, ReturnType<typeo
     if (dto.isOptional !== undefined) data.isOptional = dto.isOptional;
     if (dto.description !== undefined) data.description = dto.description;
     const before = await this.findScoped(user, id);
-    const updated = await this.update(user, id, data);
+    await this.access.assertPermission(user, before.workspaceId, this.updatePermission);
+    await this.assertRowOwnership(user, before);
     // The day it was on and the day it is on: either may have changed standing.
     const days = new Map<number, Date>([[before.date.getTime(), before.date]]);
     if (data.date) days.set((data.date as Date).getTime(), data.date as Date);
-    let reconciled: HolidayReconciliation = { attendanceRows: 0, leaveRequests: 0, daysReturned: 0 };
-    for (const day of days.values()) {
-      const part = await reconcileHolidayChange(this.prisma, before.workspaceId, day);
-      reconciled = {
-        attendanceRows: reconciled.attendanceRows + part.attendanceRows,
-        leaveRequests: reconciled.leaveRequests + part.leaveRequests,
-        daysReturned: reconciled.daysReturned + part.daysReturned,
-        peopleCharged: [...new Set([...(reconciled.peopleCharged ?? []), ...(part.peopleCharged ?? [])])],
-      };
-    }
-    this.tellRecounted(user, before.workspaceId, reconciled, `The holiday ${before.name} was changed`);
-    return { ...updated, reconciled };
+    const { row, reconciled } = await this.prisma.$transaction(
+      async (tx) => {
+        await lockCalendar(tx, before.workspaceId);
+        const row = await tx.holiday.update({ where: { id }, data });
+        let reconciled: CalendarReconciliation = { attendanceRows: 0, leaveRequests: 0, daysReturned: 0 };
+        for (const day of days.values()) {
+          reconciled = mergeReconciliations(
+            reconciled,
+            await reconcileCalendarDay(tx, before.workspaceId, day),
+          );
+        }
+        return { row, reconciled };
+      },
+      CALENDAR_TRANSACTION,
+    );
+    await this.recordAudit(user, before.workspaceId, 'updated', id, row, Object.keys(data));
+    this.afterRecount(user, before.workspaceId, reconciled, `The holiday ${before.name} was changed`);
+    return { ...this.map(row), reconciled: summary(reconciled) };
   }
   async remove(user: User, id: string): Promise<void> {
     const before = await this.findScoped(user, id);
-    await super.remove(user, id);
-    const reconciled = await reconcileHolidayChange(this.prisma, before.workspaceId, before.date);
-    this.tellRecounted(
+    await this.access.assertPermission(user, before.workspaceId, this.writePermission);
+    await this.assertRowOwnership(user, before);
+    const reconciled = await this.prisma.$transaction(
+      async (tx) => {
+        await lockCalendar(tx, before.workspaceId);
+        await tx.holiday.delete({ where: { id } });
+        return reconcileCalendarDay(tx, before.workspaceId, before.date);
+      },
+      CALENDAR_TRANSACTION,
+    );
+    await this.recordAudit(user, before.workspaceId, 'deleted', id, before);
+    this.afterRecount(
       user,
       before.workspaceId,
       reconciled,
       `${before.name} on ${before.date.toISOString().slice(0, 10)} is no longer a holiday`,
     );
+  }
+
+  /** Once the change has committed: the rows the write hook could not see are
+   *  announced, and the people whose balance moved are told. */
+  private afterRecount(
+    user: User,
+    workspaceId: string,
+    reconciled: CalendarReconciliation,
+    what: string,
+  ): void {
+    for (const written of reconciled.unannounced ?? []) {
+      this.prisma.announceWrite?.(written.model, written.action, written.row);
+    }
+    this.tellRecounted(user, workspaceId, reconciled, what);
   }
 }

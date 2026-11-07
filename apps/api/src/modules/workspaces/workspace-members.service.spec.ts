@@ -80,7 +80,9 @@ function build(opts: {
   const create = jest.fn().mockReturnValue(member({ id: 'm-new', userId: 'u9' }));
   const timerDelete = jest.fn().mockResolvedValue({ count: 1 });
   const announceWrite = jest.fn();
-  const prisma = {
+  // The administration lock (pg_advisory_xact_lock), taken inside a transaction.
+  const executeRaw = jest.fn().mockResolvedValue(1);
+  const prisma: Record<string, unknown> = {
     workspaceMember: {
       findFirst: jest.fn().mockResolvedValue(opts.existing),
       findMany: jest.fn().mockResolvedValue([opts.existing]),
@@ -97,8 +99,15 @@ function build(opts: {
       updateMany: closeRequests,
       count: jest.fn().mockResolvedValue(opts.askedToJoin ? 1 : 0),
     },
-    // Array form: the service reads the membership out of position 0.
-    $transaction: jest.fn((ops: unknown[]) => Promise.resolve(ops)),
+    // Array form: the service reads the membership out of position 0. Callback
+    // form: the transaction client is this same mock, so a write made through
+    // it is the one the cases below look for.
+    $transaction: jest.fn((arg: unknown) =>
+      typeof arg === 'function'
+        ? (arg as (tx: unknown) => Promise<unknown>)(prisma)
+        : Promise.resolve(arg),
+    ),
+    $executeRaw: executeRaw,
     workspaceRole: {
       findMany: jest
         .fn()
@@ -130,7 +139,7 @@ function build(opts: {
       deleteMany: timerDelete,
     },
     announceWrite,
-  } as unknown as PrismaService;
+  };
   const capabilitiesOrphanedBy = invariantFor({ ...opts, customRoles });
   const access = {
     scopeWhere: jest.fn().mockResolvedValue({}),
@@ -157,8 +166,8 @@ function build(opts: {
   } as unknown as WorkspaceAccessService;
   const events = { emit: jest.fn() } as unknown as EventEmitter2;
   return {
-    svc: new WorkspaceMembersService(prisma, access, events),
-    prisma,
+    svc: new WorkspaceMembersService(prisma as unknown as PrismaService, access, events),
+    prisma: prisma as unknown as PrismaService,
     update,
     updateMany,
     remove,
@@ -169,9 +178,14 @@ function build(opts: {
     closeRequests,
     timerDelete,
     announceWrite,
+    executeRaw,
     events,
   };
 }
+
+/** The key of every administration lock a case took, in order. */
+const locksTaken = (executeRaw: jest.Mock) =>
+  executeRaw.mock.calls.map((call) => call.slice(1).join(','));
 
 /** The domain events a case emitted, by name. */
 const emitted = (events: EventEmitter2) =>
@@ -551,10 +565,11 @@ describe('WorkspaceMembersService.update — orphaned-workspace guards', () => {
     await expect(steward.svc.update(caller, 'm1', { role: 'MEMBER' })).resolves.toBeDefined();
     expect(steward.update).toHaveBeenCalled();
     // …and asked of the membership as the write will leave it.
-    expect(steward.capabilitiesOrphanedBy).toHaveBeenCalledWith('w1', {
-      membershipId: 'm1',
-      role: 'MEMBER',
-    });
+    expect(steward.capabilitiesOrphanedBy).toHaveBeenCalledWith(
+      'w1',
+      { membershipId: 'm1', role: 'MEMBER' },
+      expect.anything(),
+    );
 
     // …and refused when the only other member's role merely has a grand name.
     const tester = build({ existing: member({ role: 'MANAGER' }), others: ['TESTER'] });
@@ -793,7 +808,11 @@ describe('WorkspaceMembersService.leave — a member ends their own membership',
       task: { findMany: jest.fn().mockResolvedValue([]), update: jest.fn() },
       functionalRequirement: { findMany: jest.fn().mockResolvedValue([]), update: jest.fn() },
       activeTimer: { findUnique: jest.fn().mockResolvedValue(null), deleteMany: jest.fn() },
-    } as unknown as PrismaService;
+      $executeRaw: jest.fn().mockResolvedValue(1),
+    } as Record<string, unknown>;
+    // Leaving is checked and written under the administration lock, on the
+    // transaction client — this same mock.
+    prisma.$transaction = jest.fn((fn: (tx: unknown) => Promise<unknown>) => fn(prisma));
     const access = {
       isPlatformAdmin: jest.fn().mockReturnValue(opts.platformAdmin ?? false),
       // The built-in matrix, as the real service resolves it.
@@ -809,7 +828,11 @@ describe('WorkspaceMembersService.leave — a member ends their own membership',
       assertPermission: jest.fn().mockRejectedValue(new Error('must not be asked')),
     } as unknown as WorkspaceAccessService;
     const emit = jest.fn();
-    const svc = new WorkspaceMembersService(prisma, access, { emit } as unknown as EventEmitter2);
+    const svc = new WorkspaceMembersService(
+      prisma as unknown as PrismaService,
+      access,
+      { emit } as unknown as EventEmitter2,
+    );
     return { svc, remove, emit, access, prisma };
   }
 
@@ -890,5 +913,177 @@ describe('WorkspaceMembersService.leave — a member ends their own membership',
     const { svc, remove } = buildLeave({ membership: { role: 'MANAGER' }, otherAdmins: 1 });
     await svc.leave(me, 'w1');
     expect(remove).toHaveBeenCalled();
+  });
+
+  it('asks the last-manager question under the administration lock, on the transaction', async () => {
+    const { svc, access, prisma } = buildLeave({ membership: { role: 'MANAGER' }, otherAdmins: 1 });
+    await svc.leave(me, 'w1');
+    const executeRaw = (prisma as { $executeRaw: jest.Mock }).$executeRaw;
+    expect(locksTaken(executeRaw)).toEqual(['administration:w1']);
+    expect(access.capabilitiesOrphanedBy).toHaveBeenCalledWith(
+      'w1',
+      { membershipId: 'm-me', role: null },
+      prisma,
+    );
+  });
+});
+
+/**
+ * The last-manager rule is only as good as the state it reads. Each demotion,
+ * switch-off, removal and departure is checked and written as one unit, under a
+ * per-workspace lock, or two of them in flight at once each read the other's
+ * target as still in charge.
+ */
+describe('WorkspaceMembersService — the last-manager check and its write are one unit', () => {
+  it('a demotion takes the lock before the check, and checks and writes on the transaction', async () => {
+    const { svc, prisma, update, executeRaw, capabilitiesOrphanedBy } = build({
+      existing: member({ role: 'MANAGER' }),
+      otherManagers: 1,
+    });
+    await svc.update(caller, 'm1', { role: 'MEMBER' });
+    expect(locksTaken(executeRaw)).toEqual(['administration:w1']);
+    expect(capabilitiesOrphanedBy).toHaveBeenCalledWith(
+      'w1',
+      { membershipId: 'm1', role: 'MEMBER' },
+      prisma,
+    );
+    const [lock] = executeRaw.mock.invocationCallOrder;
+    const [check] = capabilitiesOrphanedBy.mock.invocationCallOrder;
+    const [write] = update.mock.invocationCallOrder;
+    expect(lock).toBeLessThan(check);
+    expect(check).toBeLessThan(write);
+  });
+
+  it('a switch-off is held to the same unit', async () => {
+    const { svc, executeRaw, capabilitiesOrphanedBy } = build({
+      existing: member({ role: 'MANAGER' }),
+      otherManagers: 1,
+    });
+    await svc.update(caller, 'm1', { status: 'INACTIVE' });
+    expect(locksTaken(executeRaw)).toEqual(['administration:w1']);
+    expect(capabilitiesOrphanedBy).toHaveBeenCalledWith(
+      'w1',
+      { membershipId: 'm1', role: null },
+      expect.anything(),
+    );
+  });
+
+  it('a removal is too', async () => {
+    const { svc, prisma, remove, executeRaw, capabilitiesOrphanedBy } = build({
+      existing: member({ role: 'MANAGER' }),
+      otherManagers: 1,
+    });
+    await svc.remove(caller, 'm1');
+    expect(locksTaken(executeRaw)).toEqual(['administration:w1']);
+    expect(capabilitiesOrphanedBy).toHaveBeenCalledWith(
+      'w1',
+      { membershipId: 'm1', role: null },
+      prisma,
+    );
+    expect(executeRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      remove.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('a promotion or a sideways move cannot orphan anything, and takes no lock', async () => {
+    const { svc, update, executeRaw } = build({ existing: member({ role: 'MEMBER' }) });
+    await svc.update(caller, 'm1', { role: 'MANAGER' });
+    expect(update).toHaveBeenCalled();
+    expect(executeRaw).not.toHaveBeenCalled();
+  });
+
+  it('nothing is written when the check refuses', async () => {
+    const { svc, update, executeRaw } = build({
+      existing: member({ role: 'MANAGER' }),
+      otherManagers: 0,
+    });
+    await expect(svc.update(caller, 'm1', { role: 'MEMBER' })).rejects.toThrow(
+      'The last manager of a workspace cannot be demoted.',
+    );
+    expect(executeRaw).toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The race itself, against a stand-in for Postgres: the lock is held until the
+   * transaction that took it ends, and the invariant reads whatever has been
+   * written by then. The only two managers demote each other at the same moment.
+   */
+  it('of two managers demoting each other at once, exactly one succeeds', async () => {
+    const rows = [
+      member({ id: 'm-a', userId: 'u-a', role: 'MANAGER' }),
+      member({ id: 'm-b', userId: 'u-b', role: 'MANAGER' }),
+    ];
+    let lockChain: Promise<void> = Promise.resolve();
+    const tick = () => new Promise((resolve) => setImmediate(resolve));
+    const workspaceMember = {
+      findFirst: jest.fn(async ({ where }: { where: { AND: Array<{ id?: string }> } }) => {
+        const id = where.AND.find((c) => c.id)?.id;
+        const row = rows.find((r) => r.id === id);
+        return row ? ({ ...row } as unknown as WorkspaceMember) : null;
+      }),
+      update: jest.fn(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+        await tick();
+        const row = rows.find((r) => r.id === where.id) as Record<string, unknown>;
+        Object.assign(row, data);
+        return { ...row };
+      }),
+    };
+    const prisma = {
+      workspaceMember,
+      workspace: { findUnique: jest.fn().mockResolvedValue({ ownerId: 'u-owner' }) },
+      user: { findMany: jest.fn().mockResolvedValue([]) },
+      activeTimer: { findUnique: jest.fn().mockResolvedValue(null) },
+      // Each transaction may take the lock; it is released when the transaction ends.
+      $transaction: jest.fn(async (fn: (tx: unknown) => Promise<unknown>) => {
+        let release: (() => void) | undefined;
+        const tx = {
+          workspaceMember,
+          $executeRaw: jest.fn(async () => {
+            const held = lockChain;
+            lockChain = new Promise<void>((resolve) => (release = resolve));
+            await held;
+            return 1;
+          }),
+        };
+        try {
+          return await fn(tx);
+        } finally {
+          release?.();
+        }
+      }),
+    } as unknown as PrismaService;
+    const access = {
+      scopeWhere: jest.fn().mockResolvedValue({}),
+      assertPermission: jest.fn().mockResolvedValue(undefined),
+      assertValidRole: jest.fn().mockResolvedValue(undefined),
+      assertCanGrantRole: jest.fn().mockResolvedValue(undefined),
+      assertNotOutranked: jest.fn().mockResolvedValue(undefined),
+      isPlatformAdmin: jest.fn().mockReturnValue(false),
+      permissionsOfRole: jest.fn(async (_ws: string, role: string) => permissionsForRole(role)),
+      // The real invariant over the rows as they stand when it is asked — after
+      // a pause, so that, unserialised, both checks would read the same state.
+      capabilitiesOrphanedBy: jest.fn(async (_ws: string, change: AdministrationChange) => {
+        await tick();
+        const members = rows.filter((r) => r.status === 'ACTIVE').map(({ id, role }) => ({ id, role }));
+        return capabilitiesOrphaned({ members, definitions: new Map() }, change);
+      }),
+    } as unknown as WorkspaceAccessService;
+    const svc = new WorkspaceMembersService(prisma, access, {
+      emit: jest.fn(),
+    } as unknown as EventEmitter2);
+
+    const results = await Promise.allSettled([
+      svc.update({ id: 'u-a' } as User, 'm-b', { role: 'MEMBER' }),
+      svc.update({ id: 'u-b' } as User, 'm-a', { role: 'MEMBER' }),
+    ]);
+    // Which one wins depends on who reaches the lock first; that one wins.
+    const outcomes = results.map((r) => (r.status === 'fulfilled' ? 'saved' : String(r.reason)));
+    expect(outcomes.sort()).toEqual([
+      'ForbiddenException: The last manager of a workspace cannot be demoted.',
+      'saved',
+    ]);
+    // The workspace keeps exactly one manager.
+    expect(rows.filter((r) => r.role === 'MANAGER')).toHaveLength(1);
   });
 });

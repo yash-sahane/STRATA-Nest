@@ -5,6 +5,7 @@
 //  #75 the Calendar and Analytics tabs disagreed about the same month
 //  #78 the widget celebrated a day the server had classified ABSENT
 import { chromium, api, adminJar, provision, addRole, signedInPage, visit, whoami } from './kit.mjs';
+import { pickDate } from './date-picker.mjs';
 
 const out = [];
 const skipped = [];
@@ -63,12 +64,12 @@ console.log('===== the Team tab on a future date');
   const futureDay = future.toISOString().slice(0, 10);
   console.log(`   future weekday = ${futureDay} (dow ${future.getUTCDay()})`);
 
-  const picker = page.locator('input[type="date"]').first();
+  // The app's DatePicker: its trigger carries the chosen day in data-value.
+  const picker = page.locator('#team-attendance-day');
   rec(await picker.count() > 0, 'the date picker is present', String(await picker.count()));
   if (await picker.count()) {
-    // A bounded input refusing a year out of range would itself be a valid fix.
-    const max = await picker.getAttribute('max');
-    await picker.fill(futureDay).catch(() => {});
+    await pickDate(page, picker, futureDay).catch(() => {});
+    const shown = await picker.getAttribute('data-value');
     await page.waitForTimeout(3500);
     const body = await page.locator('body').innerText().catch(() => '');
 
@@ -93,7 +94,7 @@ console.log('===== the Team tab on a future date');
 
     const claims0pct = /0% attendance rate/i.test(body);
     console.log(
-      `   max=${max} picked=${futureDay} ABSENT row badges=${rowBadges} ` +
+      `   shown=${shown} picked=${futureDay} ABSENT row badges=${rowBadges} ` +
         `KPI Absent="${String(kpiAbsent).trim()}" 0%-claim=${claims0pct}`,
     );
     rec(!claims0pct, 'no "0% attendance rate" claim for a future date',

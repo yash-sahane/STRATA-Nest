@@ -13,6 +13,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { DatePicker } from '@/components/ui/date-picker';
+import { formatDateOnly, parseDateOnly } from '@/lib/utils/working-days';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
@@ -180,12 +182,18 @@ export function TeamAttendanceTab() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Input
-            type="date"
-            aria-label="Day to show"
-            value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-            className="w-auto"
+          {/* The app's own picker, as the other dates on this page are chosen. A
+              day is always shown, so it cannot be cleared. */}
+          <DatePicker
+            id="team-attendance-day"
+            date={parseDateOnly(selectedDate)}
+            onSelect={(day) => {
+              if (day) setSelectedDate(formatDateOnly(day));
+            }}
+            allowClear={false}
+            className="w-44"
+            placeholder="Day to show"
+            ariaLabel="Day to show"
           />
           <Button
             variant="outline"

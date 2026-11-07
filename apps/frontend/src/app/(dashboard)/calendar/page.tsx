@@ -45,7 +45,8 @@ import {
   useSprintsRealtime,
   useTasksRealtime,
 } from '@/hooks/use-realtime';
-import { isTaskOverdue } from '@/lib/task-dates';
+import { dueDay, dueDayKey, isTaskOverdue } from '@/lib/task-dates';
+import { todayDateOnly } from '@/lib/utils/working-days';
 
 export default function CalendarPage() {
   const { currentWorkspace, isLoading: workspacesLoading } = useCurrentWorkspace();
@@ -104,10 +105,8 @@ export default function CalendarPage() {
   const getEventsForDay = (day: Date) => {
     const dateStr = format(day, 'yyyy-MM-dd');
 
-    const tasksForDay = filteredTasks.filter((task) => {
-      if (!task.dueDate) return false;
-      return format(parseWireDate(task.dueDate), 'yyyy-MM-dd') === dateStr;
-    });
+    // On the workspace day it is due — the day its overdue label counts from.
+    const tasksForDay = filteredTasks.filter((task) => dueDayKey(task.dueDate) === dateStr);
 
     const sprintsForDay = filteredSprints.filter((sprint) => {
       const startDate = format(parseWireDate(sprint.startDate), 'yyyy-MM-dd');
@@ -144,8 +143,8 @@ export default function CalendarPage() {
     const monthEnd = endOfMonth(selectedMonth);
 
     const upcomingTasks = filteredTasks.filter((task) => {
-      if (!task.dueDate) return false;
-      const dueDate = parseWireDate(task.dueDate);
+      const dueDate = dueDay(task.dueDate);
+      if (!dueDate) return false;
       return dueDate >= monthStart && dueDate <= monthEnd && task.status !== 'DONE';
     }).length;
 
@@ -301,7 +300,8 @@ export default function CalendarPage() {
                 ))}
                 {calendarDays.map((day, idx) => {
                   const events = getEventsForDay(day);
-                  const isToday = isSameDay(day, new Date());
+                  // The workspace's today, the day overdue is counted from.
+                  const isToday = format(day, 'yyyy-MM-dd') === todayDateOnly();
                   const isCurrentMonth = isSameMonth(day, selectedMonth);
                   const isSelected = selectedDay ? isSameDay(day, selectedDay) : false;
                   const hasEvents =

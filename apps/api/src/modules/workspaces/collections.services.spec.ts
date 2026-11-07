@@ -538,13 +538,18 @@ describe('WorkspaceRolesService.patch — power taken from a role is taken from 
       ...boss,
       ...data,
     }));
-    const prisma = {
+    const executeRaw = jest.fn().mockResolvedValue(1);
+    const prisma: Record<string, unknown> = {
       workspaceRole: { update, findFirst: jest.fn().mockResolvedValue(boss) },
       workspace: { findUnique: jest.fn().mockResolvedValue({ ownerId: 'owner' }) },
       workspaceMember: {
         findFirst: jest.fn().mockResolvedValue(opts.ownerHolds ? { id: 'm-owner' } : null),
       },
-    } as unknown as PrismaService;
+      // A new permission list is checked and saved under the administration
+      // lock; the transaction client is this same mock.
+      $executeRaw: executeRaw,
+    };
+    prisma.$transaction = jest.fn((fn: (tx: unknown) => Promise<unknown>) => fn(prisma));
     const members = [
       { id: 'm-owner', role: opts.ownerHolds ? 'Boss' : 'MANAGER' },
       ...(opts.others ?? []).map((role, i) => ({ id: `m-${i}`, role })),
@@ -559,10 +564,32 @@ describe('WorkspaceRolesService.patch — power taken from a role is taken from 
         capabilitiesOrphaned({ members, definitions: new Map([['Boss', ALL]]) }, change),
       ),
     } as unknown as WorkspaceAccessService;
-    return { svc: new WorkspaceRolesService(prisma, access), update, access };
+    return {
+      svc: new WorkspaceRolesService(prisma as unknown as PrismaService, access),
+      update,
+      access,
+      executeRaw,
+      prisma,
+    };
   }
 
   const baseline = [Permission.WorkspaceRead, Permission.MemberRead];
+
+  it('checks the cut and saves it under the administration lock, on the transaction', async () => {
+    const { svc, update, access, executeRaw, prisma } = buildCut({ others: ['Boss'] });
+    await expect(svc.patch(user, 'r-boss', { permissions: baseline })).resolves.toBeDefined();
+    expect(executeRaw.mock.calls.map((call) => call.slice(1).join(','))).toEqual([
+      'administration:w1',
+    ]);
+    expect(access.capabilitiesOrphanedBy).toHaveBeenCalledWith(
+      'w1',
+      { roleName: 'Boss', permissions: baseline },
+      prisma,
+    );
+    const check = (access.capabilitiesOrphanedBy as jest.Mock).mock.invocationCallOrder[0];
+    expect(executeRaw.mock.invocationCallOrder[0]).toBeLessThan(check);
+    expect(check).toBeLessThan(update.mock.invocationCallOrder[0]);
+  });
 
   it('refuses a manager who is not the owner cutting down the role the owner holds', async () => {
     const { svc, update } = buildCut({ ownerHolds: true, others: ['MANAGER'] });
@@ -614,10 +641,11 @@ describe('WorkspaceRolesService.patch — power taken from a role is taken from 
     await expect(svc.patch(user, 'r-boss', { permissions: baseline })).rejects.toThrow(
       'That would leave nobody active in this workspace who can change members’ roles and access, or delete the workspace.',
     );
-    expect(access.capabilitiesOrphanedBy).toHaveBeenCalledWith('w1', {
-      roleName: 'Boss',
-      permissions: baseline,
-    });
+    expect(access.capabilitiesOrphanedBy).toHaveBeenCalledWith(
+      'w1',
+      { roleName: 'Boss', permissions: baseline },
+      expect.anything(),
+    );
     expect(update).not.toHaveBeenCalled();
   });
 

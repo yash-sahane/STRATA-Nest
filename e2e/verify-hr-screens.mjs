@@ -12,6 +12,7 @@
 //  - a shift still running from yesterday can be checked out of, and a day whose
 //    check-out was forgotten is pointed out to its owner and to the manager.
 import { chromium, api, adminJar, provision, addRole, signedInPage, visit, whoami } from './kit.mjs';
+import { dayButton, inPicker, pickDate } from './date-picker.mjs';
 
 const out = [];
 const rec = (ok, n, d = '') => { out.push([ok, n]); console.log(`${ok ? 'PASS' : 'FAIL'}  ${n}${ok ? '' : '\n        -> ' + String(d).slice(0, 380)}`); };
@@ -137,20 +138,23 @@ await visit(page, '/leave', 7000);
   const opened = await start.waitFor({ timeout: 10000 }).then(() => true, () => false);
   rec(opened, 'the request form opens');
   if (opened) {
-    const today = local(new Date());
-    rec((await start.getAttribute('min')) === today,
-      'planned leave starts today at the earliest', `min=${await start.getAttribute('min')}`);
+    // The form's dates are the app's DatePicker: the earliest day it offers is
+    // the first day it does not grey out.
+    const offered = (iso) => inPicker(page, start, async () => (await dayButton(page, iso)).isEnabled());
+    const planned = { today: await offered(local(new Date())), dayBefore: await offered(local(dayFrom(-1))) };
+    rec(planned.today && !planned.dayBefore,
+      'planned leave starts today at the earliest', JSON.stringify(planned));
 
     await dialog.locator('#leaveType').click();
     await page.getByRole('option', { name: /sick/i }).first().click();
     await page.waitForTimeout(500);
-    rec((await start.getAttribute('min')) === local(dayFrom(-30)),
-      'sick leave can be dated up to thirty days back',
-      `min=${await start.getAttribute('min')} (wanted ${local(dayFrom(-30))})`);
+    const sick = { monthBack: await offered(local(dayFrom(-30))), dayBefore: await offered(local(dayFrom(-31))) };
+    rec(sick.monthBack && !sick.dayBefore,
+      'sick leave can be dated up to thirty days back', JSON.stringify(sick));
 
     // A week with a declared holiday in the middle of it.
-    await start.fill(weekStart);
-    await dialog.locator('#endDate').fill(weekEnd);
+    await pickDate(page, start, weekStart);
+    await pickDate(page, dialog.locator('#endDate'), weekEnd);
     await page.waitForTimeout(800);
     const text = flat(await dialog.innerText().catch(() => ''));
     rec(/for 4 working days/.test(text),
@@ -205,7 +209,7 @@ console.log('===== a check-out that was forgotten');
 
   const theirs = await signedInPage(browser, 'role.manager@strata.local', p.ws);
   await visit(theirs.page, '/attendance?tab=team', 8000);
-  await theirs.page.locator('input[type="date"]').first().fill(local(forgotten));
+  await pickDate(theirs.page, theirs.page.locator('#team-attendance-day'), local(forgotten));
   await theirs.page.waitForTimeout(3500);
   const team = flat(await theirs.page.locator('main').innerText().catch(() => ''));
   rec(/No check-out recorded/.test(team),

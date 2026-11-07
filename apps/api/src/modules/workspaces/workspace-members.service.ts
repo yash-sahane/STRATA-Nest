@@ -5,7 +5,7 @@ import type { PaginatedResponse } from '@strata/shared';
 import { WorkspaceEvents } from '@strata/shared';
 import { PrismaService } from '@strata/prisma';
 import type { Prisma, User, WorkspaceMember } from '@prisma/client';
-import { ADMIN_CAPABILITIES } from '../authz/administration';
+import { ADMIN_CAPABILITIES, lockAdministration } from '../authz/administration';
 import { Permission, type PermissionKey } from '../authz/permissions';
 import { WorkspaceAccessService } from '../authz/workspace-access.service';
 import type { CreateMemberDto, UpdateMemberDto } from './dto';
@@ -251,6 +251,10 @@ export class WorkspaceMembersService {
    * (`capabilitiesOrphanedBy`), the same one a role-definition edit asks, and by
    * CAPABILITY: counting `role: 'MANAGER'` literals gave a workspace
    * administered entirely through a custom role no protection at all.
+   *
+   * Asked on `db`, the transaction holding the workspace's administration lock
+   * (`underAdministrationLock`), so the state it reads is the state the write
+   * lands on — see `lockAdministration`.
    */
   private async assertRetainsCapabilities(
     user: User,
@@ -258,17 +262,34 @@ export class WorkspaceMembersService {
     /** The role the membership will hold; null when it stops counting. */
     nextRole: string | null,
     verb: 'removed' | 'demoted',
+    db: Prisma.TransactionClient,
     /** What to say instead, when the change is the member's own doing. */
     message?: string,
   ): Promise<void> {
     if (this.access.isPlatformAdmin(user)) return;
-    const orphaned = await this.access.capabilitiesOrphanedBy(existing.workspaceId, {
-      membershipId: existing.id,
-      role: nextRole,
-    });
+    const orphaned = await this.access.capabilitiesOrphanedBy(
+      existing.workspaceId,
+      { membershipId: existing.id, role: nextRole },
+      db,
+    );
     if (orphaned.length) {
       throw new ForbiddenException(message ?? `The last manager of a workspace cannot be ${verb}.`);
     }
+  }
+
+  /**
+   * A write that can cost the workspace its last administrator, run with the
+   * check that allows it as one unit: the lock, the check and the write share a
+   * transaction, and nothing inside it uses the plain client.
+   */
+  private underAdministrationLock<T>(
+    workspaceId: string,
+    work: (tx: Prisma.TransactionClient) => Promise<T>,
+  ): Promise<T> {
+    return this.prisma.$transaction(async (tx) => {
+      await lockAdministration(tx, workspaceId);
+      return work(tx);
+    });
   }
 
   /** The administrative capabilities a membership change costs the workspace.
@@ -379,7 +400,11 @@ export class WorkspaceMembersService {
       select: { workspaceId: true, userId: true },
     });
     const inviterOf = new Map<string, string>();
-    for (const row of sent) if (!inviterOf.has(row.workspaceId)) inviterOf.set(row.workspaceId, row.userId);
+    // An invitation is always somebody's act, so its row names them; a row that
+    // names nobody (possible for other actions) cannot say who invited.
+    for (const row of sent) {
+      if (row.userId && !inviterOf.has(row.workspaceId)) inviterOf.set(row.workspaceId, row.userId);
+    }
     const inviters = await this.prisma.user.findMany({
       where: { id: { in: [...new Set(inviterOf.values())] } },
       select: { id: true, name: true, email: true },
@@ -486,6 +511,9 @@ export class WorkspaceMembersService {
     if (changesRole) {
       await this.access.assertCanGrantRole(user, existing.workspaceId, dto.role as string);
     }
+    // Whether this change can cost the workspace a capability, and so has to be
+    // checked against the last-manager rule under the administration lock.
+    let costsCapability = false;
     if (changesRole || deactivates) {
       // Always: an edit of one's own membership, up or down.
       this.assertNotSelfEdit(user, existing, 'demoted');
@@ -496,12 +524,7 @@ export class WorkspaceMembersService {
       const lost = await this.capabilitiesLost(existing, dto.role, deactivates);
       if (lost.length || deactivates) {
         await this.assertNotOwner(user, existing, 'demoted');
-        await this.assertRetainsCapabilities(
-          user,
-          existing,
-          deactivates ? null : (dto.role ?? existing.role),
-          'demoted',
-        );
+        costsCapability = true;
       }
       // A sideways move or a promotion costs nothing above — but on the owner
       // it is still somebody else deciding the owner's role.
@@ -513,7 +536,22 @@ export class WorkspaceMembersService {
     // A platform administrator letting an invitation in: they join from now.
     const letIn = existing.status === 'INVITED' && dto.status === 'ACTIVE';
     if (letIn) data.joinedAt = new Date();
-    const updated = await this.prisma.workspaceMember.update({ where: { id }, data });
+    // A demotion or a switch-off is checked and written as one unit, or two
+    // managers demoting each other at once both pass — each check reads the
+    // other as still in charge. A promotion or a sideways move cannot orphan
+    // anything and is written as it always was.
+    const updated = costsCapability
+      ? await this.underAdministrationLock(existing.workspaceId, async (tx) => {
+          await this.assertRetainsCapabilities(
+            user,
+            existing,
+            deactivates ? null : (dto.role ?? existing.role),
+            'demoted',
+            tx,
+          );
+          return tx.workspaceMember.update({ where: { id }, data });
+        })
+      : await this.prisma.workspaceMember.update({ where: { id }, data });
     // Switched off: a timer they had running here can no longer be stopped —
     // stopping files the time in this workspace, which now refuses them — and
     // a person holds one timer at a time, so it blocked their timers in every
@@ -704,10 +742,13 @@ export class WorkspaceMembersService {
     this.assertNotSelfEdit(user, existing, 'removed');
     await this.access.assertNotOutranked(user, existing.workspaceId, existing.role);
     // Removal is an identity question for the owner and a capability question
-    // for everyone else, so both guards run unconditionally here.
+    // for everyone else, so both guards run unconditionally here — the second
+    // with the delete, under the administration lock (see update).
     await this.assertNotOwner(user, existing, 'removed');
-    await this.assertRetainsCapabilities(user, existing, null, 'removed');
-    await this.prisma.workspaceMember.delete({ where: { id } });
+    await this.underAdministrationLock(existing.workspaceId, async (tx) => {
+      await this.assertRetainsCapabilities(user, existing, null, 'removed', tx);
+      await tx.workspaceMember.delete({ where: { id } });
+    });
     await this.tidyAfterRemoval(existing.workspaceId, existing.userId);
     this.emit(WorkspaceEvents.MemberRemoved, existing.workspaceId, {
       workspaceId: existing.workspaceId,
@@ -792,14 +833,19 @@ export class WorkspaceMembersService {
         'Your access to this workspace is switched off. One of its managers has to remove you or switch it back on.',
       );
     }
-    await this.assertRetainsCapabilities(
-      user,
-      existing,
-      null,
-      'removed',
-      'You are the last manager of this workspace. Make somebody else a manager before you leave.',
-    );
-    await this.prisma.workspaceMember.delete({ where: { id: existing.id } });
+    // Checked with the delete, under the administration lock: two managers
+    // leaving at once would otherwise each see the other staying.
+    await this.underAdministrationLock(workspaceId, async (tx) => {
+      await this.assertRetainsCapabilities(
+        user,
+        existing,
+        null,
+        'removed',
+        tx,
+        'You are the last manager of this workspace. Make somebody else a manager before you leave.',
+      );
+      await tx.workspaceMember.delete({ where: { id: existing.id } });
+    });
     // As a removal does: leave still waiting on an approver is withdrawn, and the
     // open tasks they held go back to the pool — or the boards went on naming
     // somebody who was no longer there.

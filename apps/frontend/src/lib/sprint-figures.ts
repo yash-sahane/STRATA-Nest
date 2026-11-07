@@ -1,6 +1,7 @@
 import { differenceInCalendarDays } from 'date-fns';
 import type { Sprint, Task } from '@/types';
 import { parseWireDate } from '@/lib/utils';
+import { businessToday } from '@/lib/task-dates';
 
 export interface SprintFigures {
   total: number;
@@ -69,7 +70,8 @@ export interface SprintSchedule {
  * bar, which looks like a sprint finishing on time, not one three weeks overdue.
  *
  * Sprint dates are date-only wire values, read as the local days they name —
- * never as UTC midnight, which is the previous day west of UTC.
+ * never as UTC midnight, which is the previous day west of UTC. Today is the
+ * workspace's day (lib/task-dates), as the overdue labels on its tasks count it.
  */
 export function sprintSchedule(
   sprint: Pick<Sprint, 'startDate' | 'endDate'>,
@@ -77,9 +79,10 @@ export function sprintSchedule(
 ): SprintSchedule {
   const start = parseWireDate(sprint.startDate);
   const end = parseWireDate(sprint.endDate);
+  const today = businessToday(now);
   const totalDays = Math.max(1, differenceInCalendarDays(end, start) + 1);
-  const toEnd = differenceInCalendarDays(end, now); // 0 on the last day
-  const sinceStart = differenceInCalendarDays(now, start); // 0 on the first day
+  const toEnd = differenceInCalendarDays(end, today); // 0 on the last day
+  const sinceStart = differenceInCalendarDays(today, start); // 0 on the first day
   return {
     totalDays,
     daysRemaining: Math.min(totalDays, Math.max(0, toEnd + 1)),

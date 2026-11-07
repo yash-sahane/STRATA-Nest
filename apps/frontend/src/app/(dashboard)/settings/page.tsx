@@ -30,7 +30,13 @@ import {
 import { toast } from 'sonner';
 import NotificationPreferences from '@/components/settings/notification-preferences';
 import { useHasPermission } from '@/hooks/use-permissions';
-import { getServerTimeZone } from '@/lib/utils/working-days';
+import {
+  getServerTimeZone,
+  todayDateOnly,
+  workingSaturdaysOn,
+  workingWeekOf,
+} from '@/lib/utils/working-days';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Permission } from '@/lib/permissions';
 import { authClient } from '@/lib/api/client';
 import { useUpdateWorkspace } from '@/hooks/use-workspace';
@@ -98,6 +104,15 @@ const DEFAULT_WORKDAY_START = '08:30';
 const DEFAULT_LATE_GRACE_MINUTES = 15;
 const MAX_LATE_GRACE_MINUTES = 240;
 
+/** Weeks of the month a Saturday can fall in, for the working-week control. */
+const SATURDAY_WEEKS = [
+  { week: 1, label: '1st' },
+  { week: 2, label: '2nd' },
+  { week: 3, label: '3rd' },
+  { week: 4, label: '4th' },
+  { week: 5, label: '5th' },
+] as const;
+
 /** The Workspace tab's fields, as strings, the way the form holds them. */
 interface WorkspaceForm {
   name: string;
@@ -105,7 +120,13 @@ interface WorkspaceForm {
   timezone: string;
   workdayStart: string;
   lateGrace: string;
+  /** The Saturdays worked from today, as '1,3' — weeks of the month, sorted. */
+  saturdays: string;
 }
+
+const weeksText = (weeks: readonly number[]): string =>
+  [...weeks].sort((a, b) => a - b).join(',');
+const weeksOf = (text: string): number[] => (text ? text.split(',').map(Number) : []);
 
 function workspaceFormOf(ws: Workspace): WorkspaceForm {
   const s = ws.settings;
@@ -117,6 +138,8 @@ function workspaceFormOf(ws: Workspace): WorkspaceForm {
     lateGrace: String(
       typeof s?.lateGraceMinutes === 'number' ? s.lateGraceMinutes : DEFAULT_LATE_GRACE_MINUTES
     ),
+    // The rule in force today: the history's latest word, or the default.
+    saturdays: weeksText(workingSaturdaysOn(todayDateOnly(), workingWeekOf(s))),
   };
 }
 
@@ -125,7 +148,8 @@ const sameForm = (a: WorkspaceForm, b: WorkspaceForm): boolean =>
   a.description === b.description &&
   a.timezone === b.timezone &&
   a.workdayStart === b.workdayStart &&
-  a.lateGrace === b.lateGrace;
+  a.lateGrace === b.lateGrace &&
+  a.saturdays === b.saturdays;
 
 export default function SettingsPage() {
   return (
@@ -194,6 +218,8 @@ function SettingsPageContent() {
   // runs on the defaults, so the defaults are what the fields say.
   const [wsWorkdayStart, setWsWorkdayStart] = React.useState(DEFAULT_WORKDAY_START);
   const [wsLateGrace, setWsLateGrace] = React.useState(String(DEFAULT_LATE_GRACE_MINUTES));
+  // The Saturdays worked, '1,3' — the default until the workspace says.
+  const [wsSaturdays, setWsSaturdays] = React.useState('1,3');
   /**
    * Fill the form from the workspace — when it is a different workspace, or
    * when nothing typed here would be lost.
@@ -220,6 +246,7 @@ function SettingsPageContent() {
         timezone: wsTimezone,
         workdayStart: wsWorkdayStart,
         lateGrace: wsLateGrace,
+        saturdays: wsSaturdays,
       };
       // Unsaved edits: they stay, and are what a save will send.
       if (!sameForm(typed, last.form) && !sameForm(typed, server)) return;
@@ -230,7 +257,8 @@ function SettingsPageContent() {
     setWsTimezone(server.timezone);
     setWsWorkdayStart(server.workdayStart);
     setWsLateGrace(server.lateGrace);
-  }, [currentWorkspace, wsName, wsDescription, wsTimezone, wsWorkdayStart, wsLateGrace]);
+    setWsSaturdays(server.saturdays);
+  }, [currentWorkspace, wsName, wsDescription, wsTimezone, wsWorkdayStart, wsLateGrace, wsSaturdays]);
 
   // Avoid hydration mismatch
   React.useEffect(() => {
@@ -349,6 +377,10 @@ function SettingsPageContent() {
           ...(wsTimezone ? { timezone: wsTimezone } : {}),
           workdayStart: wsWorkdayStart,
           lateGraceMinutes: lateGrace,
+          // The rule from today on. The API keeps the history, so days already
+          // worked keep the rule they were worked under, and an unchanged rule
+          // adds nothing to it.
+          workingSaturdays: weeksOf(wsSaturdays),
         },
       });
       // success toast is fired by the mutation
@@ -584,6 +616,40 @@ function SettingsPageContent() {
                         </p>
                       </div>
                     </div>
+
+                    <fieldset className="space-y-3">
+                      <legend className="text-sm font-medium">Saturdays worked</legend>
+                      <div className="flex flex-wrap gap-x-5 gap-y-2">
+                        {SATURDAY_WEEKS.map(({ week, label }) => {
+                          const checked = weeksOf(wsSaturdays).includes(week);
+                          const id = `ws-saturday-${week}`;
+                          return (
+                            <div key={week} className="flex items-center gap-2">
+                              <Checkbox
+                                id={id}
+                                checked={checked}
+                                onCheckedChange={(on) => {
+                                  const weeks = weeksOf(wsSaturdays).filter((w) => w !== week);
+                                  setWsSaturdays(weeksText(on === true ? [...weeks, week] : weeks));
+                                }}
+                              />
+                              <Label htmlFor={id} className="font-normal">
+                                {label} Saturday
+                              </Label>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <p className="text-sm text-muted-foreground">
+                        {wsSaturdays
+                          ? 'Sundays are always off.'
+                          : 'No Saturday is worked. Sundays are always off.'}{' '}
+                        A change applies from today: leave and attendance from today on are
+                        counted again — a leave across a Saturday that becomes a working day
+                        costs a day more, one across a Saturday that stops being one a day
+                        less — and days before today keep the rule they had.
+                      </p>
+                    </fieldset>
 
                     <div className="flex justify-end">
                       <Button type="submit" disabled={isUpdating}>

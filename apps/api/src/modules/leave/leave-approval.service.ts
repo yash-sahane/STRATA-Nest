@@ -27,17 +27,19 @@ import {
 import { renderLeaveDecisionEmail } from './leave-decision-email';
 import { leaveRequestResponse } from './mappers';
 import { tellPeople } from '../notifications/notice';
+import { shareCalendar } from './calendar-lock';
+import type { WorkingWeek } from './leave-balance';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 /** The working days a leave actually covers, as date-only UTC-midnight markers
  *  matching the `date` column — a range spanning a weekend must not mark the
  *  weekend as leave. */
-function leaveWorkingDays(start: Date, end: Date): Date[] {
+function leaveWorkingDays(start: Date, end: Date, schedule: WorkingWeek): Date[] {
   const days: Date[] = [];
   const cursor = new Date(start.getTime());
   for (let i = 0; i <= MAX_LEAVE_RANGE_DAYS && cursor <= end; i += 1) {
-    if (!isNonWorkingDay(cursor)) days.push(new Date(cursor.getTime()));
+    if (!isNonWorkingDay(cursor, schedule)) days.push(new Date(cursor.getTime()));
     cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
   return days;
@@ -90,6 +92,10 @@ export class LeaveApprovalService {
     // What approving it costs, from the very figures the claim below matches.
     const units = requiredUnits(req.type, req.daysCount);
     const updated = await this.prisma.$transaction(async (tx) => {
+      // The calendar held still while this charges by its days: a holiday
+      // being declared across the request waits for the decision, then
+      // re-counts it (see calendar-lock.ts).
+      await shareCalendar(tx, req.workspaceId);
       // Claim the request FIRST, conditionally on it still being pending.
       //
       // `load()` read the status on an earlier statement, so two approvals fired
@@ -279,6 +285,15 @@ export class LeaveApprovalService {
     return this.withdraw(user, req);
   }
 
+  /** The workspace's working week, as `countWorkingDays` takes it. */
+  private async workingWeekOf(workspaceId: string): Promise<WorkingWeek> {
+    const workspace = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { settings: true },
+    });
+    return workScheduleOf(workspace?.settings);
+  }
+
   /** The workspace's business day, as the date-only marker the `date` columns hold. */
   private async businessToday(workspaceId: string): Promise<Date> {
     const workspace = await this.prisma.workspace.findUnique({
@@ -313,6 +328,7 @@ export class LeaveApprovalService {
    */
   private async endEarly(user: User, req: LeaveRequest, today: Date) {
     const lastDay = new Date(today.getTime() - MS_PER_DAY);
+    const schedule = await this.workingWeekOf(req.workspaceId);
     const holidays = await this.prisma.holiday.findMany({
       where: {
         workspaceId: req.workspaceId,
@@ -325,6 +341,7 @@ export class LeaveApprovalService {
       req.startDate,
       lastDay,
       new Set(holidays.map((holiday) => dateOnlyKey(holiday.date))),
+      schedule,
     );
     if (taken === 0) return this.withdraw(user, req);
     // What was charged, less what the days taken cost — never more than was
@@ -334,6 +351,7 @@ export class LeaveApprovalService {
     const refund = Math.max(0, req.chargedUnits - requiredUnits(req.type, taken));
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      await shareCalendar(tx, req.workspaceId);
       // Claimed on the end, the days and the charge it was decided against: two
       // people ending it at once cannot both give the days back, and the refund
       // is worked out from exactly the figures the claim matched.
@@ -391,6 +409,7 @@ export class LeaveApprovalService {
     const units = wasApproved ? req.chargedUnits : 0;
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      await shareCalendar(tx, req.workspaceId);
       // Claim on the status this cancellation was decided against, so two
       // simultaneous cancellations cannot both refund the allowance and a
       // cancellation cannot race an approval into refunding a debit that the
@@ -497,7 +516,11 @@ export class LeaveApprovalService {
         })
       ).map((holiday) => dateOnlyKey(holiday.date)),
     );
-    const days = leaveWorkingDays(req.startDate, req.endDate).filter(
+    const workspace = await tx.workspace.findUnique({
+      where: { id: req.workspaceId },
+      select: { settings: true },
+    });
+    const days = leaveWorkingDays(req.startDate, req.endDate, workScheduleOf(workspace?.settings)).filter(
       (day) => !holidays.has(dateOnlyKey(day)),
     );
     if (days.length === 0) return;

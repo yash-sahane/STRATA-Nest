@@ -1,5 +1,5 @@
 import { differenceInCalendarDays } from 'date-fns';
-import { dueDay } from '@/lib/task-dates';
+import { businessToday, dueDay } from '@/lib/task-dates';
 import type { Task } from '@/types';
 
 /** One step of a multi-field sort. */
@@ -16,11 +16,12 @@ const STATUS_ORDER: Record<string, number> = { BACKLOG: 1, TODO: 2, IN_PROGRESS:
  * next three days, the week, and further out. Whole calendar days from the due
  * DAY (dueDay): a date-only value read with `new Date` is UTC midnight — the
  * previous evening west of UTC — so a task due tomorrow sorted as due today.
+ * Both days are the workspace's, as every overdue label counts them.
  */
 export function urgencyScore(task: Pick<Task, 'dueDate'>, today: Date = new Date()): number {
   const due = dueDay(task.dueDate);
   if (!due) return 0;
-  const daysUntilDue = differenceInCalendarDays(due, today);
+  const daysUntilDue = differenceInCalendarDays(due, businessToday(today));
   if (daysUntilDue < 0) return 100;
   if (daysUntilDue === 0) return 90;
   if (daysUntilDue === 1) return 80;

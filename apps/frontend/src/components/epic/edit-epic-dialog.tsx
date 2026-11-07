@@ -23,6 +23,8 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+import { DatePicker } from '@/components/ui/date-picker';
+import { formatDateOnly, parseDateOnly } from '@/lib/utils/working-days';
 import {
   Select,
   SelectContent,
@@ -62,7 +64,7 @@ interface EditEpicDialogProps {
   epic: Epic;
 }
 
-/** `yyyy-MM-dd` for <input type="date">; the API may return a full ISO string. */
+/** `yyyy-MM-dd`, the form the date fields hold; the API may return a full ISO string. */
 const toDateInput = (value?: string) => (value ? String(value).slice(0, 10) : '');
 
 export function EditEpicDialog({ open, onOpenChange, epic }: EditEpicDialogProps) {
@@ -221,7 +223,14 @@ export function EditEpicDialog({ open, onOpenChange, epic }: EditEpicDialogProps
                   <FormItem>
                     <FormLabel>Start Date</FormLabel>
                     <FormControl>
-                      <Input type="date" {...field} />
+                      {/* The app's own picker: the browser's date input looked and
+                          behaved differently in every browser, beside fields that
+                          used this one. The form still holds 'yyyy-MM-dd'. */}
+                      <DatePicker
+                        date={field.value ? parseDateOnly(field.value) : undefined}
+                        onSelect={(day) => field.onChange(day ? formatDateOnly(day) : '')}
+                        placeholder="Pick a start date"
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -235,7 +244,17 @@ export function EditEpicDialog({ open, onOpenChange, epic }: EditEpicDialogProps
                   <FormItem>
                     <FormLabel>Target End Date</FormLabel>
                     <FormControl>
-                      <Input type="date" {...field} />
+                      <DatePicker
+                        date={field.value ? parseDateOnly(field.value) : undefined}
+                        onSelect={(day) => field.onChange(day ? formatDateOnly(day) : '')}
+                        // Not before the start — the rule the schema enforces on save.
+                        disabled={(day) => {
+                          // Read when the calendar draws its days, so it is the start as it is now.
+                          const start = form.getValues('startDate');
+                          return !!start && formatDateOnly(day) < start;
+                        }}
+                        placeholder="Pick a target end date"
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
