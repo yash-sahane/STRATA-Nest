@@ -203,9 +203,15 @@ try {
     const hired = await invite(NEW_HIRE, 'SOFTWARE_DEVELOPER');
     const hireId = hired.j?.userId;
     rec(hired.s === 201 && hired.j?.invited === true, 'a manager adds somebody new: they are invited too', brief(hired));
-    // A known password, whatever an earlier run left the account holding. While the
-    // membership is only an invitation, the account can still be given one — or a lost
-    // first password would lock it out of the one step that lets it in.
+    // An earlier run left this account with a password of its own choosing, and an
+    // account that has set its own is no longer a workspace manager's to reset. A
+    // platform administrator puts it back on a temporary one, so every run starts
+    // where a new hire starts: never signed in.
+    const reset = await api(admin, 'POST', `/users/${hireId}/temp-password`, { workspaceId: p.ws });
+    rec(reset.s < 300, 'the account starts the run on a temporary password', brief(reset));
+    // While the membership is only an invitation, the inviting manager can still issue
+    // the account a password — or a lost first password would lock it out of the one
+    // step that lets it in.
     const issued = await api(mgr, 'POST', `/users/${hireId}/temp-password`, { workspaceId: p.ws });
     rec(issued.s < 300, 'the inviting manager can issue an invited account a new temporary password', brief(issued));
     const temp = issued.j?.temporaryPassword;
