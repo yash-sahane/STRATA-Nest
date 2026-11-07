@@ -16,9 +16,14 @@ export interface JwtClaims {
 
 /**
  * Issues/verifies HS256 tokens with a fixed claim layout (`user_id`, `token_type`,
- * `jti` — snake_case is intentional, not an oversight) and a single signing key
- * shared by access and refresh tokens. This layout is part of the
- * public auth contract; do not refactor the field names.
+ * `jti` — snake_case is intentional, not an oversight). This layout is part of
+ * the public auth contract; do not refactor the field names.
+ *
+ * Two keys. JWT_REFRESH_SECRET has always been required — the process will not
+ * start without a strong one — and was never read: both kinds of token were
+ * signed with the access key, so whoever held that key could mint a refresh
+ * token and keep a session alive for good. Refresh tokens are signed and
+ * verified with their own key now, which is what the setting was asking for.
  */
 @Injectable()
 export class TokenService {
@@ -29,6 +34,10 @@ export class TokenService {
 
   private signingKey(): string {
     return this.config.getOrThrow<string>('JWT_ACCESS_SECRET');
+  }
+
+  private refreshKey(): string {
+    return this.config.getOrThrow<string>('JWT_REFRESH_SECRET');
   }
 
   newJti(): string {
@@ -50,7 +59,7 @@ export class TokenService {
     const token = this.jwt.sign(
       { user_id: userId, token_type: 'refresh', jti } satisfies Omit<JwtClaims, 'iat' | 'exp'>,
       {
-        secret: this.signingKey(),
+        secret: this.refreshKey(),
         algorithm: 'HS256',
         expiresIn: this.config.get<number>('JWT_REFRESH_TTL', 604800),
       },
@@ -58,9 +67,18 @@ export class TokenService {
     return { token, jti };
   }
 
+  /** An ACCESS token. A refresh token does not verify here: it is another key's. */
   verify(token: string): JwtClaims {
     return this.jwt.verify<JwtClaims>(token, {
       secret: this.signingKey(),
+      algorithms: ['HS256'],
+    });
+  }
+
+  /** A REFRESH token, and only that. */
+  verifyRefresh(token: string): JwtClaims {
+    return this.jwt.verify<JwtClaims>(token, {
+      secret: this.refreshKey(),
       algorithms: ['HS256'],
     });
   }

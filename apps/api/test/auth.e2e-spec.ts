@@ -1,5 +1,3 @@
-// Enable strict refresh so the reuse-rejection test verifies a rotated token is rejected.
-process.env.AUTH_STRICT_REFRESH = 'true';
 // This suite logs in more times than the production login limit allows (5/min),
 // and the throttle counter lives in Redis keyed by IP — so it is also shared with
 // any dev server running on the same host. Both made the run fail with 429s that
@@ -7,7 +5,6 @@ process.env.AUTH_STRICT_REFRESH = 'true';
 // throttling itself is covered by throttling/*.spec.ts.
 process.env.THROTTLE_LOGIN_LIMIT = '1000';
 process.env.THROTTLE_REFRESH_LIMIT = '1000';
-process.env.THROTTLE_REGISTER_LIMIT = '1000';
 process.env.THROTTLE_RESET_LIMIT = '1000';
 
 import { INestApplication, ValidationPipe } from '@nestjs/common';
@@ -16,7 +13,7 @@ import cookieParser from 'cookie-parser';
 import request from 'supertest';
 import { AllExceptionsFilter, generateId } from '@strata/common';
 import { PrismaService } from '@strata/prisma';
-import { parseSetCookies } from '@strata/testing';
+import { parseSetCookies } from './support/cookies';
 import { AppModule } from '../src/app.module';
 import { NormalizedWsAdapter } from '../src/modules/realtime/normalized-ws-adapter';
 import { PasswordService } from '../src/modules/auth/services/password.service';
@@ -60,6 +57,13 @@ describe('Auth (e2e)', () => {
 
   const server = () => app.getHttpServer();
   const login = (pw = password) => request(server()).post('/api/v1/auth/login').send({ email, password: pw });
+
+  it('has no self-registration route — accounts are created by a manager', async () => {
+    const res = await request(server())
+      .post('/api/v1/auth/register')
+      .send({ email: `nope.${Date.now()}@example.test`, password, name: 'Nope' });
+    expect(res.status).toBe(404);
+  });
 
   it('rejects bad credentials with a 400 error envelope', async () => {
     const res = await login('wrong-password');

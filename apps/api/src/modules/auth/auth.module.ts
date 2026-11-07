@@ -7,6 +7,7 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { CookieService } from './services/cookie.service';
+import { LoginAttemptStore } from './services/login-attempt.store';
 import { PasswordService } from './services/password.service';
 import { PasswordResetStore } from './services/password-reset.store';
 import { RefreshTokenStore } from './services/refresh-token.store';
@@ -25,6 +26,7 @@ import { AuthzModule } from '../authz/authz.module';
     TokenService,
     RefreshTokenStore,
     PasswordResetStore,
+    LoginAttemptStore,
   ],
   exports: [TokenService, PasswordService, RefreshTokenStore, CookieService],
 })

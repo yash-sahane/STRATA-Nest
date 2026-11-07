@@ -23,9 +23,6 @@ export class AuthAuditService {
   loginFailure(email: string): void {
     this.emit('auth.login.failure', { email }, 'warn');
   }
-  registered(userId: string, email: string): void {
-    this.emit('auth.register', { userId, email });
-  }
   refreshRotated(userId: string): void {
     this.emit('auth.refresh.rotated', { userId });
   }

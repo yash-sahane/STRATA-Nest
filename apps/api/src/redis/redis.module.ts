@@ -1,5 +1,6 @@
 import { Global, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { redisConnection } from '@strata/config';
 import Redis from 'ioredis';
 import { REDIS_CLIENT } from './redis.constants';
 import { RedisLifecycleService } from './redis-lifecycle.service';
@@ -15,10 +16,17 @@ import { RedisLifecycleService } from './redis-lifecycle.service';
       inject: [ConfigService],
       useFactory: (config: ConfigService): Redis =>
         new Redis({
-          host: config.get<string>('REDIS_HOST', 'localhost'),
-          port: config.get<number>('REDIS_PORT', 6379),
-          db: config.get<number>('REDIS_CACHE_DB', 0),
+          ...redisConnection((key) => config.get(key), 'cache'),
           maxRetriesPerRequest: 2,
+          // A bound on every command, the queued ones included (ioredis arms it
+          // before deciding whether to queue). Without it a command issued while
+          // Redis was unreachable sat in the offline queue through every
+          // reconnect attempt — each up to connectTimeout — and EVERY request
+          // behind the throttler and the session check hung with it (measured:
+          // /health and /auth/me unanswered after 15s with Redis stopped). The
+          // throttler already fails open on an error; this is what lets one
+          // arrive. Nothing here runs anywhere near this long when Redis is up.
+          commandTimeout: 2000,
         }),
     },
     RedisLifecycleService,

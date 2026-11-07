@@ -26,9 +26,9 @@ import {
   LoginDto,
   PasswordResetConfirmDto,
   PasswordResetRequestDto,
-  RegisterDto,
   UpdateProfileDto,
 } from './dto';
+import { clientAddress } from '../../throttling/auth-throttler.guard';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -48,24 +48,35 @@ export class AuthController {
   @Throttle({ default: THROTTLE.login })
   @Post('login')
   @HttpCode(200) // The frozen API contract requires 200 here, not Nest's POST default 201 (RC live-verified)
-  async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
-    const { user, sessionId, tokens } = await this.auth.login(dto.email, dto.password);
+  async login(
+    @Body() dto: LoginDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { user, sessionId, tokens } = await this.auth.login(
+      dto.email,
+      dto.password,
+      clientAddress(req as unknown as Record<string, unknown>),
+    );
     this.auth.cookies.setAuth(res, tokens.access, tokens.refresh);
     return { user, sessionId };
   }
 
-  @Public()
-  @Throttle({ default: THROTTLE.register })
-  @Post('register')
-  @HttpCode(201)
-  async register(@Body() dto: RegisterDto, @Res({ passthrough: true }) res: Response) {
-    const { user, sessionId, tokens } = await this.auth.register(dto);
-    this.auth.cookies.setAuth(res, tokens.access, tokens.refresh);
-    return { user, sessionId };
-  }
+  // There is deliberately no `register` route. Onboarding is closed: an account
+  // exists because a workspace manager created it (POST /users/invite), which is
+  // also what the sign-in page tells people. The public endpoint that used to
+  // sit here had no screen in front of it, and let anyone on the internet mint
+  // an account, read every workspace's name and queue join requests.
 
   // Reachable on a temporary password: a locked-out session must still be able
   // to read itself, replace the password, and get out.
+  //
+  // And public, because signing out needs nothing but the refresh cookie it
+  // revokes. Behind the access-token guard it answered 401 once that token had
+  // lapsed — fifteen minutes — and the client does not retry a logout, so
+  // "Log out" did nothing at all for anybody who had been reading a page for a
+  // while, and the seven-day refresh cookie stayed live.
+  @Public()
   @AllowTempPassword()
   @Post('logout')
   @HttpCode(204)
@@ -106,6 +117,17 @@ export class AuthController {
    * Deliberately NOT behind @AllowTempPassword: an account that still holds its
    * temporary password has no business enumerating what it could do.
    */
+  /**
+   * What the caller may do in every workspace they are active in, in one
+   * answer — see WorkspaceAccessService.myAccess. The browser resolves every
+   * screen permission from this; it used to keep its own copy of the role
+   * matrix, and miss the keys the API adds by implication.
+   */
+  @Get('me/access')
+  myAccess(@CurrentUser() user: User) {
+    return this.access.myAccess(user);
+  }
+
   @Get('me/permissions')
   async myPermissions(@CurrentUser() user: User, @Query('workspaceId') workspaceId?: string) {
     if (!workspaceId) {
@@ -128,7 +150,10 @@ export class AuthController {
       res.status(result.softError.status);
       return { message: result.softError.message };
     }
-    return result;
+    // Every other session was just signed out; this one carries on under a
+    // fresh pair of cookies.
+    this.auth.cookies.setAuth(res, result.tokens.access, result.tokens.refresh);
+    return { ok: true };
   }
 
   @Patch('profile')

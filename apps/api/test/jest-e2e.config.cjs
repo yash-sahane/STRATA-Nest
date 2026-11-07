@@ -10,7 +10,6 @@ module.exports = {
     '^@strata/shared$': '<rootDir>/../../../packages/shared/src/index.ts',
     '^@strata/config$': '<rootDir>/../../../packages/config/src/index.ts',
     '^@strata/prisma$': '<rootDir>/../../../packages/prisma/src/index.ts',
-    '^@strata/testing$': '<rootDir>/../../../packages/testing/src/index.ts',
   },
   testTimeout: 30000,
 };

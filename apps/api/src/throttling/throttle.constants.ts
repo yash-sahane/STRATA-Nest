@@ -21,10 +21,6 @@ export const THROTTLE = {
     ttl: num(process.env.THROTTLE_REFRESH_TTL, 60) * 1000,
     limit: num(process.env.THROTTLE_REFRESH_LIMIT, 20),
   },
-  register: {
-    ttl: num(process.env.THROTTLE_REGISTER_TTL, 3600) * 1000,
-    limit: num(process.env.THROTTLE_REGISTER_LIMIT, 3),
-  },
   reset: {
     ttl: num(process.env.THROTTLE_RESET_TTL, 3600) * 1000,
     limit: num(process.env.THROTTLE_RESET_LIMIT, 3),

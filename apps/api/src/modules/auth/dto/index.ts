@@ -4,9 +4,22 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  Matches,
   MaxLength,
 } from 'class-validator';
 import { StrongPassword, TrimmedText } from '@strata/common';
+
+/**
+ * An avatar as the picker produces it — `FileReader.readAsDataURL` of an image:
+ * a base64 data URI of a raster type a browser renders inertly — or '' for none.
+ *
+ * It was documented as a data URI and accepted as any string, so a member could
+ * set it to `https://tracker.example/pixel?u=…`, and every colleague whose screen
+ * showed their face (the header, the team list, each comment) fetched it — telling
+ * a stranger who is online, when, and from which address. SVG is left out with
+ * intent: it is a document, not a picture.
+ */
+export const AVATAR_DATA_URI = /^(data:image\/(png|jpe?g|gif|webp);base64,[a-z0-9+/]+={0,2})?$/i;
 
 /**
  * Trim before validating an address.
@@ -27,41 +40,6 @@ export class LoginDto {
   @IsString()
   @IsNotEmpty()
   password!: string;
-}
-
-export class RegisterDto {
-  @TrimmedEmail()
-  @IsEmail()
-  email!: string;
-
-  @IsString()
-  @StrongPassword()
-  password!: string;
-
-  @TrimmedText()
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(255)
-  name!: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(50)
-  phone?: string;
-
-  /*
-   * `workspaceId` used to be accepted here and stored verbatim on the new user,
-   * where user.mapper exposes it as BOTH workspaceId and defaultWorkspaceId. So an
-   * unauthenticated caller could point a brand-new account's default workspace at
-   * somebody else's — mass assignment of a scope field from a public endpoint.
-   *
-   * Measured, it granted no access (GET /workspaces returned []), but it did set
-   * the client's idea of which workspace to open to one the user cannot see. No
-   * client ever sent it: registration is not exposed in the UI at all, since users
-   * are invited. Removed rather than validated, so ValidationPipe({ whitelist })
-   * strips it; joining a workspace goes through the invite flow, which is
-   * authorised.
-   */
 }
 
 export class ChangePasswordDto {
@@ -97,6 +75,7 @@ export class UpdateProfileDto {
   @IsOptional()
   @IsString()
   @MaxLength(2_800_000, { message: 'Avatar image must be 2 MB or smaller.' })
+  @Matches(AVATAR_DATA_URI, { message: 'Avatar must be a PNG, JPEG, GIF or WebP image.' })
   avatar?: string;
 }
 

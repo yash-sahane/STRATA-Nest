@@ -18,6 +18,7 @@ import { AllExceptionsFilter, StripLoneSurrogatesPipe } from '@strata/common';
 import { corsOrigins, validateEnv } from '@strata/config';
 import { AppModule } from './app.module';
 import { NormalizedWsAdapter } from './modules/realtime/normalized-ws-adapter';
+import { originCheck } from './config/origin-check';
 
 async function bootstrap(): Promise<void> {
   const env = validateEnv(process.env as Record<string, unknown>);
@@ -56,7 +57,13 @@ async function bootstrap(): Promise<void> {
         : { hsts: false, contentSecurityPolicy: false },
     ),
   );
-  app.enableCors({ origin: corsOrigins(env), credentials: true });
+  // Retry-After is exposed because the browser hides every response header not on
+  // CORS's short safelist from a cross-origin caller — and the app (:3000) calls the
+  // API (:8000) cross-origin, so a 429's "try again in 40s" read as no header at
+  // all and the client could only guess at a backoff.
+  app.enableCors({ origin: corsOrigins(env), credentials: true, exposedHeaders: ['Retry-After'] });
+  // CORS decides who may READ an answer; this decides who may cause a write.
+  app.use(originCheck(corsOrigins(env)));
   // StripLoneSurrogatesPipe runs FIRST, on the raw payload: a surrogate half is
   // not encodable as UTF-8, so it reaches Postgres as a bare 500 rather than
   // anything a client can act on. See its docstring.
@@ -78,8 +85,19 @@ async function bootstrap(): Promise<void> {
     SwaggerModule.setup('api/docs', app, SwaggerModule.createDocument(app, swaggerConfig));
   }
 
+  // A promise nobody awaits is not a reason to stop serving every other user.
+  // Nest drops the promises of WebSocket lifecycle hooks and of event
+  // subscribers, so one stray rejection in either used to end the process
+  // (Node exits on unhandled rejections) — and the compose service has no
+  // restart policy. The rejection is still logged loudly, with its stack.
+  const logger = app.get(Logger);
+  process.on('unhandledRejection', (reason) => {
+    const err = reason instanceof Error ? reason : new Error(String(reason));
+    logger.error(`Unhandled promise rejection: ${err.message}`, err.stack, 'Process');
+  });
+
   await app.listen(env.API_PORT);
-  app.get(Logger).log(`API listening on http://localhost:${env.API_PORT}/${env.API_GLOBAL_PREFIX}`);
+  logger.log(`API listening on http://localhost:${env.API_PORT}/${env.API_GLOBAL_PREFIX}`);
 }
 
 void bootstrap();

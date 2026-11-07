@@ -13,7 +13,6 @@ import { HealthModule } from './health/health.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
 import { ActivityModule } from './modules/activity/activity.module';
-import { AiModule } from './modules/ai/ai.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
 import { AuthzModule } from './modules/authz/authz.module';
 import { PermissionsGuard } from './modules/authz/permissions.guard';
@@ -119,7 +118,6 @@ import { THROTTLE } from './throttling/throttle.constants';
     FilesModule,
     IntegrationsModule,
     GenerationModule,
-    AiModule,
     RealtimeModule,
   ],
   providers: [
